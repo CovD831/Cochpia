@@ -493,6 +493,22 @@ test('context bundle preserves pinned core and evidence while compacting to budg
   assert.equal(bundle.truncated, true);
 });
 
+test('context bundle trims evidence metadata before failing on a large retrieval result', async () => {
+  const { memory } = createHarness();
+  for (let index = 0; index < 65; index += 1) {
+    await memory.hold(userContext(), {
+      memoryType: 'fact',
+      content: `检索压力测试记忆 ${index}：用户喜欢在周末整理第 ${index} 个书架。`,
+      sensitivity: 'S0'
+    });
+  }
+  const bundle = memory.contextBundle(userContext(), { query: '检索压力测试记忆 书架', tokenBudget: 1800 });
+  assert.equal(bundle.tokenCount <= bundle.tokenBudget, true);
+  assert.equal(bundle.truncated, true);
+  assert.equal(bundle.evidence.length < 50, true);
+  assert.equal(bundle.userProfile.length > 0, true);
+});
+
 test('context bundle rejects an impossible token budget instead of exceeding it', async () => {
   const { memory } = createHarness();
   assert.throws(() => memory.contextBundle(userContext(), { tokenBudget: 1 }), error => error.code === 'TOKEN_BUDGET_TOO_SMALL' && error.status === 400);

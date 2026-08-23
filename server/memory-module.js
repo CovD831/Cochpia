@@ -1257,6 +1257,11 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       return text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text;
     };
     const bundle = { answerability: retrieved.answerability, consistency: retrieved.consistency, serviceMode: retrieved.serviceMode, queryRoute: retrieved.queryRoute || 'unknown', policyResult: retrieved.policyResult, coreMemory: core, userProfile: profile, relationshipProfile: relationships, currentState, relevantEpisodes: episodes, evidence: [...retrieved.items.map(item => ({ memoryId: item.memoryId, versionId: item.versionId, sourceRefs: item.sourceRefs })), ...episodes.map(episode => ({ episodeId: episode.episodeId, sourceRefs: episode.sourceRefs }))], uncertainties: retrieved.uncertainties || [], blocks: retrieved.blocks, snapshotId: randomUUID(), profileSnapshotId: snapshot?.id || (activeSession ? null : randomUUID()), privacyEpoch: state.redactionEpochs[userKey(context)] || 0, grantVersion: state.grantVersion, consistencyToken: retrieved.consistencyToken, sourceVersions: retrieved.items.map(item => item.versionId).filter(Boolean), indexWatermarks: { canonical: state.sequence }, tokenBudget, tokenCount: 0, truncated: false, tokenizerId: 'approx-json-v1' };
+    // Evidence is provenance metadata; trim it before content-bearing memory fields.
+    while (bundle.evidence.length > 1 && estimate(bundle) > tokenBudget) {
+      bundle.evidence.pop();
+      bundle.truncated = true;
+    }
     for (const key of ['userProfile', 'relationshipProfile', 'relevantEpisodes']) {
       while (bundle[key].length && estimate(bundle) > tokenBudget) {
         bundle[key].pop();
