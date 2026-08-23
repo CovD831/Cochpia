@@ -919,9 +919,28 @@ class AppErrorBoundary extends React.Component {
 
 createRoot(document.getElementById('root')).render(<AppErrorBoundary><WorkspacePreferencesProvider><I18nProvider><TimeProvider><MusicProvider><AudioProvider><MaterialProvider><WindowManagerProvider><ProfileProvider><App /></ProfileProvider></WindowManagerProvider></MaterialProvider></AudioProvider></MusicProvider></TimeProvider></I18nProvider></WorkspacePreferencesProvider></AppErrorBoundary>);
 
-// PWA：仅在构建产物中注册 Service Worker（开发模式避免干扰 HMR）
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=20260822-cache-fix').catch(() => { /* SW 注册失败不影响主流程 */ });
+// PWA：生产环境注册 Service Worker；开发地址主动注销历史 SW，避免旧缓存接管页面。
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    if (!import.meta.env.PROD) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(registration => registration.unregister()));
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(cacheName => caches.delete(cacheName)));
+      }
+      // 旧 SW 可能已经控制了本次页面；清缓存后只 reload 一次，确保旧 JS/CSS 不再运行。
+      if (navigator.serviceWorker.controller && !sessionStorage.getItem('cochpia-sw-cleaned')) {
+        sessionStorage.setItem('cochpia-sw-cleaned', '1');
+        window.location.reload();
+      }
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.register('/sw.js?v=20260822-cache-fix-2', { updateViaCache: 'none' });
+      await registration.update();
+    } catch {
+      /* SW 注册失败不影响主流程 */
+    }
   });
 }
