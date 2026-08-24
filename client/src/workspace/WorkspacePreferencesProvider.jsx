@@ -52,7 +52,9 @@ const reducer = (state, action) => {
   return state;
 };
 
-const cssVariables = state => ({
+const cssVariables = state => {
+  const panelOpacity = Math.min(1, Math.max(0, Number(state.appearance.panelOpacity) || 1));
+  return {
   '--workspace-accent': state.theme.accentColor,
   '--workspace-background': state.theme.themeId === 'pearl' ? '#f5f0ed' : state.theme.themeId === 'blush' ? '#f4e4e8' : state.theme.themeId === 'mist' ? '#e7eef3' : state.theme.themeId === 'night' ? '#0A0F16' : state.theme.themeId === 'sakura' ? '#FBF1F4' : state.theme.themeId === 'ember' ? '#FBF3E7' : state.theme.themeId === 'moss' ? '#EEF5EF' : state.theme.themeId === 'ink' ? '#F2F1F6' : state.theme.themeId === 'va11' ? '#160A22' : state.background.color,
   '--workspace-background-image': state.background.imageUrl ? `url(${state.background.imageUrl})` : 'none',
@@ -75,11 +77,14 @@ const cssVariables = state => ({
   '--font-size-xl': `${1.5 * state.typography.fontScale * (state.accessibility.largeText ? 1.15 : 1)}rem`,
   '--font-size-display': `${2 * state.typography.fontScale * (state.accessibility.largeText ? 1.15 : 1)}rem`,
   '--app-radius': `${state.appearance.cornerRadius}px`,
-  '--panel-alpha': state.appearance.panelOpacity,
-  '--panel-blur': `${Math.round((1 - state.appearance.panelOpacity) * 40)}px`,
+  '--panel-alpha': panelOpacity,
+  '--panel-alpha-percent': `${panelOpacity * 100}%`,
+  '--panel-surface': `color-mix(in srgb, var(--surface-elevated) ${panelOpacity * 100}%, transparent)`,
+  '--panel-blur': `${Math.round((1 - panelOpacity) * 40)}px`,
   '--workspace-ambient-duration': state.motion.animationLevel === 'low' ? '30s' : state.motion.animationLevel === 'high' ? '12s' : '21s',
   '--workspace-motion-duration': state.motion.reducedMotion || !state.motion.enabled ? '0ms' : `${state.motion.durationScale * 420}ms`
-});
+  };
+};
 
 const WorkspacePreferencesContext = createContext(null);
 

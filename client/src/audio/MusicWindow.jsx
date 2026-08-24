@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FloatingWindow } from '../windows/WindowManager';
 import { useMusic } from './MusicProvider';
+import FeatherIcon from '../icons/FeatherIcon';
 
 export function MusicWindow() {
   const { state, searchResults, search, play, pause, resume, next, stop, refreshStatus, checkEnvironment, getListeningContext } = useMusic();
@@ -15,7 +16,7 @@ export function MusicWindow() {
     <header className="music-window-heading"><div><p className="eyebrow">音乐桥接</p><h2>{state.track?.title || '当前没有播放曲目'}</h2><p>{state.track?.artist || '连接本地音乐来源'}</p></div><span className={`music-state music-state-${state.state}`}>{state.state}</span></header>
     <form className="music-search" onSubmit={handleSearch}><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索歌曲" aria-label="搜索歌曲" /><button type="submit" disabled={busy || !query.trim()}>搜索</button></form>
     <div className="music-results">{searchResults.map(track => <button type="button" className="music-result" key={track.id} onClick={() => void run(() => play(track))}><strong>{track.title || '未命名曲目'}</strong><span>{track.artist || '未知艺人'}</span></button>)}</div>
-    <div className="music-controls"><button type="button" onClick={() => void run(state.state === 'playing' ? pause : resume)} disabled={busy || !state.track}>{state.state === 'playing' ? '暂停' : '继续'}</button><button type="button" onClick={() => void run(next)} disabled={busy}>下一首</button><button type="button" onClick={() => void run(stop)} disabled={busy || !state.track}>停止</button></div>
+    <div className="music-controls"><button type="button" aria-label={state.state === 'playing' ? '暂停' : '继续'} title={state.state === 'playing' ? '暂停' : '继续'} onClick={() => void run(state.state === 'playing' ? pause : resume)} disabled={busy || !state.track}><FeatherIcon name={state.state === 'playing' ? 'pause' : 'play'} size={15} /></button><button type="button" aria-label="下一首" title="下一首" onClick={() => void run(next)} disabled={busy}><FeatherIcon name="skipForward" size={15} /></button><button type="button" aria-label="停止" title="停止" onClick={() => void run(stop)} disabled={busy || !state.track}><FeatherIcon name="stopCircle" size={15} /></button></div>
     <div className="music-actions"><button type="button" className="text-button" onClick={handleEnvironmentCheck}>检查环境</button><button type="button" className="text-button" onClick={() => void run(refreshStatus)}>刷新</button><button type="button" className="text-button" onClick={handleContext}>读取上下文</button></div>
     {environment && <p className={`music-note ${environment.available ? 'is-ready' : 'is-unready'}`}>{environment.message}</p>}
     {state.error && <p className="music-note is-unready">{state.error.message}</p>}

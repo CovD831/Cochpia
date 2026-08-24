@@ -16,7 +16,7 @@ export function mergeState(base, incoming) {
     }
     merged[key] = target;
   };
-  ['sessions', 'memories', 'evidence', 'tasks', 'personalityHistory', 'personalityAudit', 'agents'].forEach(mergeById);
+  ['sessions', 'memories', 'evidence', 'personalityHistory', 'personalityAudit', 'agents'].forEach(mergeById);
 
   if (incoming.messages && typeof incoming.messages === 'object') {
     merged.messages = { ...(merged.messages || {}) };

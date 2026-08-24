@@ -75,7 +75,6 @@ const initialState = {
     updatedAt: new Date().toISOString()
   },
   evidence: [],
-  tasks: []
 };
 
 export async function loadState() {

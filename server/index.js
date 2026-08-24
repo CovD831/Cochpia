@@ -15,8 +15,6 @@ import { buildRuntimeContext, findRegenerationTarget } from './runtime-context.j
 import { createSseEvent, formatSseEvent, replaySseEvents } from './sse.js';
 import { applyPersonalityChange, createPersonalityRollbackAudit } from './personality.js';
 import { queryCollection } from './collection-query.js';
-import { createTaskService, statuses as taskStatuses } from './task-service.js';
-import { createEventService } from './event-service.js';
 import { createAgentService } from './agent-service.js';
 import { collectSyncChanges } from './sync-service.js';
 import { createObservability } from './observability.js';
@@ -83,8 +81,6 @@ const memoryRuntime = createMemoryModuleRuntime({
   persistState: currentState => saveState(currentState),
   getUser: () => requestContext.getStore()?.user || { id: 'local-user' }
 });
-const tasks = createTaskService(state, () => saveState(state));
-const events = createEventService(state, () => saveState(state));
 const agents = createAgentService(state, () => saveState(state));
 const growthEvidence = createGrowthEvidenceService(state, () => saveState(state));
 const activeRuns = new Map();
@@ -105,8 +101,6 @@ for (const session of state.sessions) {
 }
 state.personalityHistory ||= [{ version: state.personality.version, traits: structuredClone(state.personality.traits), summary: state.personality.summary, updatedAt: state.personality.updatedAt }];
 state.personalityAudit ||= [];
-state.tasks ||= [];
-state.events ||= [];
 state.agents ||= [];
 state.profile ||= { name: 'Cochpia', gender: 'none', age: null, avatar: '✦' };
 state.mode ||= 'companion';
@@ -130,7 +124,7 @@ app.use((req, res, next) => {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+    'Permissions-Policy': 'camera=(), microphone=(self), geolocation=()'
   });
   res.set('Content-Security-Policy', process.env.CSP || "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; connect-src 'self' https:; font-src 'self' data: https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
   if (process.env.NODE_ENV === 'production') res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -330,39 +324,6 @@ app.delete('/api/sessions/:id', async (req, res) => {
   if (index === -1) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   state.sessions.splice(index, 1); delete state.messages[req.params.id]; await saveState(state); res.status(204).end();
 });
-app.get('/api/tasks', (req, res) => {
-  const status = req.query.status ? String(req.query.status) : '';
-  if (status && !taskStatuses.has(status)) return fail(res, 400, 'INVALID_TASK_STATUS', 'Invalid task status');
-  const items = tasks.list({ status, sessionId: req.query.sessionId, overdue: req.query.overdue === 'true', search: req.query.search, limit: 100 });
-  const result = queryCollection(items, { search: '', limit: req.query.limit, offset: req.query.offset, text: item => `${item.title} ${item.description}` });
-  return res.json(req.query.paginated === 'true' ? result : result.items);
-});
-app.post('/api/tasks', async (req, res) => {
-  try {
-    const sessionId = req.body?.sessionId;
-    if (sessionId && !getSession(sessionId)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-    res.status(201).json(await tasks.create(req.body || {}));
-  } catch (error) { fail(res, 400, 'INVALID_TASK', error.message); }
-});
-app.patch('/api/tasks/:id', async (req, res) => {
-  try {
-    if (req.body?.sessionId && !getSession(req.body.sessionId)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-    const task = await tasks.update(req.params.id, req.body || {});
-    task ? res.json(task) : fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
-  } catch (error) { fail(res, 400, 'INVALID_TASK', error.message); }
-});
-app.delete('/api/tasks/:id', async (req, res) => {
-  const removed = await tasks.remove(req.params.id);
-  removed ? res.status(204).end() : fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
-});
-app.get('/api/events', (req, res) => {
-  const type = req.query.type ? String(req.query.type) : '';
-  if (type && !['anniversary', 'birthday', 'plan', 'record'].includes(type)) return fail(res, 400, 'INVALID_EVENT_TYPE', 'Invalid event type');
-  res.json(events.list({ type, upcomingDays: req.query.upcomingDays ? Number(req.query.upcomingDays) : undefined }));
-});
-app.post('/api/events', async (req, res) => { try { res.status(201).json(await events.create(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_EVENT', error.message); } });
-app.patch('/api/events/:id', async (req, res) => { try { const event = await events.update(req.params.id, req.body || {}); event ? res.json(event) : fail(res, 404, 'EVENT_NOT_FOUND', 'Event not found'); } catch (error) { fail(res, 400, 'INVALID_EVENT', error.message); } });
-app.delete('/api/events/:id', async (req, res) => { const removed = await events.remove(req.params.id); removed ? res.status(204).end() : fail(res, 404, 'EVENT_NOT_FOUND', 'Event not found'); });
 app.get('/api/agents', (_, res) => res.json(agents.list()));
 app.post('/api/agents', async (req, res) => { try { res.status(201).json(await agents.create(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_AGENT', error.message); } });
 app.patch('/api/agents/:id', async (req, res) => { try { const agent = await agents.update(req.params.id, req.body || {}); agent ? res.json(agent) : fail(res, 404, 'AGENT_NOT_FOUND', 'Agent not found'); } catch (error) { fail(res, 400, 'INVALID_AGENT', error.message); } });
@@ -395,7 +356,6 @@ app.get('/api/export', async (req, res) => {
       memoryModule: state.memoryModule || null,
       personality: state.personality,
       evidence: state.evidence,
-      tasks: state.tasks,
       personalityHistory: state.personalityHistory,
       personalityAudit: state.personalityAudit,
       agents: state.agents,
@@ -811,7 +771,7 @@ async function handleChatStream(req, res, { regenerateMessageId = null, retry = 
       const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model)
         ? selectedModel
         : createModelProvider(workProviderName, { model: workModelName });
-      const rt = buildRuntimeContext({ messages: [], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, upcomingEvents: events.listUpcoming(7), atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent });
+      const rt = buildRuntimeContext({ messages: [], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent });
       const system = workModel.composeSystemPrompt({ recalled, runtimeContext: rt });
       const history = state.messages[sessionId].slice(0, -1).slice(-10).map(m => ({ role: m.role, content: m.content }));
       const conversation = [...history, { role: 'user', content: userMessage.content }];
@@ -862,7 +822,7 @@ async function handleChatStream(req, res, { regenerateMessageId = null, retry = 
     for await (const delta of selectedModel.stream({
       message: userMessage.content,
       recalled,
-      runtimeContext: buildRuntimeContext({ messages: state.messages[sessionId], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, upcomingEvents: events.listUpcoming(7), atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent }),
+      runtimeContext: buildRuntimeContext({ messages: state.messages[sessionId], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent }),
       signal: run.controller.signal
     })) {
       if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
@@ -924,7 +884,7 @@ app.post('/api/chat/group', async (req, res) => {
         const fallbackSelection = resolveModelSelection(fallbackProvider, session.modelName || '');
         model = fallbackSelection.ok ? createModelProvider(fallbackProvider, { model: fallbackSelection.config.model }) : createModelProvider('mock');
       }
-      content = await model.generate({ message: String(message), recalled: [], runtimeContext: buildRuntimeContext({ messages: state.messages[sessionId], personality: state.personality, persona: agent.persona || session.persona, upcomingEvents: events.listUpcoming(7), profile: { ...state.profile, name: agent.name } }) });
+      content = await model.generate({ message: String(message), recalled: [], runtimeContext: buildRuntimeContext({ messages: state.messages[sessionId], personality: state.personality, persona: agent.persona || session.persona, profile: { ...state.profile, name: agent.name } }) });
     } catch (error) { content = `（${agent.name} 暂时无法回应）`; }
     const reply = { id: randomUUID(), role: 'assistant', content: String(content || '').trim(), createdAt: new Date().toISOString(), channel: activeChannel, senderId: agent.id, senderName: agent.name, senderAvatar: agent.avatar };
     state.messages[sessionId].push(reply);

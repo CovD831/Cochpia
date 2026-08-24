@@ -8,14 +8,14 @@ test('mergeState adds missing items by id without overwriting existing ones', ()
     messages: { a: [{ id: 'm1', role: 'user', content: 'old' }] },
     memories: [{ id: 'm1' }],
     personality: { version: 2 },
-    evidence: [], tasks: [], personalityHistory: [], personalityAudit: []
+    evidence: [], personalityHistory: [], personalityAudit: []
   };
   const incoming = {
     sessions: [{ id: 'a', title: 'imported-dup' }, { id: 'b', title: 'new' }],
     messages: { a: [{ id: 'm1', content: 'dup' }, { id: 'm2', content: 'new' }], b: [{ id: 'm3', content: 'b-msg' }] },
     memories: [{ id: 'm1' }, { id: 'm2' }],
     personality: { version: 99 },
-    evidence: [], tasks: [], personalityHistory: [], personalityAudit: []
+    evidence: [], personalityHistory: [], personalityAudit: []
   };
   const merged = mergeState(base, incoming);
   assert.equal(merged.sessions.length, 2);

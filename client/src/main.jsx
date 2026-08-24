@@ -9,6 +9,7 @@ import { SettingsWindow } from './workspace/SettingsWindow';
 import { WorkspacePreferencesProvider, useWorkspacePreferences } from './workspace/WorkspacePreferencesProvider';
 import { BackgroundLayer } from './workspace/BackgroundLayer';
 import { AudioProvider, useAudio } from './audio/AudioProvider';
+import { VoiceProvider, useVoice } from './audio/VoiceProvider';
 import { MusicProvider } from './audio/MusicProvider';
 import { MusicWindow } from './audio/MusicWindow';
 import { I18nProvider } from './i18n/I18nProvider';
@@ -18,16 +19,9 @@ import LifeGame from './life/LifeGame';
 import { ProfileProvider, useProfile } from './profile/ProfileProvider';
 import CharacterProfile from './profile/CharacterProfile';
 import AvatarPicker from './profile/AvatarPicker';
+import FeatherIcon from './icons/FeatherIcon';
 
 const asArray = value => Array.isArray(value) ? value : [];
-
-const companionIntents = [
-  { id: 'listen', label: '听我说', prompt: '写下此刻想分享的事…' },
-  { id: 'comfort', label: '安慰我', prompt: '告诉我现在的感受…' },
-  { id: 'advice', label: '给建议', prompt: '我想听听你的建议…' },
-  { id: 'accompany', label: '陪我做', prompt: '我们一起完成什么…' },
-  { id: 'quiet', label: '安静陪伴', prompt: '可以只陪我一会儿…' }
-];
 
 const providerModelOptions = provider => {
   if (!provider) return [];
@@ -78,17 +72,19 @@ function splitSegments(text) {
   return segments.length ? segments : [String(text || '').trim()].filter(Boolean);
 }
 
+const companionIntents = [
+  { id: 'listen', label: '听我说' },
+  { id: 'comfort', label: '安慰我' },
+  { id: 'advice', label: '给建议' },
+  { id: 'accompany', label: '陪我做' },
+  { id: 'quiet', label: '安静陪伴' }
+];
+
 function CompanionIntentBar({ mode, intent, onChange }) {
   if (mode !== 'companion') return null;
   const [collapsed, setCollapsed] = useState(true);
   if (collapsed) return <button type="button" className="companion-intent-collapsed" onClick={() => setCollapsed(false)} title="展开陪伴方式设置">陪伴设定</button>;
-  return <div className="companion-intent-bar" role="group" aria-label="陪伴方式">
-    <span className="companion-intent-label">本条回复方式</span>
-    <div className="companion-intent-options">
-      {companionIntents.map(item => <button key={item.id} type="button" className={`companion-intent ${intent === item.id ? 'active' : ''}`} aria-pressed={intent === item.id} onClick={() => onChange(item.id)}>{item.label}</button>)}
-    </div>
-    <button type="button" className="companion-intent-close" onClick={() => setCollapsed(true)} aria-label="收起陪伴方式设置" title="收起">×</button>
-  </div>;
+  return <div className="companion-intent-bar" role="group" aria-label="陪伴方式"><span className="companion-intent-label">本条回复方式</span><div className="companion-intent-options">{companionIntents.map(item => <button key={item.id} type="button" className={`companion-intent ${intent === item.id ? 'active' : ''}`} aria-pressed={intent === item.id} onClick={() => onChange(item.id)}>{item.label}</button>)}</div><button type="button" className="companion-intent-close" onClick={() => setCollapsed(true)} aria-label="收起陪伴方式设置" title="收起"><FeatherIcon name="x" size={14} /></button></div>;
 }
 
 function GroupChatIdentity({ session, agents, onOpen }) {
@@ -102,9 +98,29 @@ function GroupChatIdentity({ session, agents, onOpen }) {
 
 function WorkspaceOverflow({ isGroup, onGroupInfo, onState, onCloseState }) {
   const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const triggerRef = useRef(null);
+  const updateMenuPosition = () => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setMenuPosition({
+      top: rect.bottom + 8,
+      left: Math.max(8, Math.min(rect.right - 150, window.innerWidth - 158))
+    });
+  };
+  useEffect(() => {
+    if (!open) return undefined;
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [open]);
   return <div className="workspace-overflow">
-    <button type="button" className="workspace-overflow-trigger" onClick={() => setOpen(current => !current)} aria-expanded={open} aria-label="更多聊天操作" title="更多聊天操作">⋯</button>
-    {open && <div className="workspace-overflow-menu" role="menu">
+    <button ref={triggerRef} type="button" className="workspace-overflow-trigger" onClick={() => setOpen(current => !current)} aria-expanded={open} aria-label="更多聊天操作" title="更多聊天操作"><FeatherIcon name="moreHorizontal" size={20} /></button>
+    {open && <div className="workspace-overflow-menu workspace-overflow-menu-floating" style={menuPosition || undefined} role="menu">
       {isGroup && <button type="button" onClick={() => { setOpen(false); onGroupInfo(); }}>群聊信息</button>}
       <button type="button" onClick={() => { setOpen(false); onState(); }}>共同状态</button>
       <button type="button" onClick={() => { setOpen(false); onCloseState(); }}>收起浮动窗口</button>
@@ -142,7 +158,7 @@ function GroupInfoPanel({ session, agents, open, onClose, onSave, onInvite, onRe
   const saveGroup = async event => { event.preventDefault(); await onSave({ title, description }); };
   return <>
     {open && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) onClose(); }}><section className="settings-panel group-info-panel" role="dialog" aria-modal="true" aria-labelledby="group-info-title">
-      <header className="settings-header"><div><p className="eyebrow">GROUP SPACE</p><h2 id="group-info-title">群聊信息</h2><p>{members.length} 位 Agent · 你也在其中</p></div><button className="icon-button" aria-label="关闭群聊信息" title="关闭群聊信息" onClick={onClose}>×</button></header>
+      <header className="settings-header"><div><p className="eyebrow">GROUP SPACE</p><h2 id="group-info-title">群聊信息</h2><p>{members.length} 位 Agent · 你也在其中</p></div><button className="icon-button" aria-label="关闭群聊信息" title="关闭群聊信息" onClick={onClose}><FeatherIcon name="x" size={16} /></button></header>
       <form className="group-meta-form" onSubmit={saveGroup}><label>群名称<input value={title} onChange={event => setTitle(event.target.value)} maxLength="80" /></label><label>群简介<textarea value={description} onChange={event => setDescription(event.target.value)} rows="2" maxLength="300" placeholder="这个群一起做什么,保持什么氛围…" /></label><button className="select-model" type="submit">保存群资料</button></form>
       <div className="group-section"><div className="section-heading"><span>群成员</span><small>{members.length} 人</small></div>{members.length ? members.map(agent => <AgentInfoCard key={agent.id} agent={agent} onSave={onAgentSave} onRemove={onRemove} />) : <p className="empty-detail">还没有 Agent 成员。</p>}</div>
       <div className="group-section"><div className="section-heading"><span>邀请 Agent</span><small>点击加入当前群聊</small></div>{invitees.length ? <div className="invite-list">{invitees.map(agent => <button type="button" className="invite-row" key={agent.id} onClick={() => onInvite(agent.id)}><span className="agent-detail-avatar">{agent.avatar || '✦'}</span><span><strong>{agent.name}</strong><small>{agent.role || agent.relationship || '朋友'}</small></span><b>＋</b></button>)}</div> : <p className="empty-detail">所有 Agent 都已在群里。</p>}</div>
@@ -157,6 +173,7 @@ function App() {
   const workspaceClock = <time className="workspace-clock" dateTime={new Date().toISOString()}>{workspacePreferences.time.showDate && <span>{formatDate()}</span>}<b>{formatTime()}</b></time>;
   const { playUiSound } = useAudio();
   const { state: windowState, restoreWindow, focusWindow, closeWindow } = useWindowManager();
+  const { listening, interimText, finalText, speaking, error: voiceError, recognitionSupported, ttsSupported, toggleListening, setFinalText, speak, stopSpeaking, clearError } = useVoice();
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(!supabase);
   const [authEmail, setAuthEmail] = useState('');
@@ -170,7 +187,6 @@ function App() {
   const [memory, setMemory] = useState({ count: 0, memories: [] });
   const [personality, setPersonality] = useState(null);
   const [growthEvidence, setGrowthEvidence] = useState([]);
-  const [tasks, setTasks] = useState([]);
   const [syncCursor, setSyncCursor] = useState('');
   const [personalityHistory, setPersonalityHistory] = useState([]);
   const [models, setModels] = useState({ defaultProvider: 'mock', providers: [] });
@@ -192,9 +208,7 @@ function App() {
   const [growthOpen, setGrowthOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [reviewingEvidence, setReviewingEvidence] = useState(null);
-  const [taskOpen, setTaskOpen] = useState(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState('');
   const conversationRef = useRef(null);
   const nearBottomRef = useRef(true);
   const streamStateRef = useRef({ currentId: null, buffer: '', pausing: false, timer: null, counter: 0 });
@@ -202,19 +216,67 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [channel, setChannel] = useState('默认');
   const [channels, setChannels] = useState([]);
-  const [events, setEvents] = useState([]);
   const [atmosphere, setAtmosphere] = useState('');
   const [atmospherePresets, setAtmospherePresets] = useState([]);
   const [persona, setPersona] = useState('');
   const [personaDraft, setPersonaDraft] = useState('');
-  const [eventOpen, setEventOpen] = useState(false);
-  const [newEvent, setNewEvent] = useState({ title: '', date: '', type: 'plan', note: '' });
   const [agents, setAgents] = useState([]);
   const [agentDraft, setAgentDraft] = useState({ name: '', persona: '', provider: '', model: '', avatar: '✦' });
   const [groupPanelOpen, setGroupPanelOpen] = useState(false);
+  // Legacy task/calendar state is retained only to keep old imported layouts inert until redesign.
+  const [taskOpen, setTaskOpen] = useState(false);
+  const [eventOpen, setEventOpen] = useState(false);
+  const [tasks] = useState([]);
+  const [events] = useState([]);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newEvent, setNewEvent] = useState({ title: '', date: '', type: 'plan', note: '' });
   const [page, setPageState] = useState('splash');
   const setPage = nextPage => setPageState(currentPage => currentPage === nextPage && currentPage !== 'splash' ? 'chat' : nextPage);
   const [minimized, setMinimized] = useState(false);
+  const [autoRead, setAutoRead] = useState(false);
+  const [speakingId, setSpeakingId] = useState(null);
+  const autoReadRef = useRef(false);
+  const wasListeningRef = useRef(false);
+
+  const toggleAutoRead = () => {
+    const next = !autoRead;
+    autoReadRef.current = next;
+    setAutoRead(next);
+    if (!next) { stopSpeaking(); setSpeakingId(null); }
+  };
+
+  // 语音识别错误 → 复用全局 toast
+  useEffect(() => {
+    if (voiceError) { setError(voiceError); clearError(); }
+  }, [voiceError, clearError]);
+
+  // 语音输入结束（手动停止或自动停止）→ 把识别到的最终文本回填到输入框
+  useEffect(() => {
+    const wasListening = wasListeningRef.current;
+    wasListeningRef.current = listening;
+    if (wasListening && !listening && finalText.trim()) {
+      setInput(current => {
+        const base = current.trim();
+        const addition = finalText.trim();
+        return `${base}${base ? ' ' : ''}${addition}`;
+      });
+      setFinalText('');
+    }
+  }, [listening, finalText, setFinalText]);
+
+  const toggleSpeak = item => {
+    const full = messages.find(message => message.id === item.id);
+    const text = String(full?.content || item.content || '').trim();
+    if (!text) return;
+    if (speakingId === item.id) {
+      stopSpeaking();
+      setSpeakingId(null);
+      return;
+    }
+    stopSpeaking();
+    speak(text, () => setSpeakingId(current => (current === item.id ? null : current)));
+    setSpeakingId(item.id);
+  };
 
   const selectedProviderInfo = useMemo(() => models.providers.find(item => item.provider === selectedProvider), [models.providers, selectedProvider]);
   const currentSession = useMemo(() => sessions.find(item => item.id === sessionId) || null, [sessions, sessionId]);
@@ -273,21 +335,6 @@ function App() {
       const saved = await api(`/api/sessions/${sessionId}/atmosphere`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ atmosphere: presetId }) });
       setAtmosphere(saved.atmosphere);
     } catch (err) { setError(err.message); }
-  };
-
-  const createEvent = async event => {
-    event.preventDefault();
-    if (!newEvent.title.trim() || !newEvent.date) return;
-    try {
-      const created = await api('/api/events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newEvent) });
-      setEvents(current => [...current, created].sort((a, b) => new Date(a.date) - new Date(b.date)));
-      setNewEvent({ title: '', date: '', type: 'plan', note: '' });
-    } catch (err) { setError(err.message); }
-  };
-
-  const removeEvent = async id => {
-    try { await api(`/api/events/${id}`, { method: 'DELETE' }); setEvents(current => current.filter(item => item.id !== id)); }
-    catch (err) { setError(err.message); }
   };
 
   const createAgent = async event => {
@@ -358,18 +405,16 @@ function App() {
   };
 
   const refresh = async () => {
-    const [nextSessions, nextMemory, nextPersonality, nextEvidence, nextHistory, nextTasks, modelCatalog, nextEvents, nextPresets, nextAgents] = await Promise.all([
-      api('/api/sessions'), api('/api/memory/overview'), api('/api/personality'), api('/api/growth/evidence'), api('/api/personality/history'), api('/api/tasks'), api('/api/models'), api('/api/events'), api('/api/psychology/presets'), api('/api/agents')
+    const [nextSessions, nextMemory, nextPersonality, nextEvidence, nextHistory, modelCatalog, nextPresets, nextAgents] = await Promise.all([
+      api('/api/sessions'), api('/api/memory/overview'), api('/api/personality'), api('/api/growth/evidence'), api('/api/personality/history'), api('/api/models'), api('/api/psychology/presets'), api('/api/agents')
     ]);
     const safeSessions = asArray(nextSessions);
     setSessions(safeSessions);
     setMemory({ count: Number(nextMemory?.count) || 0, memories: asArray(nextMemory?.memories) });
     setPersonality(nextPersonality && typeof nextPersonality === 'object' ? nextPersonality : null);
     setGrowthEvidence(asArray(nextEvidence));
-    setTasks(asArray(nextTasks));
     setPersonalityHistory(asArray(nextHistory));
     setModels(modelCatalog && Array.isArray(modelCatalog.providers) ? modelCatalog : { defaultProvider: 'mock', providers: [] });
-    setEvents(asArray(nextEvents));
     setAtmospherePresets(asArray(nextPresets));
     setAgents(asArray(nextAgents));
     if (safeSessions.some(item => item.id === sessionId)) await loadModel(sessionId);
@@ -379,8 +424,6 @@ function App() {
   const syncWorkspace = async () => {
     const result = await api(`/api/sync?limit=100${syncCursor ? `&cursor=${encodeURIComponent(syncCursor)}` : ''}`);
     setSyncCursor(result.nextCursor || syncCursor);
-    const changedTasks = asArray(result.changes).filter(item => item.entity === 'task').map(item => item.data);
-    if (changedTasks.length) setTasks(current => [...changedTasks, ...current.filter(item => !changedTasks.some(next => next.id === item.id))]);
     return result;
   };
 
@@ -444,7 +487,7 @@ function App() {
     return () => window.clearInterval(interval);
   }, [authReady, user, syncCursor]);
 
-  const modalOpen = settingsOpen || profileOpen || eventOpen || taskOpen || growthOpen || historyOpen || Boolean(pendingApproval);
+  const modalOpen = settingsOpen || profileOpen || growthOpen || historyOpen || Boolean(pendingApproval);
 
   useEffect(() => {
     if (!modalOpen) return undefined;
@@ -453,8 +496,6 @@ function App() {
       if (pendingApproval) respondApproval(false);
       setSettingsOpen(false);
       setProfileOpen(false);
-      setEventOpen(false);
-      setTaskOpen(false);
       setGrowthOpen(false);
       setHistoryOpen(false);
     };
@@ -590,23 +631,10 @@ function App() {
     } catch (err) { setError(err.message); }
   };
 
-  const createTask = async event => {
-    event.preventDefault();
-    const title = newTaskTitle.trim();
-    if (!title) return;
-    try {
-      const task = await api('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, sessionId }) });
-      setTasks(current => [task, ...current]);
-      setNewTaskTitle('');
-    } catch (err) { setError(err.message); }
-  };
-
-  const completeTask = async task => {
-    try {
-      const updated = await api(`/api/tasks/${task.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'completed' }) });
-      setTasks(current => current.map(item => item.id === updated.id ? updated : item));
-    } catch (err) { setError(err.message); }
-  };
+  const createTask = event => { event.preventDefault(); setNewTaskTitle(''); setTaskOpen(false); };
+  const completeTask = () => {};
+  const createEvent = event => { event.preventDefault(); setNewEvent({ title: '', date: '', type: 'plan', note: '' }); setEventOpen(false); };
+  const removeEvent = () => {};
 
   const traitLabels = useMemo(() => {
     const map = {};
@@ -716,6 +744,8 @@ function App() {
       let runId = '';
       let lastEventId = '';
       let reconnectAttempts = 0;
+      let fullText = '';
+      let assistantMessageId = '';
       const scheduleComposerUnlock = () => {
         clearTimeout(completionUnlockTimer);
         completionUnlockTimer = setTimeout(() => setStreaming(false), 1200);
@@ -732,7 +762,7 @@ function App() {
           if (eventId) lastEventId = eventId;
           const data = JSON.parse(dataText);
           if (eventName === 'meta') { runId = data.runId || runId; if (data.provider) setActualModel({ provider: data.provider, model: data.model }); }
-          if (eventName === 'text') { streamStateRef.current.buffer += data.delta; streamProcess(); scheduleComposerUnlock(); }
+          if (eventName === 'text') { fullText += data.delta; streamStateRef.current.buffer += data.delta; streamProcess(); scheduleComposerUnlock(); }
           if (eventName === 'error') {
             streamError = describeModelError({ code: data.code, message: data.message || '生成失败' });
             setError(streamError);
@@ -740,7 +770,7 @@ function App() {
           if (eventName === 'tool') { setToolEvents(current => [...current, { name: data.name, args: data.args, result: null }]); }
           if (eventName === 'tool_pending') { setPendingApproval({ runId: data.runId, toolCallId: data.toolCallId, name: data.name, args: data.args }); }
           if (eventName === 'tool_result') { setToolEvents(current => { const next = [...current]; for (let i = next.length - 1; i >= 0; i -= 1) { if (next[i].result === null && next[i].name === data.name) { next[i] = { ...next[i], result: data.result }; break; } } return next; }); }
-          if (eventName === 'done') { streamFinished = true; if (data.mode) setMode(data.mode); if (data.ok === false && !streamError) streamError = '模型没有完成本次回复'; }
+          if (eventName === 'done') { streamFinished = true; if (data.mode) setMode(data.mode); if (data.messageId) assistantMessageId = data.messageId; if (data.ok === false && !streamError) streamError = '模型没有完成本次回复'; }
         });
       };
       const readStream = async currentResponse => {
@@ -771,6 +801,7 @@ function App() {
       setStreaming(false);
       await loadSessionMessages(sessionId, channel).catch(() => {});
       void refresh().catch(err => setError(err.message));
+      if (autoReadRef.current && fullText.trim()) { setSpeakingId(assistantMessageId || null); speak(fullText.trim(), () => setSpeakingId(null)); }
     } catch (err) {
       const st = streamStateRef.current;
       if (st.timer) clearTimeout(st.timer);
@@ -853,16 +884,15 @@ function App() {
   if (supabase && authReady && !user) return <main className="auth-shell"><form className="auth-panel" onSubmit={submitAuth}><p className="eyebrow">COCHPIA AUTH</p><h1>进入你的共同空间</h1><label>邮箱<input type="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} autoComplete="email" required /></label><label>密码<input type="password" value={authPassword} onChange={event => setAuthPassword(event.target.value)} autoComplete={authAction === 'sign-in' ? 'current-password' : 'new-password'} required /></label><button className="auth-submit" disabled={authBusy}>{authBusy ? '处理中…' : authAction === 'sign-in' ? '登录' : '创建账户'}</button><button type="button" className="auth-switch" onClick={() => { setAuthAction(authAction === 'sign-in' ? 'sign-up' : 'sign-in'); setError(''); setAuthNotice(''); }}>{authAction === 'sign-in' ? '首次使用？创建账户' : '已有账户？返回登录'}</button>{authNotice && <p className="auth-notice" role="status">{authNotice}</p>}{error && <p className="auth-error" role="alert">{error}</p>}</form></main>;
 
   return <><BackgroundLayer /><GroupInfoPanel session={currentSession} agents={agents} open={groupPanelOpen} onClose={() => setGroupPanelOpen(current => !current)} onSave={updateCurrentGroup} onInvite={inviteAgent} onRemove={removeGroupAgent} onAgentSave={saveAgent} onAgentRemove={removeAgent} /><div className={`app-shell${minimized ? ' minimized' : ''}`}>
-    {page === 'chat' && <><GroupChatIdentity session={currentSession} agents={agents} onOpen={() => setGroupPanelOpen(true)} /><WorkspaceOverflow isGroup={currentSession?.kind === 'group'} onGroupInfo={() => setGroupPanelOpen(true)} onState={() => restoreWindow('inspector')} onCloseState={() => closeWindow('inspector')} /></>}
     <div className="workspace-clock-overlay">{workspaceClock}</div>
     {user && supabase && <button className="auth-logout" onClick={() => supabase.auth.signOut()}>退出</button>}
     {page !== 'splash' && <div className="aube-lights"><i className="l-red" aria-hidden="true" /><i className="l-yellow" aria-hidden="true" /><button type="button" className="l-green" onClick={() => setMinimized(true)} title="最小化" aria-label="最小化应用" /></div>}
     {page === 'splash' && <button type="button" className="aube-splash" onClick={() => setPage('home')} aria-label="进入 Cochpia"><video className="aube-splash-video" src="/306155_medium.mp4" autoPlay muted loop playsInline preload="auto" aria-hidden="true" /><span className="aube-splash-veil" aria-hidden="true" /><span className="aube-splash-center"><span className="aube-orb"><span className="aube-orb-core" /></span><span className="aube-word">Cochpia</span><span className="aube-tag">Still Blooming</span><span className="aube-divider"><i /><em>✦</em><i /></span><span className="aube-hint">轻触进入</span></span></button>}
     {page !== 'splash' && <nav className="aube-nav"><button className={`aube-nav-item ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span className="aube-nav-dot">⌂</span><span className="aube-nav-lbl">Sanctum</span></button><button className={`aube-nav-item ${page === 'chat' ? 'active' : ''}`} onClick={() => setPage('chat')}><span className="aube-nav-dot">✎</span><span className="aube-nav-lbl">Chat</span></button><button className={`aube-nav-item ${page === 'arcana' ? 'active' : ''}`} onClick={() => setPage('arcana')}><span className="aube-nav-dot">⌗</span><span className="aube-nav-lbl">Arcana</span></button><button className={`aube-nav-item ${page === 'life' ? 'active' : ''}`} onClick={() => setPage('life')}><span className="aube-nav-dot">◈</span><span className="aube-nav-lbl">共生</span></button><button className="aube-nav-item" onClick={openMusic}><span className="aube-nav-dot">♫</span><span className="aube-nav-lbl">Music</span></button><button className="aube-nav-item" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><span className="aube-nav-dot">◐</span><span className="aube-nav-lbl">Veil</span></button><button className="aube-nav-item" onClick={openSettings}><span className="aube-nav-dot">⚙</span><span className="aube-nav-lbl">设置</span></button></nav>}
-    {page === 'home' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card aube-profile"><div className="aube-pava">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</div><div><div className="aube-pname">{profile.name}<button type="button" className="text-button profile-edit" onClick={() => setProfileOpen(true)}>编辑档案</button></div><div className="aube-pquote">{personality?.summary || '温和、好奇，正在学习如何更准确地陪伴。'}</div><div className="aube-tags">{(personality?.traits || []).slice(0, 4).map(trait => <span key={trait.key}>{trait.label} {Math.round(trait.value * 100)}%</span>)}</div></div></div><div className="aube-duo"><div className="aube-card aube-mini" onClick={newSession}><span className="aube-mi">＋</span><h5>新的相遇</h5><small>{sessions.length} 个会话</small></div><div className="aube-card aube-mini" onClick={() => setEventOpen(true)}><span className="aube-mi">☾</span><h5>日历</h5><small>{events.length} 条日程</small></div></div><div className="aube-sec">Sessions</div><div className="aube-sessions">{sessions.map(session => <div key={session.id} className={`aube-session-row ${session.id === sessionId ? 'active' : ''}`}><button className="aube-session" onClick={() => { load(session.id); setPage('chat'); }}>{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话">×</button></div>)}</div><div className="aube-sec">Pulse</div><div className="aube-card aube-pulse">{(personality?.traits || []).map(trait => <div className="aube-prow" key={trait.key}><span className="aube-pl">{trait.label}</span><div className="aube-pbar"><i style={{ width: `${trait.value * 100}%` }} /></div><span className="aube-pv">{Math.round(trait.value * 100)}</span></div>)}</div></div></div>}
+    {page === 'home' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card aube-profile"><div className="aube-pava">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</div><div><div className="aube-pname">{profile.name}<button type="button" className="text-button profile-edit" onClick={() => setProfileOpen(true)}>编辑档案</button></div><div className="aube-pquote">{personality?.summary || '温和、好奇，正在学习如何更准确地陪伴。'}</div><div className="aube-tags">{(personality?.traits || []).slice(0, 4).map(trait => <span key={trait.key}>{trait.label} {Math.round(trait.value * 100)}%</span>)}</div></div></div><div className="aube-duo"><div className="aube-card aube-mini" onClick={newSession}><span className="aube-mi"><FeatherIcon name="plus" size={18} /></span><h5>新的相遇</h5><small>{sessions.length} 个会话</small></div><div className="aube-card aube-mini" onClick={() => setEventOpen(true)}><span className="aube-mi"><FeatherIcon name="calendar" size={18} /></span><h5>日历</h5><small>{events.length} 条日程</small></div></div><div className="aube-sec">Sessions</div><div className="aube-sessions">{sessions.map(session => <div key={session.id} className={`aube-session-row ${session.id === sessionId ? 'active' : ''}`}><button className="aube-session" onClick={() => { load(session.id); setPage('chat'); }}>{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话"><FeatherIcon name="x" size={16} /></button></div>)}</div><div className="aube-sec">Pulse</div><div className="aube-card aube-pulse">{(personality?.traits || []).map(trait => <div className="aube-prow" key={trait.key}><span className="aube-pl">{trait.label}</span><div className="aube-pbar"><i style={{ width: `${trait.value * 100}%` }} /></div><span className="aube-pv">{Math.round(trait.value * 100)}</span></div>)}</div></div></div>}
     {page === 'life' && <div className="aube-page-overlay"><div className="aube-page-scroll"><LifeGame onChat={() => setPage('chat')} /><details className="life-calendar-legacy"><summary>查看生命格日历</summary><LifeCalendar /></details></div></div>}
 
-    {page === 'arcana' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-ptitle">Arcana</div><div className="aube-sect">Persona · 人格</div><textarea className="persona-input" value={personaDraft} onChange={event => setPersonaDraft(event.target.value)} rows="4" placeholder="自定义本会话 Cochpia 的人格与语气,留空使用默认人格…" /><button className="select-model" style={{ marginTop: 10 }} onClick={savePersona}>保存人格</button><div className="aube-sect">Veil · 主题</div><div className="aube-veils">{[['sakura', '樱花'], ['ember', '余烬'], ['moss', '苔藓'], ['ink', '墨'], ['va11', '赛博']].map(([id, name]) => <button key={id} className={`aube-veil ${workspacePreferences.theme.themeId === id ? 'active' : ''}`} onClick={() => setWorkspaceSetting('theme', 'themeId', id)}>{name}</button>)}</div><div className="aube-sect">Atmosphere · 氛围</div><select value={atmosphere} onChange={event => saveAtmosphere(event.target.value)}><option value="">默认</option>{atmospherePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.name} · {preset.description}</option>)}</select><div className="aube-sect">Model · 模型</div><select value={selectedProvider} onChange={selectProvider}><option value="">选择供应商</option>{models.providers.map(provider => <option key={provider.provider} value={provider.provider} disabled={!provider.ready}>{provider.label}{provider.ready ? '' : ' · 未配置'}</option>)}</select><select value={selectedModel} onChange={selectModel} style={{ marginTop: 8 }}><option value="">选择模型</option>{providerModelOptions(selectedProviderInfo).map(model => <option key={model} value={model}>{model}</option>)}</select><div className="aube-sect" style={{ marginTop: 16 }}>Providers</div>{models.providers.map(provider => <div className="aube-row" key={provider.provider}><span>{provider.label}</span><span className="aube-row-rv">{provider.ready ? '已配置' : '未配置'}</span></div>)}<div className="aube-sect">Agents · 好友</div>{agents.length === 0 ? <div className="aube-row"><span style={{ color: 'var(--text-muted)' }}>还没有好友 Agent,添加一个试试</span></div> : agents.map(agent => <div className="aube-row" key={agent.id}><span>{agent.avatar} {agent.name}</span><span className="aube-row-rv">{agent.provider ? `${agent.provider}/${agent.model || '默认'}` : '默认模型'}</span><button type="button" className="text-button" onClick={() => removeAgent(agent.id)}>删</button></div>)}<form className="agent-form" onSubmit={createAgent}><input value={agentDraft.name} onChange={event => setAgentDraft(current => ({ ...current, name: event.target.value }))} placeholder="名称" /><input value={agentDraft.persona} onChange={event => setAgentDraft(current => ({ ...current, persona: event.target.value }))} placeholder="人格(可选)" /><select value={agentDraft.provider} onChange={event => setAgentDraft(current => ({ ...current, provider: event.target.value }))}><option value="">默认模型</option>{models.providers.filter(provider => provider.ready).map(provider => <option key={provider.provider} value={provider.provider}>{provider.label}</option>)}</select><input value={agentDraft.model} onChange={event => setAgentDraft(current => ({ ...current, model: event.target.value }))} placeholder="模型名" /><AvatarPicker value={agentDraft.avatar} onChange={avatar => setAgentDraft(current => ({ ...current, avatar }))} /><button type="submit">添加</button></form><button className="select-model" style={{ marginTop: 10, width: '100%' }} onClick={createGroupSession}>创建群聊(含全部好友)</button><div className="aube-sect">Data · 数据</div><div className="aube-row"><button className="text-button" onClick={exportData}>导出数据</button><label className="text-button" style={{ marginLeft: 16, cursor: 'pointer' }}>导入数据<input type="file" accept="application/json,.json" onChange={importData} hidden /></label></div></div></div>}
+    {page === 'arcana' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-ptitle">Arcana</div><div className="aube-sect">Persona · 人格</div><textarea className="persona-input" value={personaDraft} onChange={event => setPersonaDraft(event.target.value)} rows="4" placeholder="自定义本会话 Cochpia 的人格与语气,留空使用默认人格…" /><button className="select-model" style={{ marginTop: 10 }} onClick={savePersona}>保存人格</button><div className="aube-sect">Veil · 主题</div><div className="aube-veils">{[['sakura', '樱花'], ['ember', '余烬'], ['moss', '苔藓'], ['ink', '墨'], ['va11', '赛博']].map(([id, name]) => <button key={id} className={`aube-veil ${workspacePreferences.theme.themeId === id ? 'active' : ''}`} onClick={() => setWorkspaceSetting('theme', 'themeId', id)}>{name}</button>)}</div><div className="aube-sect">Atmosphere · 氛围</div><select value={atmosphere} onChange={event => saveAtmosphere(event.target.value)}><option value="">默认</option>{atmospherePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.name} · {preset.description}</option>)}</select><div className="aube-sect">Model · 模型</div><select value={selectedProvider} onChange={selectProvider}><option value="">选择供应商</option>{models.providers.map(provider => <option key={provider.provider} value={provider.provider} disabled={!provider.ready}>{provider.label}{provider.ready ? '' : ' · 未配置'}</option>)}</select><select value={selectedModel} onChange={selectModel} style={{ marginTop: 8 }}><option value="">选择模型</option>{providerModelOptions(selectedProviderInfo).map(model => <option key={model} value={model}>{model}</option>)}</select><div className="aube-sect" style={{ marginTop: 16 }}>Providers</div>{models.providers.map(provider => <div className="aube-row" key={provider.provider}><span>{provider.label}</span><span className="aube-row-rv">{provider.ready ? '已配置' : '未配置'}</span></div>)}<div className="aube-sect">Agents · 好友</div>{agents.length === 0 ? <div className="aube-row"><span style={{ color: 'var(--text-muted)' }}>还没有好友 Agent,添加一个试试</span></div> : agents.map(agent => <div className="aube-row" key={agent.id}><span>{agent.avatar} {agent.name}</span><span className="aube-row-rv">{agent.provider ? `${agent.provider}/${agent.model || '默认'}` : '默认模型'}</span><button type="button" className="text-button" onClick={() => removeAgent(agent.id)}>删</button></div>)}<form className="agent-form" onSubmit={createAgent}><input value={agentDraft.name} onChange={event => setAgentDraft(current => ({ ...current, name: event.target.value }))} placeholder="名称" /><input value={agentDraft.persona} onChange={event => setAgentDraft(current => ({ ...current, persona: event.target.value }))} placeholder="人格(可选)" /><select value={agentDraft.provider} onChange={event => setAgentDraft(current => ({ ...current, provider: event.target.value }))}><option value="">默认模型</option>{models.providers.filter(provider => provider.ready).map(provider => <option key={provider.provider} value={provider.provider}>{provider.label}</option>)}</select><input value={agentDraft.model} onChange={event => setAgentDraft(current => ({ ...current, model: event.target.value }))} placeholder="模型名" /><AvatarPicker value={agentDraft.avatar} onChange={avatar => setAgentDraft(current => ({ ...current, avatar }))} /><button type="submit">添加</button></form><button className="select-model" style={{ marginTop: 10, width: '100%' }} onClick={createGroupSession}>创建群聊(含全部好友)</button><div className="aube-sect">共同空间 · Shared state</div><button type="button" className="select-model" style={{ width: '100%' }} onClick={() => restoreWindow('inspector')}><FeatherIcon name="eye" size={15} /> 查看共同状态</button><div className="aube-sect">Data · 数据</div><div className="aube-row"><button className="text-button" onClick={exportData}>导出数据</button><label className="text-button" style={{ marginLeft: 16, cursor: 'pointer' }}>导入数据<input type="file" accept="application/json,.json" onChange={importData} hidden /></label></div></div></div>}
     <div className="model-dock">
       <label htmlFor="model-provider">模型供应商</label>
       <select id="model-provider" value={selectedProvider} onChange={selectProvider} disabled={streaming}>
@@ -879,23 +909,19 @@ function App() {
       <button className="icon-button compact" aria-label="Open music" title="Open music" onClick={openMusic}>♫</button><button className="icon-button compact" aria-label="打开设置" title="打开设置" onClick={openSettings}>⚙</button>
     </div>
 
-    <aside className="sidebar"><div className="brand"><span className="brand-mark">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</span><div><strong>{profile.name}</strong><span>relationship workspace</span></div></div><button className="new-chat" onClick={newSession}><span>+</span> 新的相遇</button><div className="section-label">会话</div><nav className="session-list">{sessions.map(session => <div key={session.id} className={`session-row ${session.id === sessionId ? 'active' : ''}`}><button className="session" onClick={() => load(session.id)}><span className="session-dot" />{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话">×</button></div>)}</nav><div className="sidebar-foot"><span className="status-dot" />本地开发模式<span className="version">v0.1</span><button type="button" className="text-button" onClick={exportData}>导出</button><label className="text-button import-label">导入<input type="file" accept="application/json,.json" onChange={importData} hidden /></label></div></aside>
+    <aside className="sidebar"><div className="brand"><span className="brand-mark">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</span><div><strong>{profile.name}</strong><span>relationship workspace</span></div></div><button className="new-chat" onClick={newSession}><span>+</span> 新的相遇</button><div className="section-label">会话</div><nav className="session-list">{sessions.map(session => <div key={session.id} className={`session-row ${session.id === sessionId ? 'active' : ''}`}><button className="session" onClick={() => load(session.id)}><span className="session-dot" />{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话"><FeatherIcon name="x" size={16} /></button></div>)}</nav><div className="sidebar-foot"><span className="status-dot" />本地开发模式<span className="version">v0.1</span><button type="button" className="text-button" onClick={exportData}>导出</button><label className="text-button import-label">导入<input type="file" accept="application/json,.json" onChange={importData} hidden /></label></div></aside>
 
-    <main className="main-panel"><header className="topbar"><div><p className="eyebrow">LIVE RELATIONSHIP LOG</p><h1>与你共同成长的空间</h1></div><div className="top-actions"><button className="icon-button" aria-label="切换主题" title="切换主题" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}>◐</button><span className="connection"><span className="status-dot" /> SSE 已连接</span></div></header><div className="channel-bar">{channels.map(item => <button type="button" key={item.name} className={item.name === channel ? 'channel-tab active' : 'channel-tab'} onClick={() => switchChannel(item.name)}>{item.name}<span className="channel-count">{item.count}</span></button>)}<button type="button" className="channel-tab channel-add" aria-label="新建频道" title="新建频道" onClick={addChannel}>＋</button><input className="chat-search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="搜索聊天记录" /><button type="button" className={`mode-toggle ${mode}`} onClick={toggleMode} title={mode === 'companion' ? '当前陪伴模式，点击切换工作模式' : '当前工作模式，点击切回陪伴模式'}>{mode === 'companion' ? '陪伴' : '工作'}</button></div><div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>{messages.length === 0 && <div className="empty-state"><span className="empty-mark">01</span><h2>从一段真实的分享开始</h2><p>每次对话都会成为可审计的共同经历，只有重要的内容才会进入长期记忆。</p></div>}{groupedMessages.map(item => item.type === 'date' ? <div key={item.key} className="date-sep"><span>{item.label}</span></div> : <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}><div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || (profile.avatarImage ? <img src={profile.avatarImage} alt="" /> : profile.avatar)) : '你'}</div><div className="message-content"><div className="message-meta">{item.role === 'assistant' ? (item.senderName || profile.name) : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>{editingMessageId === item.id && item.lastInGroup ? <div className="message-edit"><textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus /><div><button type="button" className="text-button" onClick={() => saveMessageEdit(item.id)}>保存</button><button type="button" className="text-button muted-button" onClick={cancelEditingMessage}>取消</button></div></div> : <><div className="bubble">{item.content || <span className="typing">正在形成回应<span>.</span><span>.</span><span>.</span></span>}{item.isStreaming && item.content ? <span className="typing-cursor" /> : null}</div>{item.lastInGroup && !('isStreaming' in item) && <div className="message-actions"><button type="button" className="text-button" onClick={() => startEditingMessage(item)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => removeMessage(item.id)}>删除</button></div>}</>}</div></article>)}{toolEvents.length > 0 && <div className="tool-log">{toolEvents.map((item, i) => <details key={i} className="tool-item" open={item.result === null}><summary>🔧 {item.name} {item.args?.path || item.args?.pattern || item.args?.name || item.args?.dir || ''}</summary>{item.result === null ? <span className="tool-pending">执行中…</span> : <pre className="tool-result">{item.result}</pre>}</details>)}</div>}{jumpToBottom && <button className="jump-bottom" onClick={() => { nearBottomRef.current = true; setJumpToBottom(false); scrollToBottom('smooth'); }} aria-label="回到底部" title="回到底部">↓</button>}</div><form className="composer" onSubmit={sendMessage}><CompanionIntentBar mode={mode} intent={companionIntent} onChange={setCompanionIntent} /><button type="button" className="upload-button" onClick={() => fileRef.current?.click()} disabled={streaming} aria-label="上传文件" title="上传文件">📎</button><textarea value={input} onChange={event => setInput(event.target.value)} disabled={streaming} placeholder="写下此刻想分享的事…" rows="1" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event); } }} /><input ref={fileRef} type="file" hidden onChange={uploadFile} /><button className="send-button" disabled={streaming || !input.trim()} aria-label="发送消息" title="发送消息">↑</button><div className="composer-note">Enter 发送 · Shift + Enter 换行 · 📎 上传文件</div></form></main>
+    <main className={`main-panel ${page !== 'chat' ? 'is-page-hidden' : ''}`}><header className="topbar"><div><p className="eyebrow">LIVE RELATIONSHIP LOG</p><h1>与你共同成长的空间</h1></div><div className="top-actions"><button className="icon-button" aria-label="切换主题" title="切换主题" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><FeatherIcon name={workspacePreferences.theme.themeId === 'sakura' ? 'moon' : 'sun'} size={16} /></button><span className="connection"><span className="status-dot" /> SSE 已连接</span></div></header><div className="channel-bar">{page === 'chat' && <div className="chat-context-tools"><GroupChatIdentity session={currentSession} agents={agents} onOpen={() => setGroupPanelOpen(true)} /></div>}<div className="channel-tabs">{channels.map(item => <button type="button" key={item.name} className={item.name === channel ? 'channel-tab active' : 'channel-tab'} onClick={() => switchChannel(item.name)}>{item.name}<span className="channel-count">{item.count}</span></button>)}<button type="button" className="channel-tab channel-add" aria-label="新建频道" title="新建频道" onClick={addChannel}><FeatherIcon name="plus" size={16} /></button></div><input className="chat-search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="搜索聊天记录" /><button type="button" className={`mode-toggle ${mode}`} onClick={toggleMode} title={mode === 'companion' ? '当前陪伴模式，点击切换工作模式' : '当前工作模式，点击切回陪伴模式'}>{mode === 'companion' ? '陪伴' : '工作'}</button></div><div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>{messages.length === 0 && <div className="empty-state"><span className="empty-mark">01</span><h2>从一段真实的分享开始</h2><p>每次对话都会成为可审计的共同经历，只有重要的内容才会进入长记忆。</p></div>}{groupedMessages.map(item => item.type === 'date' ? <div key={item.key} className="date-sep"><span>{item.label}</span></div> : <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}><div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || (profile.avatarImage ? <img src={profile.avatarImage} alt="" /> : profile.avatar)) : '你'}</div><div className="message-content"><div className="message-meta">{item.role === 'assistant' ? (item.senderName || profile.name) : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>{editingMessageId === item.id && item.lastInGroup ? <div className="message-edit"><textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus /><div><button type="button" className="text-button" onClick={() => saveMessageEdit(item.id)}>保存</button><button type="button" className="text-button muted-button" onClick={cancelEditingMessage}>取消</button></div></div> : <><div className="bubble">{item.content || <span className="typing">正在形成回应<span>.</span><span>.</span><span>.</span></span>}{item.isStreaming && item.content ? <span className="typing-cursor" /> : null}</div>{item.lastInGroup && !('isStreaming' in item) && <div className="message-actions">{item.role === 'assistant' && ttsSupported && <button type="button" className="text-button" onClick={() => toggleSpeak(item)}>{speakingId === item.id ? '停止朗读' : '朗读'}</button>}<button type="button" className="text-button" onClick={() => startEditingMessage(item)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => removeMessage(item.id)}>删除</button></div>}</>}</div></article>)}{toolEvents.length > 0 && <div className="tool-log">{toolEvents.map((item, i) => <details key={i} className="tool-item" open={item.result === null}><summary>🔧 {item.name} {item.args?.path || item.args?.pattern || item.args?.name || item.args?.dir || ''}</summary>{item.result === null ? <span className="tool-pending">执行中…</span> : <pre className="tool-result">{item.result}</pre>}</details>)}</div>}{jumpToBottom && <button className="jump-bottom" onClick={() => { nearBottomRef.current = true; setJumpToBottom(false); scrollToBottom('smooth'); }} aria-label="回到底部" title="回到底部"><FeatherIcon name="chevronDown" size={18} /></button>}</div><form className="composer" onSubmit={sendMessage}><CompanionIntentBar mode={mode} intent={companionIntent} onChange={setCompanionIntent} /><button type="button" className="upload-button" onClick={() => fileRef.current?.click()} disabled={streaming} aria-label="上传文件" title="上传文件"><FeatherIcon name="paperclip" size={17} /></button><button type="button" className={`upload-button voice-button${listening ? ' listening' : ''}`} onClick={toggleListening} disabled={streaming || !recognitionSupported} aria-pressed={listening} aria-label={listening ? '停止语音输入' : '语音输入'} title={recognitionSupported ? (listening ? '点击停止说话' : '点击开始说话') : '当前浏览器不支持语音识别'}>{listening ? <FeatherIcon name="stopCircle" size={17} /> : <FeatherIcon name="mic" size={17} />}</button><button type="button" className={`upload-button auto-read${autoRead ? ' active' : ''}`} onClick={toggleAutoRead} disabled={!ttsSupported} aria-pressed={autoRead} aria-label="自动朗读回复" title={ttsSupported ? (autoRead ? '已开启自动朗读回复' : '开启自动朗读回复') : '当前浏览器不支持语音合成'}><FeatherIcon name="volume2" size={17} /></button><textarea value={listening ? `${input}${finalText}${interimText}` : input} onChange={event => setInput(event.target.value)} disabled={streaming} readOnly={listening} placeholder={listening ? '正在聆听…' : '写下此刻想分享的事…'} rows="1" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event); } }} /><input ref={fileRef} type="file" hidden onChange={uploadFile} /><button className="send-button" disabled={streaming || !input.trim()} aria-label="发送消息" title="发送消息"><FeatherIcon name="arrowUp" size={18} /></button><div className="composer-note">Enter 发送 · 🎤 语音输入 · 🔊 自动朗读</div></form></main>
 
     <div className="window-layer"><FloatingWindow id="inspector" title="共同状态"><aside className="inspector"><div className="inspector-head"><div><p className="eyebrow">COGNITIVE STATE</p><h2>共同状态</h2></div><span className="live-pill">LIVE</span></div><section className="state-card"><div className="state-card-top"><span className="state-icon">✦</span><div><strong>关系正在形成</strong><span>基于共同事件持续更新</span></div></div><div className="state-line"><span>共享记忆</span><strong>{memory.count}</strong></div><div className="state-line"><span>人格版本</span><strong>v{personality?.version || 1}</strong></div></section><MaterialPreview /><section className="inspector-section"><div className="section-heading"><span>人格趋势</span><button type="button" className="text-button" onClick={() => setHistoryOpen(true)}>查看版本</button></div>{(personality?.traits || []).map(trait => <div className="trait" key={trait.key}><div><span>{trait.label}</span><b>{Math.round(trait.value * 100)}%</b></div><div className="progress"><i style={{ width: `${trait.value * 100}%` }} /></div></div>)}</section><section className="inspector-section"><div className="section-heading"><span>最近记忆</span><span className="count-label">{memory.count} 条</span></div>{memory.memories.slice(0, 3).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.type === 'relationship' ? '关系' : '事件'}</span><p>{item.summary}</p><small>{Math.round(item.confidence * 100)}% 确信 · {item.source}</small></div>)}</section><section className="inspector-section"><div className="section-heading"><span>成长证据</span><button type="button" className="text-button" onClick={() => setGrowthOpen(true)}>查看时间线</button></div>{growthEvidence.slice(0, 2).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.status || 'draft'}</span><p>{item.claim}</p><small>{item.evidence}</small></div>)}</section><section className="protocol-note"><span>◎</span><p><strong>可验证成长</strong>每次人格变化都保留证据和版本，随时可回滚。</p></section></aside></FloatingWindow></div>
 
-    {growthOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setGrowthOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="growth-title"><header className="settings-header"><div><p className="eyebrow">AUDITABLE GROWTH</p><h2 id="growth-title">成长证据时间线</h2><p>确认证据后，对应人格维度会真实更新并生成新版本，随时可回滚。</p></div><button className="icon-button" aria-label="关闭成长时间线" title="关闭成长时间线" onClick={() => setGrowthOpen(false)}>×</button></header><div className="growth-actions"><span className="growth-pending">待确认 {growthEvidence.filter(item => item.status === 'draft' || !item.status).length} 条 · 已确认 {growthEvidence.filter(item => item.status === 'confirmed').length} 条 · 已驳回 {growthEvidence.filter(item => item.status === 'rejected').length} 条</span>{growthEvidence.some(item => item.status === 'draft' || !item.status) && <div className="growth-batch"><button type="button" className="select-model" disabled={reviewingEvidence !== null} onClick={() => reviewAllEvidence('confirmed')}>{reviewingEvidence === 'all' ? '处理中…' : '全部确认采纳'}</button><button type="button" className="text-button muted-button" disabled={reviewingEvidence !== null} onClick={() => reviewAllEvidence('rejected')}>全部驳回</button></div>}</div><div className="timeline">{growthEvidence.length === 0 ? <p className="empty-detail">暂时没有成长证据，聊几句后会自动生成。</p> : growthEvidence.map(item => { const isDraft = item.status === 'draft' || !item.status; const busy = reviewingEvidence === item.id; const delta = Number(item.proposedChange?.delta); return <article className={`timeline-item evidence-${item.status || 'draft'}`} key={item.id}><div className="timeline-marker" /><div><div className="timeline-meta"><span className={`evidence-status evidence-${item.status || 'draft'}`}>{item.status === 'confirmed' ? '已确认' : item.status === 'rejected' ? '已驳回' : '待确认'}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time></div><h3>{item.claim}</h3><p>{item.evidence}</p>{item.proposedChange?.traitKey && <div className="evidence-delta"><span>{traitLabel(item.proposedChange.traitKey)}</span><b className={delta > 0 ? 'delta-up' : delta < 0 ? 'delta-down' : ''}>{delta > 0 ? '+' : ''}{delta.toFixed(3)}</b></div>}<small>{item.sourceMessageId ? `来源消息：${String(item.sourceMessageId).slice(0, 8)}…` : '暂无来源消息'}</small>{isDraft && <div className="evidence-actions"><button type="button" className="select-model" disabled={busy || reviewingEvidence !== null} onClick={() => reviewEvidence(item.id, 'confirmed')}>{busy ? '处理中…' : '确认采纳'}</button><button type="button" className="text-button muted-button" disabled={busy || reviewingEvidence !== null} onClick={() => reviewEvidence(item.id, 'rejected')}>驳回</button></div>}</div></article>; })}</div></section></div>}
-    {historyOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setHistoryOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="history-title"><header className="settings-header"><div><p className="eyebrow">PERSONALITY HISTORY</p><h2 id="history-title">人格版本差异</h2><p>{currentVersion && previousVersion ? `v${previousVersion.version} → v${currentVersion.version}` : '等待第二个版本后显示差异'}</p></div><button className="icon-button" aria-label="关闭人格版本" title="关闭人格版本" onClick={() => setHistoryOpen(false)}>×</button></header>{currentVersion && previousVersion ? <div className="version-diff">{versionChanges.map(trait => <div className="diff-row" key={trait.key}><div><strong>{trait.label}</strong><span>{Math.round(trait.previous * 100)}% → {Math.round(trait.value * 100)}%</span></div><b className={trait.delta > 0 ? 'delta-up' : trait.delta < 0 ? 'delta-down' : ''}>{trait.delta > 0 ? '+' : ''}{Math.round(trait.delta * 100)}%</b></div>)}</div> : <p className="empty-detail">当前只有一个人格版本，完成下一次对话后会生成可比较的版本。</p>}</section></div>}
+    {growthOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setGrowthOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="growth-title"><header className="settings-header"><div><p className="eyebrow">AUDITABLE GROWTH</p><h2 id="growth-title">成长证据时间线</h2><p>确认证据后，对应人格维度会真实更新并生成新版本，随时可回滚。</p></div><button className="icon-button" aria-label="关闭成长时间线" title="关闭成长时间线" onClick={() => setGrowthOpen(false)}><FeatherIcon name="x" size={16} /></button></header><div className="growth-actions"><span className="growth-pending">待确认 {growthEvidence.filter(item => item.status === 'draft' || !item.status).length} 条 · 已确认 {growthEvidence.filter(item => item.status === 'confirmed').length} 条 · 已驳回 {growthEvidence.filter(item => item.status === 'rejected').length} 条</span>{growthEvidence.some(item => item.status === 'draft' || !item.status) && <div className="growth-batch"><button type="button" className="select-model" disabled={reviewingEvidence !== null} onClick={() => reviewAllEvidence('confirmed')}>{reviewingEvidence === 'all' ? '处理中…' : '全部确认采纳'}</button><button type="button" className="text-button muted-button" disabled={reviewingEvidence !== null} onClick={() => reviewAllEvidence('rejected')}>全部驳回</button></div>}</div><div className="timeline">{growthEvidence.length === 0 ? <p className="empty-detail">暂时没有成长证据，聊几句后会自动生成。</p> : growthEvidence.map(item => { const isDraft = item.status === 'draft' || !item.status; const busy = reviewingEvidence === item.id; const delta = Number(item.proposedChange?.delta); return <article className={`timeline-item evidence-${item.status || 'draft'}`} key={item.id}><div className="timeline-marker" /><div><div className="timeline-meta"><span className={`evidence-status evidence-${item.status || 'draft'}`}>{item.status === 'confirmed' ? '已确认' : item.status === 'rejected' ? '已驳回' : '待确认'}</span><time>{new Date(item.createdAt).toLocaleString('zh-CN')}</time></div><h3>{item.claim}</h3><p>{item.evidence}</p>{item.proposedChange?.traitKey && <div className="evidence-delta"><span>{traitLabel(item.proposedChange.traitKey)}</span><b className={delta > 0 ? 'delta-up' : delta < 0 ? 'delta-down' : ''}>{delta > 0 ? '+' : ''}{delta.toFixed(3)}</b></div>}<small>{item.sourceMessageId ? `来源消息：${String(item.sourceMessageId).slice(0, 8)}…` : '暂无来源消息'}</small>{isDraft && <div className="evidence-actions"><button type="button" className="select-model" disabled={busy || reviewingEvidence !== null} onClick={() => reviewEvidence(item.id, 'confirmed')}>{busy ? '处理中…' : '确认采纳'}</button><button type="button" className="text-button muted-button" disabled={busy || reviewingEvidence !== null} onClick={() => reviewEvidence(item.id, 'rejected')}>驳回</button></div>}</div></article>; })}</div></section></div>}
+    {historyOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setHistoryOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="history-title"><header className="settings-header"><div><p className="eyebrow">PERSONALITY HISTORY</p><h2 id="history-title">人格版本差异</h2><p>{currentVersion && previousVersion ? `v${previousVersion.version} → v${currentVersion.version}` : '等待第二个版本后显示差异'}</p></div><button className="icon-button" aria-label="关闭人格版本" title="关闭人格版本" onClick={() => setHistoryOpen(false)}><FeatherIcon name="x" size={16} /></button></header>{currentVersion && previousVersion ? <div className="version-diff">{versionChanges.map(trait => <div className="diff-row" key={trait.key}><div><strong>{trait.label}</strong><span>{Math.round(trait.previous * 100)}% → {Math.round(trait.value * 100)}%</span></div><b className={trait.delta > 0 ? 'delta-up' : trait.delta < 0 ? 'delta-down' : ''}>{trait.delta > 0 ? '+' : ''}{Math.round(trait.delta * 100)}%</b></div>)}</div> : <p className="empty-detail">当前只有一个人格版本，完成下一次对话后会生成可比较的版本。</p>}</section></div>}
     {profileOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setProfileOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="profile-title"><CharacterProfile onClose={() => setProfileOpen(false)} /></section></div>}
-    {pendingApproval && <div className="settings-backdrop" role="presentation" onClick={() => respondApproval(false)}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="approval-title"><header className="settings-header"><div><p className="eyebrow">WORK MODE · 待确认修改</p><h2 id="approval-title">确认执行 {pendingApproval.name} 操作？</h2><p>该操作会修改文件，请确认内容无误。</p></div><button className="icon-button" onClick={() => respondApproval(false)}>×</button></header><div className="approval-body"><div className="approval-path">📄 {String(pendingApproval.args?.path || '')}</div>{pendingApproval.name === 'edit' ? <div className="approval-diff"><div className="approval-old">− {String(pendingApproval.args?.oldText || '').slice(0, 500)}</div><div className="approval-new">+ {String(pendingApproval.args?.newText || '').slice(0, 500)}</div></div> : pendingApproval.name === 'bash' ? <pre className="approval-content">$ {String(pendingApproval.args?.command || '')}</pre> : <pre className="approval-content">{String(pendingApproval.args?.content || '').slice(0, 2000)}</pre>}<div className="approval-actions"><button type="button" className="select-model" onClick={() => respondApproval(true)}>确认执行</button><button type="button" className="text-button muted-button" onClick={() => respondApproval(false)}>拒绝</button></div></div></section></div>}
-    {settingsOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}><section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-header"><div><p className="eyebrow">MODEL DIRECTORY</p><h2 id="settings-title">模型设置</h2><p>查看适用场景并测试服务端连接。密钥不会进入浏览器。</p></div><button className="icon-button" aria-label="关闭模型设置" title="关闭模型设置" onClick={() => setSettingsOpen(false)}>×</button></header><div className="persona-panel"><div className="section-heading"><span>人格 Persona</span><button type="button" className="text-button" onClick={savePersona}>保存人格</button></div><textarea className="persona-input" value={personaDraft} onChange={event => setPersonaDraft(event.target.value)} placeholder="自定义本会话 Cochpia 的人格与语气,留空使用默认人格…" rows="4" /><div className="persona-hint">只影响当前会话,长度不超过 2000 字。</div></div><div className="settings-list">{models.providers.map(provider => { const test = tests[provider.provider]; return <article className={`provider-row ${provider.provider === selectedProvider ? 'selected' : ''}`} key={provider.provider}><div className="provider-main"><div><strong>{provider.label}</strong><span className={`provider-status ${provider.ready ? 'ready' : 'unready'}`}>{provider.ready ? '已配置' : '未配置'}</span></div><p>{provider.useCases}</p><small>{provider.protocol} · 建议：{provider.suggestedModels.join(' / ')}</small>{test?.state === 'success' && <small className="test-success">连接成功 · {test.result.latencyMs}ms</small>}{test?.state === 'error' && <small className="test-error">{test.message}</small>}</div><div className="provider-actions"><button className="text-button" disabled={!provider.ready || test?.state === 'testing'} onClick={() => testProvider(provider)}>{test?.state === 'testing' ? '测试中…' : '测试连接'}</button><button className="select-model" disabled={!provider.ready} onClick={() => { saveSelection(provider.provider, provider.model || provider.suggestedModels[0]); setSettingsOpen(false); }}>{provider.provider === selectedProvider ? '当前会话' : '用于本会话'}</button></div></article>; })}</div></section></div>}
-    <div className={`quick-actions${quickActionsOpen ? ' is-open' : ''}`}>
-      {quickActionsOpen && <><button type="button" className="task-launcher event-launcher" aria-label="打开日历" title="打开日历" onClick={() => setEventOpen(open => !open)}>日历</button><button type="button" className="task-launcher" aria-label="打开任务面板" title="打开任务面板" onClick={() => setTaskOpen(open => !open)}>任务 <span>{tasks.filter(item => item.status !== 'completed').length}</span></button></>}
-      <button type="button" className="quick-actions-toggle" aria-expanded={quickActionsOpen} aria-label={quickActionsOpen ? '收起快捷操作' : '展开快捷操作'} title={quickActionsOpen ? '收起快捷操作' : '展开快捷操作'} onClick={() => setQuickActionsOpen(open => !open)}>{quickActionsOpen ? '×' : '⋯'}</button>
-    </div>
-    {taskOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setTaskOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="task-title"><header className="settings-header"><div><p className="eyebrow">TASK WORKSPACE</p><h2 id="task-title">共同任务</h2><p>任务状态会通过增量同步保持最新。</p></div><button className="icon-button" aria-label="关闭任务面板" title="关闭任务面板" onClick={() => setTaskOpen(false)}>×</button></header><form className="task-form" onSubmit={createTask}><input value={newTaskTitle} onChange={event => setNewTaskTitle(event.target.value)} placeholder="添加一个想继续的事项" aria-label="任务标题" /><button className="select-model" type="submit" disabled={!newTaskTitle.trim()}>添加任务</button></form><div className="task-list">{tasks.length === 0 ? <p className="empty-detail">还没有任务。</p> : tasks.map(item => <article className={`task-row ${item.status === 'completed' ? 'completed' : ''}`} key={item.id}><button type="button" className="task-check" aria-label={`完成任务：${item.title}`} title="标记完成" onClick={() => item.status !== 'completed' && completeTask(item)}>{item.status === 'completed' ? '✓' : '○'}</button><div><strong>{item.title}</strong><small>{item.status === 'completed' ? '已完成' : item.dueAt ? new Date(item.dueAt).toLocaleString('zh-CN') : '待处理'}</small></div></article>)}</div></section></div>}
-    {eventOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setEventOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="event-title"><header className="settings-header"><div><p className="eyebrow">CALENDAR · 日历</p><h2 id="event-title">纪念日与计划</h2><p>临近的事项会自动注入对话上下文。</p></div><button className="icon-button" aria-label="关闭日历" title="关闭日历" onClick={() => setEventOpen(false)}>×</button></header><form className="event-form" onSubmit={createEvent}><input value={newEvent.title} onChange={event => setNewEvent(current => ({ ...current, title: event.target.value }))} placeholder="标题,例如:初次相遇" aria-label="事件标题" /><input type="date" value={newEvent.date} onChange={event => setNewEvent(current => ({ ...current, date: event.target.value }))} aria-label="日期" /><select value={newEvent.type} onChange={event => setNewEvent(current => ({ ...current, type: event.target.value }))} aria-label="类型"><option value="anniversary">纪念日</option><option value="birthday">生日</option><option value="plan">计划</option><option value="record">记录</option></select><button className="select-model" type="submit" disabled={!newEvent.title.trim() || !newEvent.date}>添加</button></form><div className="task-list">{events.length === 0 ? <p className="empty-detail">还没有日程。</p> : events.map(item => <div className="task-row" key={item.id}><div><strong>{item.title}</strong><small>{item.type === 'anniversary' ? '纪念日' : item.type === 'birthday' ? '生日' : item.type === 'plan' ? '计划' : '记录'} · {new Date(item.date).toLocaleDateString('zh-CN')}{item.note ? ' · ' + item.note : ''}</small></div><button type="button" className="t-del" title="删除" onClick={() => removeEvent(item.id)}>×</button></div>)}</div></section></div>}
+    {pendingApproval && <div className="settings-backdrop" role="presentation" onClick={() => respondApproval(false)}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="approval-title"><header className="settings-header"><div><p className="eyebrow">WORK MODE · 待确认修改</p><h2 id="approval-title">确认执行 {pendingApproval.name} 操作？</h2><p>该操作会修改文件，请确认内容无误。</p></div><button className="icon-button" onClick={() => respondApproval(false)}><FeatherIcon name="x" size={16} /></button></header><div className="approval-body"><div className="approval-path">📄 {String(pendingApproval.args?.path || '')}</div>{pendingApproval.name === 'edit' ? <div className="approval-diff"><div className="approval-old">− {String(pendingApproval.args?.oldText || '').slice(0, 500)}</div><div className="approval-new">+ {String(pendingApproval.args?.newText || '').slice(0, 500)}</div></div> : pendingApproval.name === 'bash' ? <pre className="approval-content">$ {String(pendingApproval.args?.command || '')}</pre> : <pre className="approval-content">{String(pendingApproval.args?.content || '').slice(0, 2000)}</pre>}<div className="approval-actions"><button type="button" className="select-model" onClick={() => respondApproval(true)}>确认执行</button><button type="button" className="text-button muted-button" onClick={() => respondApproval(false)}>拒绝</button></div></div></section></div>}
+    {settingsOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}><section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-header"><div><p className="eyebrow">MODEL DIRECTORY</p><h2 id="settings-title">模型设置</h2><p>查看适用场景并测试服务端连接。密钥不会进入浏览器。</p></div><button className="icon-button" aria-label="关闭模型设置" title="关闭模型设置" onClick={() => setSettingsOpen(false)}><FeatherIcon name="x" size={16} /></button></header><div className="persona-panel"><div className="section-heading"><span>人格 Persona</span><button type="button" className="text-button" onClick={savePersona}>保存人格</button></div><textarea className="persona-input" value={personaDraft} onChange={event => setPersonaDraft(event.target.value)} placeholder="自定义本会话 Cochpia 的人格与语气,留空使用默认人格…" rows="4" /><div className="persona-hint">只影响当前会话,长度不超过 2000 字。</div></div><div className="settings-list">{models.providers.map(provider => { const test = tests[provider.provider]; return <article className={`provider-row ${provider.provider === selectedProvider ? 'selected' : ''}`} key={provider.provider}><div className="provider-main"><div><strong>{provider.label}</strong><span className={`provider-status ${provider.ready ? 'ready' : 'unready'}`}>{provider.ready ? '已配置' : '未配置'}</span></div><p>{provider.useCases}</p><small>{provider.protocol} · 建议：{provider.suggestedModels.join(' / ')}</small>{test?.state === 'success' && <small className="test-success">连接成功 · {test.result.latencyMs}ms</small>}{test?.state === 'error' && <small className="test-error">{test.message}</small>}</div><div className="provider-actions"><button className="text-button" disabled={!provider.ready || test?.state === 'testing'} onClick={() => testProvider(provider)}>{test?.state === 'testing' ? '测试中…' : '测试连接'}</button><button className="select-model" disabled={!provider.ready} onClick={() => { saveSelection(provider.provider, provider.model || provider.suggestedModels[0]); setSettingsOpen(false); }}>{provider.provider === selectedProvider ? '当前会话' : '用于本会话'}</button></div></article>; })}</div></section></div>}
+    {taskOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setTaskOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="task-title"><header className="settings-header"><div><p className="eyebrow">TASK WORKSPACE</p><h2 id="task-title">共同任务</h2><p>任务状态会通过增量同步保持最新。</p></div><button className="icon-button" aria-label="关闭任务面板" title="关闭任务面板" onClick={() => setTaskOpen(false)}><FeatherIcon name="x" size={16} /></button></header><form className="task-form" onSubmit={createTask}><input value={newTaskTitle} onChange={event => setNewTaskTitle(event.target.value)} placeholder="添加一个想继续的事项" aria-label="任务标题" /><button className="select-model" type="submit" disabled={!newTaskTitle.trim()}>添加任务</button></form><div className="task-list">{tasks.length === 0 ? <p className="empty-detail">还没有任务。</p> : tasks.map(item => <article className={`task-row ${item.status === 'completed' ? 'completed' : ''}`} key={item.id}><button type="button" className="task-check" aria-label={`完成任务：${item.title}`} title="标记完成" onClick={() => item.status !== 'completed' && completeTask(item)}>{item.status === 'completed' ? '✓' : '○'}</button><div><strong>{item.title}</strong><small>{item.status === 'completed' ? '已完成' : item.dueAt ? new Date(item.dueAt).toLocaleString('zh-CN') : '待处理'}</small></div></article>)}</div></section></div>}
+    {eventOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setEventOpen(false); }}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="event-title"><header className="settings-header"><div><p className="eyebrow">CALENDAR · 日历</p><h2 id="event-title">纪念日与计划</h2><p>临近的事项会自动注入对话上下文。</p></div><button className="icon-button" aria-label="关闭日历" title="关闭日历" onClick={() => setEventOpen(false)}><FeatherIcon name="x" size={16} /></button></header><form className="event-form" onSubmit={createEvent}><input value={newEvent.title} onChange={event => setNewEvent(current => ({ ...current, title: event.target.value }))} placeholder="标题,例如:初次相遇" aria-label="事件标题" /><input type="date" value={newEvent.date} onChange={event => setNewEvent(current => ({ ...current, date: event.target.value }))} aria-label="日期" /><select value={newEvent.type} onChange={event => setNewEvent(current => ({ ...current, type: event.target.value }))} aria-label="类型"><option value="anniversary">纪念日</option><option value="birthday">生日</option><option value="plan">计划</option><option value="record">记录</option></select><button className="select-model" type="submit" disabled={!newEvent.title.trim() || !newEvent.date}>添加</button></form><div className="task-list">{events.length === 0 ? <p className="empty-detail">还没有日程。</p> : events.map(item => <div className="task-row" key={item.id}><div><strong>{item.title}</strong><small>{item.type === 'anniversary' ? '纪念日' : item.type === 'birthday' ? '生日' : item.type === 'plan' ? '计划' : '记录'} · {new Date(item.date).toLocaleDateString('zh-CN')}{item.note ? ' · ' + item.note : ''}</small></div><button type="button" className="t-del" title="删除" onClick={() => removeEvent(item.id)}><FeatherIcon name="x" size={16} /></button></div>)}</div></section></div>}
     <MusicWindow /><SettingsWindow />
     {error && <div className="toast" role="alert">{error}<button onClick={() => setError('')}>关闭</button></div>}
   </div>{minimized && <button className="aube-minimize-btn" onClick={() => setMinimized(false)} title="展开 Cochpia">C</button>}</>;
@@ -917,7 +943,7 @@ class AppErrorBoundary extends React.Component {
   }
 }
 
-createRoot(document.getElementById('root')).render(<AppErrorBoundary><WorkspacePreferencesProvider><I18nProvider><TimeProvider><MusicProvider><AudioProvider><MaterialProvider><WindowManagerProvider><ProfileProvider><App /></ProfileProvider></WindowManagerProvider></MaterialProvider></AudioProvider></MusicProvider></TimeProvider></I18nProvider></WorkspacePreferencesProvider></AppErrorBoundary>);
+createRoot(document.getElementById('root')).render(<AppErrorBoundary><WorkspacePreferencesProvider><I18nProvider><TimeProvider><MusicProvider><AudioProvider><VoiceProvider><MaterialProvider><WindowManagerProvider><ProfileProvider><App /></ProfileProvider></WindowManagerProvider></MaterialProvider></VoiceProvider></AudioProvider></MusicProvider></TimeProvider></I18nProvider></WorkspacePreferencesProvider></AppErrorBoundary>);
 
 // PWA：生产环境注册 Service Worker；开发地址主动注销历史 SW，避免旧缓存接管页面。
 if ('serviceWorker' in navigator) {

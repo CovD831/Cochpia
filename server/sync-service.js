@@ -31,7 +31,6 @@ export function collectSyncChanges(state, { cursor, limit = 100 } = {}) {
     for (const message of messages || []) add('message', `${sessionId}:${message.id}`, { ...message, sessionId }, message.updatedAt || message.createdAt);
   }
   for (const memory of state.memories || []) add('memory', memory.id, memory, memory.updatedAt || memory.createdAt);
-  for (const task of state.tasks || []) add('task', task.id, task, task.updatedAt || task.createdAt);
   for (const evidence of state.evidence || []) add('evidence', evidence.id, evidence, evidence.updatedAt || evidence.createdAt);
   for (const audit of state.personalityAudit || []) add('personality_audit', audit.id, audit, audit.createdAt);
   if (state.personality?.updatedAt) add('personality', 'current', state.personality, state.personality.updatedAt);

@@ -2,6 +2,7 @@ import { useProfile } from './ProfileProvider';
 import AvatarPicker from './AvatarPicker';
 import CharacterComposer from '../characters/CharacterComposer';
 import { activeCharacterProvider } from '../characters/characterProvider';
+import FeatherIcon from '../icons/FeatherIcon';
 
 const GENDERS = [
   { id: 'none', label: '无性别', note: '默认，以「它」称呼' },
@@ -22,7 +23,7 @@ export default function CharacterProfile({ onClose }) {
           <h2>{profile.name || '未命名'}</h2>
           <p>名字、性别、年龄与头像，都由你决定；不改，它便是永恒。</p>
         </div>
-        {onClose && <button type="button" className="icon-button" aria-label="关闭角色档案" title="关闭角色档案" onClick={onClose}>×</button>}
+        {onClose && <button type="button" className="icon-button" aria-label="关闭角色档案" title="关闭角色档案" onClick={onClose}><FeatherIcon name="x" size={16} /></button>}
       </div>
 
       <div className="profile-section">

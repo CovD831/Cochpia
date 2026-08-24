@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useMaterial } from '../material/MaterialProvider';
+import FeatherIcon from '../icons/FeatherIcon';
 
 const STORAGE_KEY = 'cochpia.windows.v2';
 const MIN_SIZE = { width: 280, height: 180 };
@@ -251,7 +252,7 @@ export function FloatingWindow({ id, title, children }) {
   };
 
   return <section className={`floating-window ${windowRecord.active ? 'is-active' : ''} ${dragging ? 'is-dragging' : ''} ${resizing ? 'is-resizing' : ''} ${windowRecord.minimized ? 'is-minimized' : ''} ${windowRecord.maximized ? 'is-maximized' : ''} ${windowRecord.closed ? 'is-closing' : ''}`} style={style} aria-label={title} onPointerDown={() => focusWindow(id)}>
-    <header className="floating-window-header" onPointerDown={startDrag}><strong>{title}</strong><div className="floating-window-actions"><button type="button" aria-label={`最小化${title}`} title="最小化" onClick={() => minimizeWindow(id)}>−</button><button type="button" aria-label={windowRecord.maximized ? `恢复${title}` : `最大化${title}`} title={windowRecord.maximized ? '恢复' : '最大化'} onClick={() => windowRecord.maximized ? restoreMaximizedWindow(id) : maximizeWindow(id)}>{windowRecord.maximized ? '↙' : '□'}</button><button type="button" aria-label={`关闭${title}`} title="关闭" onClick={() => closeWindow(id)}>×</button></div></header>
+    <header className="floating-window-header" onPointerDown={startDrag}><strong>{title}</strong><div className="floating-window-actions" onPointerDown={event => event.stopPropagation()}><button type="button" aria-label={`最小化${title}`} title="最小化" onClick={() => minimizeWindow(id)}><FeatherIcon name="minus" size={15} /></button><button type="button" aria-label={windowRecord.maximized ? `恢复${title}` : `最大化${title}`} title={windowRecord.maximized ? '恢复' : '最大化'} onClick={() => windowRecord.maximized ? restoreMaximizedWindow(id) : maximizeWindow(id)}><FeatherIcon name={windowRecord.maximized ? 'minimize2' : 'maximize2'} size={15} /></button><button type="button" aria-label={`关闭${title}`} title="关闭" onClick={() => closeWindow(id)}><FeatherIcon name="x" size={15} /></button></div></header>
     <div className="floating-window-content">{children}</div>
     <button type="button" className="floating-window-resize" aria-label={`调整${title}大小`} title="调整窗口大小" onPointerDown={startResize} />
   </section>;
