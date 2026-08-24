@@ -39,7 +39,9 @@ const isPrivateDevelopmentOrigin = origin => {
   if (process.env.NODE_ENV === 'production') return false;
   try {
     const url = new URL(origin);
-    if (url.protocol !== 'http:' || url.port !== '5173') return false;
+    // Vite may use another port when 5173 is occupied; keep the host as the
+    // development boundary while production remains config-only below.
+    if (url.protocol !== 'http:') return false;
     const hostname = url.hostname.toLowerCase();
     if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
     const octets = hostname.split('.').map(Number);
