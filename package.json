@@ -33,6 +33,8 @@
     "test:companion-core-music-outbox": "node scripts/companion-core-music-outbox-acceptance.js",
     "test:companion-core-session-delete": "node scripts/companion-core-session-delete-acceptance.js",
     "test:companion-core-account-delete-recovery": "node scripts/companion-core-account-delete-recovery-acceptance.js",
+    "test:companion-core-tls": "node scripts/companion-core-tls-acceptance.js",
+    "check:companion-alpha-gate": "node scripts/companion-core-alpha-gate-audit.js",
     "check:companion-backup-restore": "node scripts/companion-core-backup-restore.js",
     "check:companion-pitr": "node scripts/companion-core-pitr-acceptance.js",
     "check:companion-outage-backlog": "node scripts/memory-module-outage-backlog-acceptance.js",
