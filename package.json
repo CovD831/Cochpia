@@ -3,11 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Cochpia macOS desktop companion workspace",
+  "author": "Cochpia",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently \"node server/index.js\" \"vite --host 0.0.0.0\"",
     "server": "node server/index.js",
-    "test": "node --test server/*.test.js",
+    "test": "node --test server/*.test.js client/src/life/*.test.js",
     "build": "vite build",
+    "desktop:dev": "npm run build && electron .",
+    "desktop:pack": "npm run build && electron-builder --mac --dir --arm64",
+    "desktop:build": "npm run build && electron-builder --mac --arm64",
     "start": "node server/index.js",
     "start:web": "node services/web-static.js",
     "start:memory-module": "node services/memory-module/index.js",
@@ -53,5 +59,40 @@
     "react-dom": "latest",
     "redis": "^5.12.1",
     "vite": "latest"
+  },
+  "devDependencies": {
+    "electron": "^43.4.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.cochpia.desktop",
+    "productName": "Cochpia",
+    "asar": true,
+    "asarUnpack": [
+      "dist/**/*",
+      "server/**/*",
+      "electron/**/*",
+      "node_modules/**/*"
+    ],
+    "files": [
+      "dist/**/*",
+      "server/**/*",
+      "electron/**/*",
+      "!server/data{,/**/*}",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.lifestyle",
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["arm64"]
+        }
+      ]
+    },
+    "directories": {
+      "output": "artifacts/macos"
+    }
   }
 }
