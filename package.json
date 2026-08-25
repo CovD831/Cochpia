@@ -13,6 +13,7 @@
     "start:memory-module": "node services/memory-module/index.js",
     "test:memory-postgres": "node scripts/memory-module-postgres-smoke.js",
     "test:memory-postgres-acceptance": "node scripts/memory-module-postgres-acceptance.js",
+    "test:companion-core-context-assembly": "node scripts/companion-core-context-assembly-acceptance.js",
     "benchmark:memory-postgres": "node scripts/memory-module-postgres-benchmark.js",
     "test:memory-sdk": "node scripts/memory-module-sdk-smoke.js",
     "check:memory-recovery": "node scripts/memory-module-recovery-check.js",
