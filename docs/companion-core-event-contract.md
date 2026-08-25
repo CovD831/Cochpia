@@ -76,4 +76,3 @@ run 生命周期由 `server/chat-run-state.js` 显式约束：`created → strea
 ## Contract evidence
 
 `server/interaction-events.test.js`、`server/interaction-collector.test.js`、`server/interaction-outbox.test.js`、`server/interaction-finalizer.test.js`、`server/companion-reconciliation.test.js`、`scripts/companion-core-group-chat-acceptance.js`、`scripts/companion-core-music-outbox-acceptance.js`、`scripts/companion-core-session-delete-acceptance.js` 和 worker schema-version tests 覆盖注册表、字段分类、主体隔离、流状态、失败事件、重复提交、顺序冲突、outbox 至少一次投递和 repair 行为；group chat acceptance 还验证 Collector 拒绝 S3-like 内容时不会留下本地用户消息，music acceptance 验证持久化失败返回可重试错误并可通过同一幂等键完成恢复，session delete acceptance 验证持久化失败时两侧 session 都保留。
-
