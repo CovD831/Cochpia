@@ -8,16 +8,16 @@
 - `npm run test:companion-core-memory-boundary`：隔离临时 JSON/上传目录 acceptance 通过，覆盖 API/MCP hold 重放、grow source-event 重放、未授权 MCP 拒绝、Collector provenance、上传导出和账户删除清理。
 - skipped 项均依赖外部认证、PostgreSQL 或隔离集成环境，不代表通过。
 - `npm run build`：通过。
-- 本轮真实验收汇总见 [`artifacts/companion-core-acceptance-rerun-2026-08-24.json`](../artifacts/companion-core-acceptance-rerun-2026-08-24.json)：本机 PostgreSQL 17.11 下 Memory smoke、双进程 worker、lexical/pgvector acceptance、required Auth、TLS 和 backup/restore 均通过。
+- 本轮真实验收汇总由 `npm run test:companion-core-auth`、`npm run test:memory-postgres`、`npm run test:memory-postgres-acceptance`、`npm run test:memory-multiprocess`、`npm run check:companion-backup-restore` 等命令生成；本机 PostgreSQL 17.11 下 Memory smoke、双进程 worker、lexical/pgvector acceptance、required Auth、TLS 和 backup/restore 均通过。原始 JSON 只保存在本地 `artifacts/`，不作为仓库源码证据提交。
 - 隔离 PITR acceptance：`npm run check:companion-pitr` 通过删除前时间点恢复、tombstone ledger 重放，以及 raw event/assertion/index/outbox/negative-read 验证；本次小型演练恢复窗口约 1.027 秒，不构成生产 RPO/RTO SLO 承诺。
 - Companion Core 本地真实验收：`npm run test:companion-core-auth` 通过 required Auth + PostgreSQL 双用户隔离、LifeState 隔离、同用户 CAS 冲突、导出、会话/账户删除传播。
 - TLS 验收：`npm run test:companion-core-tls` 通过临时证书链校验，`pg_stat_ssl.ssl=true`，并复用 required Auth 主应用验收。
 - 备份恢复：`npm run check:companion-backup-restore` 通过 custom-format `pg_dump`/`pg_restore` 探针恢复；不等同于 PITR/RPO/RTO。
 - PostgreSQL Memory Module smoke/acceptance：本地真实库通过 subject/tenant isolation、native lexical、outbox lease fencing、CAS 和 schema advisory-lock 重复/并发初始化。
-- 独立 Memory Module SDK smoke：本轮在临时本地 PostgreSQL 独立服务上通过 create → retrieve → ContextBundle → export snapshot → forget negative-read external caller chain；结果已计入 rerun artifact。
-- 真实本地 lexical benchmark：1M documents、20 concurrent、20 requests，p50 39.49ms、p95/p99 368.29ms、20/20 成功、orphan=0；结果见 [`memory-postgres-benchmark-2026-08-24.json`](../artifacts/memory-postgres-benchmark-2026-08-24.json)。另有真实 pgvector/HNSW hybrid benchmark：100k documents、20 concurrent、HNSW 重建后 p50 138.05ms、p95/p99 142.18ms、20/20 成功、orphan=0，结果见 [`memory-postgres-vector-benchmark-2026-08-24.json`](../artifacts/memory-postgres-vector-benchmark-2026-08-24.json)。两者均使用显式 fast seed；1M vector seed 因本机临时卷空间不足失败，不能把 100k 结果扩展为 1M 生产容量结论。
+- 独立 Memory Module SDK smoke：本轮在临时本地 PostgreSQL 独立服务上通过 create → retrieve → ContextBundle → export snapshot → forget negative-read external caller chain；原始结果只保存在本地 `artifacts/`。
+- 真实本地 lexical benchmark：1M documents、20 concurrent、20 requests，p50 39.49ms、p95/p99 368.29ms、20/20 成功、orphan=0。另有真实 pgvector/HNSW hybrid benchmark：100k documents、20 concurrent、HNSW 重建后 p50 138.05ms、p95/p99 142.18ms、20/20 成功、orphan=0。两者均使用显式 fast seed；1M vector seed 因本机临时卷空间不足失败，不能把 100k 结果扩展为 1M 生产容量结论。
 - `git diff --check`：通过。
-- 新增 `npm run test:memory-multiprocess`：本轮在真实 PostgreSQL 环境中启动两个独立 worker 进程，验证同一 outbox event 只消费一次、完成后 lease 清理、过期 lease takeover 和旧 worker fencing；结果已计入 [`companion-core-acceptance-rerun-2026-08-24.json`](../artifacts/companion-core-acceptance-rerun-2026-08-24.json)。
+- 新增 `npm run test:memory-multiprocess`：本轮在真实 PostgreSQL 环境中启动两个独立 worker 进程，验证同一 outbox event 只消费一次、完成后 lease 清理、过期 lease takeover 和旧 worker fencing；原始结果只保存在本地 `artifacts/`。
 - 新增 `npm run test:companion-core-chat-concurrency`：在隔离临时端口和数据目录启动主应用，两个并发 chat stream 对同一 session 得到 `200/409`，最终只留下一个 user message 和一个 assistant message；现有 8787 服务未触碰。
 - 新增 `npm run test:companion-core-memory-lifecycle`：隔离 HTTP acceptance 覆盖 `/api` compatibility 层的 candidate/confirmation、correct、pin/unpin、revoke、forget、delete、幂等重放/冲突和 legacy export。
 - 新增 `npm run test:companion-core-chat-edit`：隔离 HTTP acceptance 覆盖用户/助手消息 source revision 编辑、最新 revision reconciliation 和多 revision 删除传播。
@@ -29,7 +29,7 @@
 - 静态密钥扫描：未发现 live credential；命中的 `AKIA...` 仅是 S3 入口拒绝测试 fixture，API key 命中仅为环境变量名称。
 - V0.1 baseline：50 条，覆盖 preference、relationship、current_state、no_answer、conflict、scope。
 - V0.2 scaffold：600 条 synthetic，类别配额为 120/90/120/90/60/60/30/30，并带 development/holdout/acceptance split。
-- Synthetic baseline：`npm run evaluate:memory-synthetic` 已使用真实 in-memory domain 跑完 600 条并生成 [`memory-module-eval-v0.2-synthetic-results.json`](./memory-module-eval-v0.2-synthetic-results.json)；Recall@5/Recall@10/MRR/nDCG/no-answer/conflict/authorization/Scope/evidence support 均为 1.0，category slice 也已输出；当前 scaffold 没有 S2/S3 或 proactive-mention 字段，因此这些指标明确为 `available:false`。该结果是 seeded synthetic harness sanity check，不是真实/脱敏对话评测，也不计入 Alpha acceptance。
+- Synthetic baseline：`npm run evaluate:memory-synthetic` 已使用真实 in-memory domain 跑完 600 条并在本地 `artifacts/memory-module-eval-v0.2-synthetic-results.json` 生成结果；Recall@5/Recall@10/MRR/nDCG/no-answer/conflict/authorization/Scope/evidence support 均为 1.0，category slice 也已输出；当前 scaffold 没有 S2/S3 或 proactive-mention 字段，因此这些指标明确为 `available:false`。该结果是 seeded synthetic harness sanity check，不是真实/脱敏对话评测，也不计入 Alpha acceptance。
 - 真实评测入口已增加 fail-closed validator：`npm run evaluate:memory` 必须显式提供 real/deidentified cases 与 results envelope；两者都要求相同的版本、`datasetKind`、`synthetic:false` 和非空 `provenance`，cases 必须完整 600 条，results 必须一一覆盖且不允许额外 case。默认 split 为 `all`，子 split、synthetic scaffold、缺失元数据或不完整结果都不会生成指标；这项门禁只保证评测输入不会被误标为真实证据，不等同于真实评测已经完成。
 - 主应用生产启动现在对 `AUTH_MODE=required`、`STORAGE_PROVIDER=postgres` 和证书校验型 `DATABASE_SSL` 做 fail-closed preflight；独立 Memory Module 复用同一 PostgreSQL TLS 规则。该代码门禁不替代正式托管证书链、HTTPS、日志、缓存和容量验收。
 - Companion Model Gateway 已接管普通聊天、工作模式工具调用、群聊和 Pi RPC 的模型边界：输入及嵌套 Context 禁止 S3 secret，非流式模型/工具输出和带滚动安全窗口的流式输出同样 fail-closed；该代码门禁不替代供应商 retention/region/training/deletion 审计。
