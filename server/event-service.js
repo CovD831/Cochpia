@@ -15,9 +15,14 @@ function normalizeDate(value) {
   return date.toISOString();
 }
 
-export function createEventService(state, persist) {
+export function createEventService(state, persist, { onMutation = null, onMutationRollback = null } = {}) {
   state.events ||= [];
   const find = id => state.events.find(event => event.id === id) || null;
+  const notify = mutation => typeof onMutation === 'function' ? onMutation(mutation) : null;
+  const rollbackMutation = async (mutation, notification) => {
+    if (typeof onMutationRollback !== 'function') return;
+    try { await onMutationRollback({ mutation, notification }); } catch { /* preserve the original mutation error */ }
+  };
 
   return {
     list({ type, upcomingDays } = {}) {
@@ -57,11 +62,25 @@ export function createEventService(state, persist) {
         updatedAt: now
       };
       state.events.push(event);
-      return persist().then(() => event);
+      const mutation = { mutationId: randomUUID(), action: 'created', event: structuredClone(event), previous: null };
+      return (async () => {
+        let notification = null;
+        try {
+          notification = await notify(mutation);
+          await persist();
+          return event;
+        } catch (error) {
+          const index = state.events.findIndex(item => item.id === event.id);
+          if (index !== -1) state.events.splice(index, 1);
+          await rollbackMutation(mutation, notification);
+          throw error;
+        }
+      })();
     },
     update(id, input = {}) {
       const event = find(id);
       if (!event) return null;
+      const previous = structuredClone(event);
       if (input.title !== undefined) event.title = normalizeTitle(input.title);
       if (input.date !== undefined) event.date = normalizeDate(input.date);
       if (input.type !== undefined) {
@@ -71,13 +90,38 @@ export function createEventService(state, persist) {
       if (input.note !== undefined) event.note = String(input.note || '').trim().slice(0, 500);
       if (input.visibility !== undefined) event.visibility = String(input.visibility).slice(0, 40);
       event.updatedAt = new Date().toISOString();
-      return persist().then(() => event);
+      const mutation = { mutationId: randomUUID(), action: 'updated', event: structuredClone(event), previous };
+      return (async () => {
+        let notification = null;
+        try {
+          notification = await notify(mutation);
+          await persist();
+          return event;
+        } catch (error) {
+          Object.assign(event, previous);
+          await rollbackMutation(mutation, notification);
+          throw error;
+        }
+      })();
     },
     remove(id) {
       const index = state.events.findIndex(event => event.id === id);
       if (index === -1) return false;
+      const removed = structuredClone(state.events[index]);
       state.events.splice(index, 1);
-      return persist().then(() => true);
+      const mutation = { mutationId: randomUUID(), action: 'deleted', event: removed, previous: removed };
+      return (async () => {
+        let notification = null;
+        try {
+          notification = await notify(mutation);
+          await persist();
+          return true;
+        } catch (error) {
+          state.events.splice(index, 0, removed);
+          await rollbackMutation(mutation, notification);
+          throw error;
+        }
+      })();
     }
   };
 }
