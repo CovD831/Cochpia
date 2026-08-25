@@ -75,4 +75,3 @@ test('memory deletion coordinator creates a subject-bound tombstone operation', 
   assert.equal(operation.redactionEpoch, 7);
   assert.equal(current.tombstones.at(-1).targetId, 'session-1');
 });
-

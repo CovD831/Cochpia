@@ -3,16 +3,42 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Cochpia macOS desktop companion workspace",
+  "author": "Cochpia",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently \"node server/index.js\" \"vite --host 0.0.0.0\"",
     "server": "node server/index.js",
-    "test": "node --test server/*.test.js",
+    "test": "node --test server/*.test.js client/src/life/*.test.js",
     "build": "vite build",
+    "desktop:dev": "npm run build && electron .",
+    "desktop:pack": "npm run build && electron-builder --mac --dir --arm64",
+    "desktop:build": "npm run build && electron-builder --mac --arm64",
     "start": "node server/index.js",
     "start:web": "node services/web-static.js",
     "start:memory-module": "node services/memory-module/index.js",
     "test:memory-postgres": "node scripts/memory-module-postgres-smoke.js",
     "test:memory-postgres-acceptance": "node scripts/memory-module-postgres-acceptance.js",
+    "test:memory-multiprocess": "node scripts/memory-module-multiprocess-acceptance.js",
+    "test:companion-core-auth": "node scripts/companion-core-auth-acceptance.js",
+    "test:companion-core-chat-concurrency": "node scripts/companion-core-chat-concurrency-acceptance.js",
+    "test:companion-core-chat-edit": "node scripts/companion-core-chat-edit-acceptance.js",
+    "test:companion-core-chat-memory-recall": "node scripts/companion-core-chat-memory-recall-acceptance.js",
+    "test:companion-core-context-assembly": "node scripts/companion-core-context-assembly-acceptance.js",
+    "test:companion-core-group-chat": "node scripts/companion-core-group-chat-acceptance.js",
+    "test:companion-core-music-outbox": "node scripts/companion-core-music-outbox-acceptance.js",
+    "test:companion-core-session-delete": "node scripts/companion-core-session-delete-acceptance.js",
+    "test:companion-core-account-delete-recovery": "node scripts/companion-core-account-delete-recovery-acceptance.js",
+    "test:companion-core-memory-boundary": "node scripts/companion-core-memory-boundary-acceptance.js",
+    "test:companion-core-memory-lifecycle": "node scripts/companion-core-memory-lifecycle-acceptance.js",
+    "test:companion-core-life-outbox": "node scripts/companion-core-life-outbox-acceptance.js",
+    "test:companion-core-chat-stream-restart": "node scripts/companion-core-chat-stream-restart-acceptance.js",
+    "test:companion-core-tls": "node scripts/companion-core-tls-acceptance.js",
+    "check:companion-backup-restore": "node scripts/companion-core-backup-restore.js",
+    "check:companion-pitr": "node scripts/companion-core-pitr-acceptance.js",
+    "check:companion-outage-backlog": "node scripts/memory-module-outage-backlog-acceptance.js",
+    "check:companion-alpha-gate": "node scripts/companion-core-alpha-gate-audit.js",
+    "check:memory-model-gateway": "node scripts/memory-module-model-gateway-acceptance.js",
     "benchmark:memory-postgres": "node scripts/memory-module-postgres-benchmark.js",
     "test:memory-sdk": "node scripts/memory-module-sdk-smoke.js",
     "check:memory-recovery": "node scripts/memory-module-recovery-check.js",
@@ -35,5 +61,40 @@
     "react-dom": "latest",
     "redis": "^5.12.1",
     "vite": "latest"
+  },
+  "devDependencies": {
+    "electron": "^43.4.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.cochpia.desktop",
+    "productName": "Cochpia",
+    "asar": true,
+    "asarUnpack": [
+      "dist/**/*",
+      "server/**/*",
+      "electron/**/*",
+      "node_modules/**/*"
+    ],
+    "files": [
+      "dist/**/*",
+      "server/**/*",
+      "electron/**/*",
+      "!server/data{,/**/*}",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.lifestyle",
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["arm64"]
+        }
+      ]
+    },
+    "directories": {
+      "output": "artifacts/macos"
+    }
   }
 }
