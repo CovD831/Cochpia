@@ -447,4 +447,3 @@ MVP 的“导出/删除”范围必须覆盖主应用消息、Memory Module 原�
 | 质量和容量 | 代码级 600-case scaffold、真实 PostgreSQL lexical 1M/20 benchmark、真实 pgvector/HNSW 100k/20 benchmark、lean pgvector/HNSW 1M/20 benchmark、outage/backlog recovery artifact | synthetic 结果、lean 1M 与带容量限制说明的本机 benchmark | 真实脱敏 600-case、完整 canonical 1M pgvector/HNSW、生产积压/降级 SLO |
 
 因此，本计划当前应标记为“核心实现已完成、Alpha/生产证据未完成”，而不是“生产就绪”。
-

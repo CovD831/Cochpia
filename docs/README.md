@@ -39,4 +39,3 @@
 3. Chat Runtime 与 Model Gateway：聊天流、SSE、重试、取消、模型安全边界说明。
 4. Personality / Relationship / LifeState：记忆与性格机制、关系状态和 LifeState 领域说明。
 5. Desktop / Frontend / Deployment：根 README、桌面入口和部署/发布说明。
-
