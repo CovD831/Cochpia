@@ -33,4 +33,3 @@ export function assessEvidenceEnvelope(report, requiredKeys, evidence = []) {
 export function isAlphaGateReady(gates) {
   return Boolean(gates) && Object.values(gates).length > 0 && Object.values(gates).every(gate => gate?.status === 'passed');
 }
-
