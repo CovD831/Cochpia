@@ -15,9 +15,14 @@ function normalizeTitle(value) {
   return title.slice(0, 160);
 }
 
-export function createTaskService(state, persist) {
+export function createTaskService(state, persist, { onMutation = null, onMutationRollback = null } = {}) {
   state.tasks ||= [];
   const find = id => state.tasks.find(task => task.id === id) || null;
+  const notify = mutation => typeof onMutation === 'function' ? onMutation(mutation) : null;
+  const rollbackMutation = async (mutation, notification) => {
+    if (typeof onMutationRollback !== 'function') return;
+    try { await onMutationRollback({ mutation, notification }); } catch { /* preserve the original mutation error */ }
+  };
   return {
     list({ status, sessionId, overdue = false, search = '', limit = 50 } = {}) {
       const normalizedSearch = String(search || '').trim().toLowerCase();
@@ -36,11 +41,25 @@ export function createTaskService(state, persist) {
       const task = { id: randomUUID(), title: normalizeTitle(input.title), description: String(input.description || '').trim().slice(0, 1000), status: input.status || 'open', sessionId: input.sessionId || null, dueAt: normalizeDueAt(input.dueAt), createdAt: now, updatedAt: now, completedAt: null };
       if (!statuses.has(task.status)) throw new Error('Invalid task status');
       state.tasks.unshift(task);
-      return persist().then(() => task);
+      const mutation = { mutationId: randomUUID(), action: 'created', task: structuredClone(task), previous: null };
+      return (async () => {
+        let notification = null;
+        try {
+          notification = await notify(mutation);
+          await persist();
+          return task;
+        } catch (error) {
+          const index = state.tasks.findIndex(item => item.id === task.id);
+          if (index !== -1) state.tasks.splice(index, 1);
+          await rollbackMutation(mutation, notification);
+          throw error;
+        }
+      })();
     },
     update(id, input = {}) {
       const task = find(id);
       if (!task) return null;
+      const previous = structuredClone(task);
       if (input.title !== undefined) task.title = normalizeTitle(input.title);
       if (input.description !== undefined) task.description = String(input.description || '').trim().slice(0, 1000);
       if (input.sessionId !== undefined) task.sessionId = input.sessionId || null;
@@ -51,13 +70,38 @@ export function createTaskService(state, persist) {
         task.completedAt = input.status === 'completed' ? new Date().toISOString() : null;
       }
       task.updatedAt = new Date().toISOString();
-      return persist().then(() => task);
+      const mutation = { mutationId: randomUUID(), action: 'updated', task: structuredClone(task), previous };
+      return (async () => {
+        let notification = null;
+        try {
+          notification = await notify(mutation);
+          await persist();
+          return task;
+        } catch (error) {
+          Object.assign(task, previous);
+          await rollbackMutation(mutation, notification);
+          throw error;
+        }
+      })();
     },
     remove(id) {
       const index = state.tasks.findIndex(task => task.id === id);
       if (index === -1) return false;
+      const removed = structuredClone(state.tasks[index]);
       state.tasks.splice(index, 1);
-      return persist().then(() => true);
+      const mutation = { mutationId: randomUUID(), action: 'deleted', task: removed, previous: removed };
+      return (async () => {
+        let notification = null;
+        try {
+          notification = await notify(mutation);
+          await persist();
+          return true;
+        } catch (error) {
+          state.tasks.splice(index, 0, removed);
+          await rollbackMutation(mutation, notification);
+          throw error;
+        }
+      })();
     }
   };
 }
