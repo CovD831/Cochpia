@@ -14,7 +14,8 @@ For a real deployment, configure HTTPS, a custom domain, server-only secrets, Po
 Before production release:
 
 1. Set `AUTH_MODE=required` and `STORAGE_PROVIDER=postgres`.
-2. Configure `CLIENT_ORIGIN` to the HTTPS web origin.
-3. Keep model and MCP credentials only in API-service variables.
-4. Configure scheduled PostgreSQL backups and perform a restore drill.
-5. Set an external log/metric retention policy; the local `/api/metrics` counters reset on restart.
+2. Configure `CLIENT_ORIGIN` to one or more comma-separated HTTPS web origins (for example, `https://app.example.com,https://admin.example.com`). Production rejects missing, wildcard, HTTP, credential-bearing, or path-qualified origins and does not implicitly allow an origin derived from the request `Host` header.
+3. Set certificate-verifying `DATABASE_SSL=true`/`require`/`verify-full`; production startup rejects missing or `no-verify` database TLS.
+4. Keep model and MCP credentials only in API-service variables, and declare `MODEL_RETENTION_POLICY` for every external chat provider.
+5. Configure scheduled PostgreSQL backups and perform a restore drill.
+6. Set an external log/metric retention policy; the local `/api/metrics` counters reset on restart.
