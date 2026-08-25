@@ -39,4 +39,3 @@ test('Alpha Gate readiness is fail-closed when any gate is missing', () => {
   assert.equal(isAlphaGateReady({ local: gateResult('passed', 'ok'), hosted: gateResult('missing', 'not supplied') }), false);
   assert.equal(isAlphaGateReady({}), false);
 });
-
