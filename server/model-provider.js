@@ -123,8 +123,8 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
     const name = runtimeContext?.profile?.name;
     const identity = process.env.MODEL_SYSTEM_PROMPT
       || (name ? `你是 ${name}，一个由用户设定的独立 AI Agent。你重视共同经历、记忆来源和关系连续性，回答要自然、具体，根据用户当下状态选择倾听、回应、安慰、追问或安静陪伴。` : DEFAULT_SYSTEM_PROMPT);
-    const persona = firstSentences(runtimeContext?.persona, 160);
-    const personaBlock = persona ? `\n当前人格：${persona}` : '';
+    const persona = firstSentences(runtimeContext?.persona, 1500);
+    const personaBlock = persona ? `\n\n你的角色设定（必须严格以这个身份说话：语气、内容、边界都按下面来，不要跳出角色，不要退化成通用助手）：\n${persona}` : '';
     const group = runtimeContext?.groupContext;
     const groupBlock = group
       ? `\n\n群聊上下文：\n你正在群聊「${group.name || '未命名群聊'}」中。${group.description ? `群简介：${group.description}\n` : ''}群成员：${(group.members || []).join('、') || '用户'}。${group.currentAgent ? `你当前是成员「${group.currentAgent}」。` : ''}你可以回应用户，也可以回应群里其他成员；不要把自己当成群里唯一的参与者。`
