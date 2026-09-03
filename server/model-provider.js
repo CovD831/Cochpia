@@ -179,9 +179,11 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
     return { ...config, async generate() { throw new Error(config.error); }, async *stream() { throw new Error(config.error); } };
   }
 
-  const generate = async ({ message, recalled = [], runtimeContext = null, signal: externalSignal } = {}) => {
+  const generate = async ({ message, recalled = [], runtimeContext = null, system: systemOverride = null, signal: externalSignal } = {}) => {
     if (!config.ready) throw new Error(config.error);
-    const { system, messages } = composePrompts({ message, recalled, runtimeContext });
+    const { system, messages } = systemOverride
+      ? { system: systemOverride, messages: [{ role: 'user', content: String(message) }] }
+      : composePrompts({ message, recalled, runtimeContext });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Number(process.env.MODEL_TIMEOUT_MS || 30000));
     const signal = externalSignal || controller.signal;
