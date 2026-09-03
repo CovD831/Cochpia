@@ -3,6 +3,11 @@ const DEFAULT_T50_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_HORIZON_MS = 24 * 60 * 60 * 1000;
 const DIRECTIONS = new Set(['increase', 'decrease', 'hold', 'uncertain']);
 const KINDS = new Set(['affective', 'motivational']);
+const KIND_ALIASES = {
+  emotion: 'affective', feeling: 'affective', mood: 'affective', affective: 'affective',
+  desire: 'motivational', thought: 'motivational', motivation: 'motivational', motivational: 'motivational'
+};
+const normalizeKind = value => KIND_ALIASES[String(value || '').trim().toLowerCase()] || null;
 const NUMERIC_FIELDS = new Set([
   'positive', 'negative', 'arousal', 'returnPull', 'strength', 'readiness',
   'inhibition', 'endorsement', 'level', 'limit', 'certainty'
@@ -34,11 +39,12 @@ export function advance(item, now = Date.now()) {
 
 const cleanItem = (agentId, input, existing, now) => {
   if (!input || typeof input !== 'object') return null;
-  const id = String(input.id || existing?.id || '');
-  if (!id || !id.startsWith(`${agentId}:`)) return null;
-  const kind = input.kind ?? existing?.kind;
+  const existingSuffix = existing?.id ? String(existing.id).slice(String(agentId).length + 1) : '';
+  const rawId = String(input.id || input.name || existingSuffix || '').trim();
+  const id = rawId.startsWith(`${agentId}:`) ? rawId : `${agentId}:${rawId || Date.now().toString(36) + Math.random().toString(36).slice(2, 6)}`;
+  const kind = normalizeKind(input.kind ?? existing?.kind);
   const direction = input.direction ?? existing?.direction;
-  if (!KINDS.has(kind) || !DIRECTIONS.has(direction)) return null;
+  if (!kind || !DIRECTIONS.has(direction)) return null;
   const item = { id, kind, direction };
   for (const field of ['positive', 'negative', 'arousal', 'returnPull', 'strength', 'readiness', 'inhibition', 'endorsement', 'level', 'limit', 'certainty']) {
     if (existing && existing[field] != null) item[field] = existing[field];
@@ -63,7 +69,7 @@ export function createInnerContinuity({ state, saveState }) {
   state.innerStates ||= {};
 
   const snapshot = (agentId, now = Date.now()) => {
-    const stored = state.innerStates[agentId];
+    const stored = (state.innerStates ||= {})[agentId];
     if (!stored) return { agentId, version: VERSION, anchorAt: null, items: [], updatedAt: null };
     return {
       agentId,
@@ -76,6 +82,7 @@ export function createInnerContinuity({ state, saveState }) {
 
   const applyPatch = async (agentId, patch = {}, now = Date.now()) => {
     if (!agentId || !patch || typeof patch !== 'object') return snapshot(agentId, now);
+    state.innerStates ||= {};
     const stored = state.innerStates[agentId] || { agentId, version: VERSION, anchorAt: null, items: [], updatedAt: null, tombstones: {} };
     const items = new Map((stored.items || []).map(item => [item.id, item]));
     const tombstones = { ...(stored.tombstones || {}) };
@@ -88,8 +95,9 @@ export function createInnerContinuity({ state, saveState }) {
       if (JSON.stringify(items.get(item.id)) !== JSON.stringify(item)) { items.set(item.id, item); changed = true; }
     }
     for (const rawId of Array.isArray(patch.release) ? patch.release : []) {
-      const id = String(rawId || '');
-      if (!id.startsWith(`${agentId}:`)) continue;
+      const base = String(rawId || '').trim();
+      if (!base) continue;
+      const id = base.startsWith(`${agentId}:`) ? base : `${agentId}:${base}`;
       if (items.delete(id)) changed = true;
       if (tombstones[id] !== iso(now)) changed = true;
       tombstones[id] = iso(now);

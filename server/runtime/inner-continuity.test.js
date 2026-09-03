@@ -34,6 +34,25 @@ test('patches are validated, clamped, idempotent, and release tombstones', async
   assert.equal(inner.snapshot('agent-1', 2000).items.length, 0);
 });
 
+test('lazy-initializes innerStates on the active user state (multi-user proxy)', async () => {
+  // 模拟 index.js 的 state Proxy：读/写重定向到「当前用户 state」
+  const base = {};
+  let current = base;
+  const state = new Proxy(base, {
+    get(_t, p) { return current[p]; },
+    set(_t, p, v) { current[p] = v; return true; },
+    ownKeys(_t) { return Reflect.ownKeys(current); },
+    getOwnPropertyDescriptor(_t, p) { return { configurable: true, enumerable: true, value: current[p], writable: true }; }
+  });
+  const inner = createInnerContinuity({ state, saveState: async () => {} });
+  // 请求时切换到另一个用户 state（不含 innerStates 字段）
+  current = {};
+  assert.deepEqual(inner.snapshot('agent-1').items, []);
+  await inner.applyPatch('agent-1', { upsert: [{ id: 'agent-1:s', kind: 'affective', direction: 'hold', level: 0.5, positive: 0.5 }] }, 1000);
+  assert.equal(inner.snapshot('agent-1', 1000).items.length, 1);
+  assert.equal(current.innerStates['agent-1'].items.length, 1);
+});
+
 test('activation combines positive and negative affective presence', async () => {
   const state = {};
   const inner = createInnerContinuity({ state, saveState: async () => {} });

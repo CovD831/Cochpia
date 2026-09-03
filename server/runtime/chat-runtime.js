@@ -32,7 +32,7 @@ export function createChatRuntime(deps) {
     requiresApproval: false,
     description: '留下或结束一条只属于自己的感受或念头；默认不写，只有明确决定时调用。',
     parameters: { type: 'object', properties: { patch: { type: 'object', properties: {
-      upsert: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, direction: { type: 'string' }, level: { type: 'number' }, limit: { type: 'number' }, positive: { type: 'number' }, negative: { type: 'number' }, arousal: { type: 'number' }, returnPull: { type: 'number' }, strength: { type: 'number' }, readiness: { type: 'number' }, inhibition: { type: 'number' }, endorsement: { type: 'number' }, certainty: { type: 'number' } } } },
+      upsert: { type: 'array', items: { type: 'object', properties: { id: { type: 'string', description: '给这条状态起个简短名字（如 joy、想念），同名会更新同一条' }, kind: { type: 'string', description: 'affective（情绪/感受）或 motivational（欲望/念头）' }, direction: { type: 'string', description: 'increase / decrease / hold / uncertain' }, level: { type: 'number' }, limit: { type: 'number' }, positive: { type: 'number' }, negative: { type: 'number' }, arousal: { type: 'number' }, returnPull: { type: 'number' }, strength: { type: 'number' }, readiness: { type: 'number' }, inhibition: { type: 'number' }, endorsement: { type: 'number' }, certainty: { type: 'number' } } } },
       release: { type: 'array', items: { type: 'string' } }
     } } }, required: ['patch'] }
   };
