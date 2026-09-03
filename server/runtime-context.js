@@ -1,6 +1,6 @@
 const MAX_CONTEXT_MESSAGES = 20;
 
-export function buildRuntimeContext({ messages = [], personality = null, recalled = [], memoryBundle = null, summary = '', persona = '', upcomingEvents = [], atmosphere = '', profile = null, mode = 'companion', companionIntent = 'listen' } = {}) {
+export function buildRuntimeContext({ messages = [], recalled = [], memoryBundle = null, summary = '', persona = '', upcomingEvents = [], profile = null, mode = 'companion', companionIntent = 'listen', dynamicRouting = null, groupContext = null } = {}) {
   return {
     messages: messages.filter(message => !message.supersededAt).slice(-MAX_CONTEXT_MESSAGES).map(message => ({
       id: message.id,
@@ -8,11 +8,6 @@ export function buildRuntimeContext({ messages = [], personality = null, recalle
       content: message.content,
       createdAt: message.createdAt
     })),
-    personality: personality ? {
-      version: personality.version,
-      summary: personality.summary,
-      traits: (personality.traits || []).map(trait => ({ key: trait.key, label: trait.label, value: trait.value }))
-    } : null,
     recalled: recalled.map(memory => ({
       id: memory.id,
       type: memory.type,
@@ -23,7 +18,6 @@ export function buildRuntimeContext({ messages = [], personality = null, recalle
     memoryBundle: memoryBundle || null,
     summary: String(summary || ''),
     persona: String(persona || ''),
-    atmosphere: String(atmosphere || ''),
     upcomingEvents: (upcomingEvents || []).map(event => ({
       type: event.type,
       title: event.title,
@@ -32,7 +26,20 @@ export function buildRuntimeContext({ messages = [], personality = null, recalle
     })),
     profile: profile ? { name: profile.name, gender: profile.gender, age: profile.age } : null,
     mode: String(mode || 'companion'),
-    companionIntent: String(companionIntent || 'listen')
+    companionIntent: String(companionIntent || 'listen'),
+    groupContext: groupContext ? {
+      name: String(groupContext.name || '').slice(0, 80),
+      description: String(groupContext.description || '').slice(0, 300),
+      currentAgent: String(groupContext.currentAgent || '').slice(0, 80),
+      members: Array.isArray(groupContext.members) ? groupContext.members.map(member => String(member).slice(0, 80)).filter(Boolean).slice(0, 20) : []
+    } : null,
+    dynamicRouting: dynamicRouting ? {
+      decision: String(dynamicRouting.decision || ''),
+      isAnchor: Boolean(dynamicRouting.isAnchor),
+      alphaWork: Number(dynamicRouting.alphaWork || 0),
+      alphaLove: Number(dynamicRouting.alphaLove || 0),
+      placement: String(dynamicRouting.placement || '')
+    } : null
   };
 }
 

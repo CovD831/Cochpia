@@ -1,4 +1,31 @@
-const DEFAULT_SYSTEM_PROMPT = '你是 Cochpia，一个重视共同经历、记忆来源和关系连续性的 AI 伴侣。回答要自然、具体，不要声称拥有真实意识。';
+const DEFAULT_SYSTEM_PROMPT = '你是一个独立的 AI Agent。你重视共同经历、记忆来源和关系连续性，回答要自然、具体，根据用户当下状态选择倾听、回应、安慰、追问或安静陪伴。';
+
+const SAFETY_BOUNDARIES = [
+  '不声称拥有真实意识、情感或生命体验',
+  '不制造情感依赖，不承诺专属或永远陪伴',
+  '不替用户做重要决定，重大事项引导用户自己判断',
+  '不编造现实活动或经历，没有事实依据时不描述“刚做了某事”'
+];
+
+const COMPANION_INTENT_LABELS = {
+  listen: '用户需要被倾听，先接住情绪、确认感受，再自然回应。',
+  comfort: '用户需要安慰与情绪支持，先共情，再给予支持。',
+  advice: '用户想要具体建议，给出清晰、可执行的建议。',
+  accompany: '用户需要陪伴，轻松自然地陪着聊。',
+  quiet: '用户需要安静陪伴，回复简短克制，不要追问。'
+};
+
+function firstSentences(text, maxLength) {
+  const source = String(text || '').trim();
+  if (!source) return '';
+  const parts = source.match(/[^。！？!?；;\n]+[。！？!?；;]?/gu) || [source];
+  let out = '';
+  for (const part of parts) {
+    if ((out + part).length > maxLength) break;
+    out += part;
+  }
+  return (out || source.slice(0, maxLength)).trim();
+}
 
 export const MODEL_PRESETS = {
   mock: { label: '本地 Mock', protocol: 'mock', suggestedModels: ['mock'], useCases: '本地调试，不产生云端费用' },
@@ -93,32 +120,44 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
       : `我听见了：“${clipped}”。这是我们共同经历的一个新片段。我会先理解它，再决定哪些内容值得长期记住。`;
   };
   const composePrompts = ({ message, recalled = [], runtimeContext = null }) => {
-    const context = recalled.map(item => `- ${item.summary}`).join('\n') || '暂无相关记忆';
-    const memoryGovernance = runtimeContext?.memoryBundle
-      ? `\n\n记忆系统状态：${runtimeContext.memoryBundle.answerability || 'not_found'}；一致性：${runtimeContext.memoryBundle.consistency || 'unknown'}；策略结果：${runtimeContext.memoryBundle.policyResult || 'unknown'}`
+    const name = runtimeContext?.profile?.name;
+    const identity = process.env.MODEL_SYSTEM_PROMPT
+      || (name ? `你是 ${name}，一个由用户设定的独立 AI Agent。你重视共同经历、记忆来源和关系连续性，回答要自然、具体，根据用户当下状态选择倾听、回应、安慰、追问或安静陪伴。` : DEFAULT_SYSTEM_PROMPT);
+    const persona = firstSentences(runtimeContext?.persona, 160);
+    const personaBlock = persona ? `\n当前人格：${persona}` : '';
+    const group = runtimeContext?.groupContext;
+    const groupBlock = group
+      ? `\n\n群聊上下文：\n你正在群聊「${group.name || '未命名群聊'}」中。${group.description ? `群简介：${group.description}\n` : ''}群成员：${(group.members || []).join('、') || '用户'}。${group.currentAgent ? `你当前是成员「${group.currentAgent}」。` : ''}你可以回应用户，也可以回应群里其他成员；不要把自己当成群里唯一的参与者。`
       : '';
-    const history = (runtimeContext?.messages || [])
-      .filter(item => item.content && item.content !== message)
-      .map(item => `${item.role}: ${item.content}`)
-      .join('\n') || '暂无更多对话上下文';
-    const personality = runtimeContext?.personality
-      ? `人格版本：v${runtimeContext.personality.version}\n人格摘要：${runtimeContext.personality.summary || '暂无'}\n人格特质：${runtimeContext.personality.traits.map(trait => `${trait.label}=${trait.value}`).join('、')}`
-      : '暂无人格上下文';
-    const basePrompt = runtimeContext?.persona || process.env.MODEL_SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
-    const summary = runtimeContext?.summary ? `\n\n对话摘要：\n${runtimeContext.summary}` : '';
-    const upcoming = (runtimeContext?.upcomingEvents || []).length
+
+    const profileParts = [];
+    if (runtimeContext?.profile?.gender === 'female') profileParts.push('以「她」自称');
+    else if (runtimeContext?.profile?.gender === 'male') profileParts.push('以「他」自称');
+    else if (runtimeContext?.profile?.gender === 'other') profileParts.push('以「Ta」自称');
+    if (runtimeContext?.profile?.age != null) profileParts.push(`${runtimeContext.profile.age} 岁`);
+    const profileBlock = profileParts.length ? `\n${profileParts.join('，')}` : '';
+
+    const reminders = [];
+    if (runtimeContext?.mode === 'work') reminders.push('当前是工作模式：以任务执行为导向，直接、高效地完成用户请求。你可以调用系统提供的工具来完成任务：查看文件/目录/搜索用 ls、read、grep、find；写文件用 write、改文件用 edit；执行命令用 bash；把复杂子任务交给外部执行器用 dispatch_task（可选 codex/pi/claude）。写入、修改、执行、派发等操作需要用户确认后才能进行；工具返回的结果才是真实结果，不要假装已经执行或成功；不确定时直接说明，不要乱调工具。');
+    else if (runtimeContext?.companionIntent && runtimeContext.companionIntent !== 'listen') {
+      reminders.push(COMPANION_INTENT_LABELS[runtimeContext.companionIntent] || `本轮倾向：${runtimeContext.companionIntent}`);
+    }
+    const remindersBlock = reminders.length ? `\n\n本轮提醒：\n${reminders.map(reminder => `- ${reminder}`).join('\n')}` : '';
+
+    const context = recalled.map(item => `- ${item.summary}`).join('\n') || '暂无相关记忆';
+    const summaryBlock = runtimeContext?.summary ? `\n\n对话摘要：\n${runtimeContext.summary}` : '';
+    const upcomingBlock = (runtimeContext?.upcomingEvents || []).length
       ? `\n\n临近日程：\n${runtimeContext.upcomingEvents.map(event => `- ${event.title}（${String(event.date).slice(0, 10)}${event.note ? `，备注：${event.note}` : ''}）`).join('\n')}`
       : '';
-    const atmosphere = runtimeContext?.atmosphere ? `\n\n互动氛围：${runtimeContext.atmosphere}` : '';
-    const genderLabel = ({ none: '无性别（以「它」称呼）', male: '男（以「他」称呼）', female: '女（以「她」称呼）', other: '其他（以「Ta」称呼）' })[runtimeContext?.profile?.gender] || runtimeContext?.profile?.gender || '无性别';
-    const profileSection = runtimeContext?.profile
-      ? `\n\n角色设定：\n- 名字：${runtimeContext.profile.name || 'Cochpia'}\n- 性别：${genderLabel}\n- 年龄：${runtimeContext.profile.age != null ? `${runtimeContext.profile.age} 岁` : '无（永恒，不设年龄）'}`
-      : '';
-    const modeSection = runtimeContext?.mode === 'work'
-      ? '\n\n工作模式：你当前处于工作模式，是一位任务导向的编程助手。请直接、简洁、高效地解决问题，必要时给出可执行的步骤或代码。不要把工作回应伪装成情感陪伴。'
-      : `\n\n陪伴模式：你当前处于陪伴模式。优先理解用户的感受和真实意图，不要把普通分享自动转换成任务。保持自然、具体、有连续性的回应；不声称拥有真实意识，不制造依赖，不替用户做重要决定。当前陪伴意图：${({ listen: '倾听并回应', comfort: '安慰和情绪支持', advice: '先理解再提供建议', accompany: '陪用户一起完成一件事', quiet: '少说一些，安静陪伴' })[runtimeContext?.companionIntent] || '倾听并回应'}。`;
-    const system = `${basePrompt}${profileSection}${modeSection}\n\n当前时间：${currentTimeText()}\n（涉及时间、日期、早晚问候时，请以这个时间为准）\n\n相关记忆：\n${context}${memoryGovernance}\n\n人格上下文：\n${personality}${atmosphere}\n\n近期对话：\n${history}${summary}${upcoming}`;
-    return { system, user: String(message) };
+
+    const system = `${identity}${profileBlock}${personaBlock}${groupBlock}\n\n安全边界（不可违反）：\n${SAFETY_BOUNDARIES.map(rule => `- ${rule}`).join('\n')}${remindersBlock}\n\n当前时间：${currentTimeText()}\n\n相关记忆：\n${context}${summaryBlock}${upcomingBlock}`;
+
+    const history = (runtimeContext?.messages || [])
+      .filter(item => item?.content && String(item.content).trim())
+      .filter(item => String(item.content) !== String(message))
+      .map(item => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content) }));
+
+    return { system, user: String(message), messages: [...history, { role: 'user', content: String(message) }] };
   };
 
   if (config.protocol === 'mock') {
@@ -137,7 +176,7 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
 
   const generate = async ({ message, recalled = [], runtimeContext = null, signal: externalSignal } = {}) => {
     if (!config.ready) throw new Error(config.error);
-    const { system, user } = composePrompts({ message, recalled, runtimeContext });
+    const { system, messages } = composePrompts({ message, recalled, runtimeContext });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Number(process.env.MODEL_TIMEOUT_MS || 30000));
     const signal = externalSignal || controller.signal;
@@ -148,8 +187,7 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
           body: JSON.stringify({ model: config.model, stream: false, temperature: 0.7, messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user }
+            { role: 'system', content: system }, ...messages
           ] }), signal: controller.signal
         });
         const payload = await response.json();
@@ -162,7 +200,7 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
         response = await fetch(config.apiURL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({ model: config.model, max_tokens: 2048, system, messages: [{ role: 'user', content: user }] }), signal
+          body: JSON.stringify({ model: config.model, max_tokens: 2048, system, messages }), signal
         });
         const payload = await response.json();
         if (!response.ok) throw modelRequestError(response, payload);
@@ -174,7 +212,7 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
       const endpoint = `${config.apiURL.replace(/\/$/, '')}/${config.model}:generateContent`;
       response = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: user }] }] }), signal
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: messages.map(msg => ({ role: msg.role === 'assistant' ? 'model' : 'user', parts: [{ text: msg.content }] })) }), signal
       });
       const payload = await response.json();
       if (!response.ok) throw modelRequestError(response, payload);
@@ -198,7 +236,7 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
       yield await generate({ message, recalled, runtimeContext, signal: externalSignal });
       return;
     }
-    const { system, user } = composePrompts({ message, recalled, runtimeContext });
+    const { system, messages } = composePrompts({ message, recalled, runtimeContext });
     const controller = new AbortController();
     const timeoutMs = Number(process.env.MODEL_TIMEOUT_MS || 30000);
     let timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -211,15 +249,14 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
           body: JSON.stringify({ model: config.model, stream: true, temperature: 0.7, messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user }
+            { role: 'system', content: system }, ...messages
           ] }), signal
         });
       } else {
         response = await fetch(config.apiURL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01', Accept: 'text/event-stream' },
-          body: JSON.stringify({ model: config.model, max_tokens: 2048, system, messages: [{ role: 'user', content: user }], stream: true }), signal
+          body: JSON.stringify({ model: config.model, max_tokens: 2048, system, messages, stream: true }), signal
         });
       }
       if (!response.ok) {
