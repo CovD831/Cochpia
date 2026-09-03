@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getStorageStatus, loadState, loadUserState, saveState, storageProvider } from './store.js';
 import { createMemoryModuleRuntime } from './memory-module-runtime.js';
@@ -12,21 +12,35 @@ import { createGrowthEvidenceService } from './growth-evidence.js';
 import { createModelProvider, listModelProviders, resolveModelConfig, resolveModelSelection } from './model-provider.js';
 import { authenticateRequest, authMode, validateAuthStorage } from './auth.js';
 import { buildRuntimeContext, findRegenerationTarget } from './runtime-context.js';
-import { createSseEvent, formatSseEvent, replaySseEvents } from './sse.js';
-import { applyPersonalityChange, createPersonalityRollbackAudit } from './personality.js';
+import { createSseEvent, formatSseEvent } from './sse.js';
 import { queryCollection } from './collection-query.js';
-import { createAgentService } from './agent-service.js';
+import { agentAvatar, createAgentService, resolveMessageAvatar } from './agent-service.js';
 import { collectSyncChanges } from './sync-service.js';
 import { createObservability } from './observability.js';
 import { createMusicService } from './music-service.js';
 import { createNeteaseMusicAdapter } from './netease-music-adapter.js';
-import { executeTool, findTool, toOpenAITools } from './tools.js';
+import { executeTool, findTool, getToolRisk, toOpenAITools } from './tools.js';
 import { createPiClient } from './pi-client.js';
 import { maybeCompactConversation } from './compaction.js';
 import { mergeState } from './state-merge.js';
 import { shouldRemember } from './auto-memory.js';
-import { ensurePsychologyTraits, listAtmospherePresets, resolveAtmosphere } from './psychology.js';
 import { sanitizeWorkspacePreferences } from './workspace-preferences.js';
+import { routeMessage } from './dynamic-alpha-router.js';
+import { assertProductionDbSsl } from './db-ssl.js';
+import { createAgentTaskService } from './agent-task.js';
+import { createCodexClient } from './codex-client.js';
+import { createClaudeClient } from './claude-client.js';
+import { verifyAgentTask, resolveVerificationWorkdir } from './verifier.js';
+import { createTaskSandbox, readTaskDiff, readTaskPatch, removeTaskSandbox, cleanupOrphanTaskSandboxes } from './task-sandbox.js';
+import { createAgentScheduler } from './agent-scheduler.js';
+import { loadWorkflowSpec, listWorkflows } from './workflows.js';
+import { runCollaborationWorkflow } from './orchestrator.js';
+import { createEvidenceLedger } from './evidence.js';
+import { createProposalService } from './proposals.js';
+import { applyProposalPatch } from './code-modifier.js';
+import { createRunRegistry } from './runtime/runs.js';
+import { createApprovalRegistry } from './runtime/approval.js';
+import { createChatRuntime } from './runtime/chat-runtime.js';
 
 const app = express();
 const observability = createObservability({ rateLimitMax: Number(process.env.API_RATE_LIMIT_MAX || 120) });
@@ -62,6 +76,7 @@ try {
 if (process.env.NODE_ENV === 'production' && (process.env.MODEL_PROVIDER || 'mock') === 'mock') throw new Error('MODEL_PROVIDER=mock is not allowed in production');
 if (authMode() === 'required' && !process.env.SUPABASE_URL) throw new Error('SUPABASE_URL is required when AUTH_MODE=required');
 validateAuthStorage(storageProvider);
+assertProductionDbSsl();
 const state = new Proxy(baseState, {
   get(target, property) {
     const current = requestContext.getStore()?.state || target;
@@ -85,10 +100,41 @@ const agents = createAgentService(state, () => saveState(state));
 const growthEvidence = createGrowthEvidenceService(state, () => saveState(state));
 const activeRuns = new Map();
 const streamRuns = new Map();
+const dynamicAlphaObservations = [];
+const recordDynamicAlphaObservation = ({ sessionId, mode, routing, modelProvider, modelName }) => {
+  if (process.env.NODE_ENV === 'production') return;
+  const sessionKey = createHash('sha256').update(String(sessionId)).digest('hex').slice(0, 12);
+  dynamicAlphaObservations.push({
+    recordedAt: new Date().toISOString(),
+    sessionKey,
+    mode,
+    modelProvider,
+    modelName,
+    scores: routing.scores,
+    confAbs: routing.confAbs,
+    confMargin: routing.confMargin,
+    alphaRaw: routing.alphaRaw,
+    alphaDecayed: routing.alphaDecayed,
+    alphaWork: routing.alphaWork,
+    alphaLove: routing.alphaLove,
+    decision: routing.decision,
+    placement: routing.placements?.[mode === 'work' ? 'work' : 'love'] || null,
+    isAnchor: routing.isAnchor
+  });
+  if (dynamicAlphaObservations.length > 100) dynamicAlphaObservations.shift();
+};
 // 待确认的写操作：key = `${runId}:${toolCallId}` → resolve({ approved })
 const pendingApprovals = new Map();
-const waitForApproval = (runId, toolCallId) => new Promise(resolve => { pendingApprovals.set(`${runId}:${toolCallId}`, resolve); });
+const approvalRecords = new Map();
+const pendingAgentApprovals = new Map();
+const sessionApprovalGrants = new Map();
+const approvalTimeoutMs = Math.max(30_000, Number(process.env.APPROVAL_TIMEOUT_MS || 5 * 60 * 1000));
+const sessionApprovalGrantTtlMs = Math.max(60_000, Number(process.env.APPROVAL_SESSION_TTL_MS || 30 * 60 * 1000));
+const activeAgentRuns = new Map();
+const activeVerifications = new Set();
+const collaborationRuns = new Map();
 const streamRetentionMs = Math.max(30_000, Number(process.env.SSE_RUN_RETENTION_MS || 300_000));
+const chatRunTimeoutMs = Math.max(30_000, Number(process.env.CHAT_RUN_TIMEOUT_MS || 120_000));
 const model = createModelProvider();
 const music = createMusicService({ adapter: process.env.MUSIC_MODE === 'netease' ? createNeteaseMusicAdapter() : undefined });
 const defaultModelSelection = () => {
@@ -99,16 +145,17 @@ const defaultModelSelection = () => {
 for (const session of state.sessions) {
   if (!session.modelProvider || !session.modelName) Object.assign(session, defaultModelSelection());
 }
-state.personalityHistory ||= [{ version: state.personality.version, traits: structuredClone(state.personality.traits), summary: state.personality.summary, updatedAt: state.personality.updatedAt }];
-state.personalityAudit ||= [];
 state.agents ||= [];
 state.profile ||= { name: 'Cochpia', gender: 'none', age: null, avatar: '✦' };
 state.mode ||= 'companion';
+state.agentTasks ||= [];
+state.evidence ||= [];
+state.proposals ||= [];
+state.collaborationRuns ||= [];
 for (const session of state.sessions) {
   session.mode ||= state.mode;
   session.companionIntent ||= 'listen';
 }
-ensurePsychologyTraits(state.personality);
 
 app.use((req, res, next) => {
   cors({
@@ -142,6 +189,7 @@ app.use(async (req, res, next) => {
   try {
     const user = await authenticateRequest(req);
     const userState = await loadUserState(user.id, baseState);
+    req.cochpiaUserId = user.id;
     return requestContext.run({ user, state: userState }, next);
   } catch (error) { return next(error); }
 });
@@ -156,37 +204,117 @@ const send = (res, event, data, run) => {
   return true;
 };
 const fail = (res, status, code, message) => res.status(status).json({ error: { code, message } });
-const getSession = id => state.sessions.find(session => session.id === id);
+const sessionBelongsToCurrentUser = (session, ownerId = currentUserId()) => session && (session.ownerId ? session.ownerId === ownerId : authMode() === 'off');
+const getSession = (id, ownerId = currentUserId()) => state.sessions.find(session => session.id === id && sessionBelongsToCurrentUser(session, ownerId));
 const getMessage = (sessionId, messageId) => state.messages[sessionId]?.find(message => message.id === messageId);
 const touchSession = session => { if (session) session.updatedAt = new Date().toISOString(); };
 const runtimeKey = sessionId => `${requestContext.getStore()?.user?.id || 'local-user'}:${sessionId}`;
 const currentUserId = () => requestContext.getStore()?.user?.id || 'local-user';
 const chatMemoryForRequest = req => memoryRuntime.chatForRequest(req);
 const compatibilityMemoryForRequest = req => memoryRuntime.compatibilityForRequest(req);
-const finishRun = run => {
-  if (run.finished) return;
-  run.finished = true;
-  if (activeRuns.get(run.key) === run) activeRuns.delete(run.key);
-  if (run.heartbeat) clearInterval(run.heartbeat);
-  setTimeout(() => { if (streamRuns.get(run.id) === run) streamRuns.delete(run.id); }, streamRetentionMs).unref?.();
+const approvalRegistry = createApprovalRegistry({ pendingApprovals, approvalRecords, sessionApprovalGrants, currentUserId, approvalTimeoutMs, sessionApprovalGrantTtlMs });
+const agentTasks = createAgentTaskService({ state, persist: currentState => saveState(currentState) });
+const evidenceLedger = createEvidenceLedger(state);
+const proposals = createProposalService(state, { apply: async (patch, proposal) => { applyProposalPatch(patch, proposal); } });
+const agentTaskOwner = () => currentUserId();
+const taskEvent = async (task, type, data = {}) => agentTasks.appendEvent(task, type, data);
+const recordTaskEvidence = async (task, source, content, score = null) => {
+  if (!content) return null;
+  const item = evidenceLedger.record({ taskId: task.id, stageId: task.stageId, source, content, score });
+  await saveState(state);
+  return item;
 };
-const attachStreamResponse = (run, res, afterId = '') => {
-  run.response = res;
-  run.connected = true;
-  res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-  res.flushHeaders();
-  for (const entry of replaySseEvents(run.events, afterId)) {
-    if (!res.writableEnded && !res.destroyed) res.write(formatSseEvent(entry));
+void Promise.all(state.agentTasks.filter(task => ['running', 'verifying'].includes(task.status)).map(async task => {
+  const previousStatus = task.status;
+  task.status = 'failed';
+  task.message = previousStatus === 'running' ? 'agent_execution_interrupted' : 'verification_interrupted';
+  await taskEvent(task, 'task_interrupted', { reason: 'server_restart', previousStatus });
+}));
+const runAgentTask = async task => {
+  const text = agentTasks.buildInput(task);
+  let output = '';
+  let sandbox = null;
+  try {
+    sandbox = await createTaskSandbox({ root: process.cwd() });
+    task.sandboxPath = sandbox.path;
+    await taskEvent(task, 'sandbox_created', { workdir: sandbox.path });
+    await agentTasks.transition(task, 'running', `${task.target} 执行器已启动`);
+    if (task.target === 'pi') {
+      const client = createPiClient({ cwd: sandbox.path, timeoutMs: task.spec?.timeoutMs });
+      activeAgentRuns.set(task.id, client);
+      await client.prompt(text, async event => {
+        if (event.type === 'message_update') output += String(event.assistantMessageEvent?.delta || '');
+        await taskEvent(task, event.type || 'agent_event', { summary: String(event.assistantMessageEvent?.delta || event.type || '').slice(0, 1000) });
+      });
+      client.close();
+    } else if (task.target === 'codex') {
+      const client = createCodexClient({ cwd: sandbox.path, timeoutMs: task.spec?.timeoutMs, onRequest: async request => {
+        await agentTasks.transition(task, 'waiting_approval', 'Agent 请求用户审批');
+        await agentTasks.addApproval(task, { method: request.method, requestId: request.id, command: request.params?.command, diff: request.params?.diff });
+        const approvalKey = `${task.id}:${request.id}`;
+        const decision = await new Promise(resolve => {
+          const timeout = setTimeout(() => { pendingAgentApprovals.delete(approvalKey); resolve({ decision: 'decline' }); }, 5 * 60 * 1000);
+          pendingAgentApprovals.set(approvalKey, value => { clearTimeout(timeout); pendingAgentApprovals.delete(approvalKey); resolve(value); });
+        });
+        await agentTasks.transition(task, 'running', '用户审批已处理');
+        return decision;
+      }});
+      activeAgentRuns.set(task.id, client);
+      await client.run(text, async event => {
+        const delta = event.method === 'item/agentMessage/delta' ? event.params?.delta : '';
+        output += String(delta || '');
+        await taskEvent(task, event.method || 'agent_event', { summary: String(delta || event.method || '').slice(0, 1000) });
+      });
+      client.close();
+    } else {
+      const client = createClaudeClient({ cwd: sandbox.path, timeoutMs: task.spec?.timeoutMs });
+      activeAgentRuns.set(task.id, client);
+      await client.run(text, async event => {
+        const summary = event.type === 'assistant'
+          ? event.message?.content?.filter(item => item.type === 'text').map(item => item.text).join('')
+          : event.type === 'result' ? event.result : event.type;
+        if (event.type === 'result') output += String(event.result || '');
+        await taskEvent(task, event.type || 'agent_event', { summary: String(summary || '').slice(0, 1000) });
+      });
+      client.close();
+    }
+    if (task.status !== 'cancelled') {
+      const diff = await readTaskDiff(sandbox);
+      if (diff) await taskEvent(task, 'sandbox_diff', { diff });
+      await recordTaskEvidence(task, 'agent_output', output || '执行端已完成任务。');
+      if (diff) await recordTaskEvidence(task, 'sandbox_diff', diff);
+      await agentTasks.recordResult(task, { summary: output || '执行端已完成任务。', evidence: [...(output ? ['agent_output'] : []), ...(diff ? ['sandbox_diff'] : [])] });
+      await agentTasks.transition(task, 'verifying', '执行器已返回，等待独立验证。');
+      triggerWorkflowVerification(task);
+    }
+  } catch (error) {
+    if (task.status === 'cancelled') await taskEvent(task, 'runner_closed', { code: 'TASK_CANCELLED' });
+    else await agentTasks.fail(task, error);
+    await taskEvent(task, 'error', { code: error.code || 'AGENT_TASK_FAILED' });
+  } finally {
+    activeAgentRuns.delete(task.id);
+    if (sandbox && ['failed', 'cancelled'].includes(task.status)) await removeTaskSandbox(sandbox);
   }
-  const heartbeat = setInterval(() => {
-    if (run.finished || run.response !== res) return clearInterval(heartbeat);
-    send(res, 'heartbeat', { runId: run.id, at: new Date().toISOString() }, run);
-  }, 15_000);
-  res.on('close', () => {
-    clearInterval(heartbeat);
-    if (run.response === res) { run.response = null; run.connected = false; }
-  });
 };
+const taskScheduler = createAgentScheduler({
+  maxConcurrent: Number(process.env.AGENT_CONCURRENCY_MAX) || 3,
+  getTask: id => state.agentTasks.find(item => item.id === id),
+  runTask: runAgentTask,
+  failTask: (task, reason) => agentTasks.transition(task, 'failed', reason)
+});
+for (const task of state.agentTasks.filter(item => item.status === 'submitted')) taskScheduler.enqueue(task);
+const runRegistry = createRunRegistry({ activeRuns, streamRuns, send, streamRetentionMs });
+const { finishRun, attachStreamResponse } = runRegistry;
+const chatRuntime = createChatRuntime({
+  state, saveState, getSession, touchSession, currentUserId, runtimeKey,
+  agents, agentAvatar, createModelProvider, resolveModelSelection,
+  buildRuntimeContext, findRegenerationTarget, routeMessage,
+  recordDynamicAlphaObservation, chatMemoryForRequest, shouldRemember,
+  maybeCompactConversation, executeTool, findTool, getToolRisk, toOpenAITools,
+  createPiClient, agentTasks, taskScheduler, send, fail, activeRuns, streamRuns,
+  attachStreamResponse, finishRun, chatRunTimeoutMs,
+  waitForApproval: approvalRegistry.waitForApproval, randomUUID
+});
 
 app.get('/api/health', (_, res) => {
   const storage = getStorageStatus();
@@ -201,6 +329,11 @@ app.get('/api/ready', (_, res) => {
 app.get('/api/version', (_, res) => res.json({ service: 'cochpia', version: process.env.APP_VERSION || '0.1.0', node: process.version, environment: process.env.NODE_ENV || 'development' }));
 app.get('/api/metrics', (_, res) => res.json(observability.getMetrics()));
 app.get('/api/models', (_, res) => res.json({ defaultProvider: process.env.MODEL_PROVIDER || 'mock', providers: listModelProviders() }));
+app.get('/api/dev/dynamic-alpha/observations', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return fail(res, 404, 'DEV_ROUTE_NOT_FOUND', 'Development route not available');
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+  res.json({ observations: dynamicAlphaObservations.slice(-limit) });
+});
 app.get('/api/music/environment', async (_, res) => res.json(await music.environment()));
 app.get('/api/music/status', async (_, res) => res.json(await music.status()));
 app.get('/api/music/context', async (_, res) => res.json(await music.listeningContext()));
@@ -211,13 +344,17 @@ app.post('/api/music/resume', async (_, res) => { try { res.json(await music.res
 app.post('/api/music/next', async (_, res) => { try { res.json(await music.next()); } catch (error) { fail(res, 503, error.code || 'MUSIC_NEXT_FAILED', error.message); } });
 app.post('/api/music/stop', async (_, res) => { try { res.json(await music.stop()); } catch (error) { fail(res, 503, error.code || 'MUSIC_STOP_FAILED', error.message); } });
 app.get('/api/sessions', (req, res) => {
-  if (req.query.paginated !== 'true' && !req.query.search && req.query.archived === undefined) return res.json(state.sessions);
-  const result = queryCollection(state.sessions, { search: req.query.search, limit: req.query.limit, offset: req.query.offset, filter: session => req.query.archived === 'true' ? session.archived === true : req.query.archived === 'false' ? session.archived !== true : true });
+  const ownedSessions = state.sessions.filter(session => sessionBelongsToCurrentUser(session, req.cochpiaUserId));
+  if (req.query.paginated !== 'true' && !req.query.search && req.query.archived === undefined) return res.json(ownedSessions);
+  const result = queryCollection(ownedSessions, { search: req.query.search, limit: req.query.limit, offset: req.query.offset, filter: session => req.query.archived === 'true' ? session.archived === true : req.query.archived === 'false' ? session.archived !== true : true });
   const items = result.items.sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true) || new Date(b.updatedAt) - new Date(a.updatedAt));
   res.json(req.query.paginated === 'true' ? { ...result, items } : items);
 });
 app.post('/api/sessions', async (req, res) => {
-  const session = { id: randomUUID(), title: String(req.body?.title || '新的相遇').slice(0, 80), description: String(req.body?.description || '').trim().slice(0, 300), kind: req.body?.kind === 'group' ? 'group' : 'private', agentIds: Array.isArray(req.body?.agentIds) ? req.body.agentIds.map(String).slice(0, 20) : [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), mode: 'companion', companionIntent: 'listen', ...defaultModelSelection() };
+  const kind = req.body?.kind === 'group' ? 'group' : 'private';
+  const agentId = kind === 'private' && req.body?.agentId ? String(req.body.agentId).slice(0, 100) : null;
+  if (agentId && !agents.get(agentId)) return fail(res, 404, 'AGENT_NOT_FOUND', 'The selected agent no longer exists');
+  const session = { id: randomUUID(), ownerId: req.cochpiaUserId || currentUserId(), title: String(req.body?.title || '新的相遇').slice(0, 80), description: String(req.body?.description || '').trim().slice(0, 300), kind, agentId, groupMode: kind === 'group' ? (req.body?.groupMode === 'turn' ? 'turn' : 'parallel') : null, agentIds: Array.isArray(req.body?.agentIds) ? req.body.agentIds.map(String).slice(0, 20) : [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), mode: 'companion', companionIntent: 'listen', ...defaultModelSelection() };
   state.sessions.unshift(session); state.messages[session.id] = []; await saveState(state); res.status(201).json(session);
 });
 app.patch('/api/sessions/:id', async (req, res) => {
@@ -225,6 +362,12 @@ app.patch('/api/sessions/:id', async (req, res) => {
   if (!session) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   if (req.body?.title !== undefined) session.title = String(req.body.title).trim().slice(0, 80) || session.title;
   if (req.body?.description !== undefined) session.description = String(req.body.description).trim().slice(0, 300);
+  if (req.body?.agentId !== undefined && session.kind === 'private') {
+    const nextAgentId = req.body.agentId ? String(req.body.agentId).slice(0, 100) : null;
+    if (nextAgentId && !agents.get(nextAgentId)) return fail(res, 404, 'AGENT_NOT_FOUND', 'The selected agent no longer exists');
+    session.agentId = nextAgentId;
+  }
+  if (req.body?.groupMode !== undefined && session.kind === 'group') session.groupMode = req.body.groupMode === 'turn' ? 'turn' : 'parallel';
   if (Array.isArray(req.body?.agentIds) && session.kind === 'group') session.agentIds = [...new Set(req.body.agentIds.map(String))].slice(0, 20);
   touchSession(session); await saveState(state); res.json(session);
 });
@@ -259,26 +402,12 @@ app.patch('/api/sessions/:id/persona', async (req, res) => {
   touchSession(session); await saveState(state);
   res.json({ persona: session.persona });
 });
-app.get('/api/psychology/presets', (_, res) => res.json(listAtmospherePresets()));
-app.get('/api/sessions/:id/atmosphere', (req, res) => {
-  const session = getSession(req.params.id);
-  if (!session) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-  res.json({ atmosphere: session.atmosphere || '' });
-});
-app.patch('/api/sessions/:id/atmosphere', async (req, res) => {
-  const session = getSession(req.params.id);
-  if (!session) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-  const presetId = String(req.body?.atmosphere ?? '').trim().slice(0, 60);
-  if (presetId && !resolveAtmosphere(presetId)) return fail(res, 400, 'INVALID_ATMOSPHERE', 'Unknown atmosphere preset');
-  session.atmosphere = presetId;
-  touchSession(session); await saveState(state);
-  res.json({ atmosphere: session.atmosphere });
-});
 app.get('/api/sessions/:id/messages', (req, res) => {
-  if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
+  if (!getSession(req.params.id, req.cochpiaUserId)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   const channel = req.query.channel ? String(req.query.channel) : '';
   const allMessages = state.messages[req.params.id] || [];
-  const scoped = channel ? allMessages.filter(message => (message.channel || '默认') === channel) : allMessages;
+  const scoped = (channel ? allMessages.filter(message => (message.channel || '默认') === channel) : allMessages)
+    .map(message => resolveMessageAvatar(message, message.senderId ? agents.get(message.senderId) : null));
   if (req.query.paginated !== 'true' && !req.query.search) return res.json(scoped);
   const result = queryCollection(scoped, { search: req.query.search, limit: req.query.limit, offset: req.query.offset, text: message => message.content });
   res.json(req.query.paginated === 'true' ? result : result.items);
@@ -320,7 +449,7 @@ app.patch('/api/sessions/:id', async (req, res) => {
   touchSession(session); await saveState(state); res.json(session);
 });
 app.delete('/api/sessions/:id', async (req, res) => {
-  const index = state.sessions.findIndex(session => session.id === req.params.id);
+  const index = state.sessions.findIndex(session => session.id === req.params.id && sessionBelongsToCurrentUser(session, req.cochpiaUserId));
   if (index === -1) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   state.sessions.splice(index, 1); delete state.messages[req.params.id]; await saveState(state); res.status(204).end();
 });
@@ -354,10 +483,7 @@ app.get('/api/export', async (req, res) => {
       sessions: state.sessions,
       messages: state.messages,
       memoryModule: state.memoryModule || null,
-      personality: state.personality,
       evidence: state.evidence,
-      personalityHistory: state.personalityHistory,
-      personalityAudit: state.personalityAudit,
       agents: state.agents,
       profile: state.profile,
       workspacePreferences: state.workspacePreferences || null
@@ -498,6 +624,223 @@ app.get('/api/mode', (req, res) => {
   const session = req.query.sessionId ? getSession(String(req.query.sessionId)) : null;
   res.json({ mode: session?.mode || state.mode, companionIntent: session?.companionIntent || 'listen', sessionId: session?.id || null });
 });
+
+const collaborationRunById = (id, ownerId) => {
+  const cached = collaborationRuns.get(id);
+  if (cached) return cached;
+  // 重启后 Map 为空，从持久化 state 反重建关联（run 与 task 都按 owner 隔离）。
+  const persisted = (state.collaborationRuns || []).find(run => run.id === id && run.ownerId === ownerId);
+  if (persisted) { collaborationRuns.set(id, persisted); return persisted; }
+  return null;
+};
+const collaborationRunView = run => {
+  const tasks = run.taskIds.map(id => state.agentTasks.find(task => task.id === id && task.ownerId === run.ownerId)).filter(Boolean);
+  const taskByStage = new Map(tasks.map(task => [task.stageId, task]));
+  const stages = run.spec.stages.map(stage => ({ ...stage, taskId: taskByStage.get(stage.id)?.id || null, status: taskByStage.get(stage.id)?.status || 'submitted', message: taskByStage.get(stage.id)?.message || null }));
+  const statuses = tasks.map(task => task.status);
+  const status = statuses.some(item => item === 'failed') ? 'failed'
+    : statuses.length && statuses.every(item => item === 'completed') ? 'completed'
+      : statuses.some(item => ['running', 'waiting_approval', 'verifying', 'reviewing'].includes(item)) ? 'running' : 'submitted';
+  return {
+    id: run.id, workflowId: run.workflowId, ownerId: run.ownerId, goal: run.goal,
+    status, createdAt: run.createdAt, spec: run.spec, stages,
+    tasks, evidence: (state.evidence || []).filter(item => run.taskIds.includes(item.taskId))
+  };
+};
+app.post('/api/workflows', (_, res) => {
+  try { return res.json({ workflows: listWorkflows() }); }
+  catch (error) { return fail(res, 500, error.code || 'WORKFLOW_LIST_FAILED', error.message); }
+});
+app.post('/api/workflows/:id/run', async (req, res) => {
+  const ownerId = agentTaskOwner();
+  const goal = String(req.body?.goal || '').trim().slice(0, 8000);
+  if (!goal) return fail(res, 400, 'WORKFLOW_GOAL_REQUIRED', 'Workflow goal is required');
+  try {
+    const spec = loadWorkflowSpec(req.params.id);
+    const run = { id: randomUUID(), workflowId: spec.id, ownerId, goal, spec, taskIds: [], createdAt: new Date().toISOString() };
+    const expanded = await runCollaborationWorkflow({ workflowId: spec.id, goal, ownerId, agents, agentTasks, taskScheduler });
+    run.taskIds = expanded.tasks.map(task => task.id);
+    collaborationRuns.set(run.id, run);
+    state.collaborationRuns ||= [];
+    state.collaborationRuns.push(run);
+    await saveState(state);
+    return res.status(202).json({ runId: run.id, ...collaborationRunView(run) });
+  } catch (error) { return fail(res, 400, error.code || 'WORKFLOW_RUN_FAILED', error.message); }
+});
+app.get('/api/workflows/runs/:id', (req, res) => {
+  const run = collaborationRunById(req.params.id, agentTaskOwner());
+  if (!run || run.ownerId !== agentTaskOwner()) return fail(res, 404, 'WORKFLOW_RUN_NOT_FOUND', 'Workflow run not found');
+  return res.json(collaborationRunView(run));
+});
+app.post('/api/proposals', async (req, res) => {
+  try { const proposal = await proposals.create(req.body || {}, agentTaskOwner()); await saveState(state); return res.status(201).json({ proposal }); }
+  catch (error) { return fail(res, 400, error.code || 'PROPOSAL_INVALID', error.message); }
+});
+app.get('/api/proposals', (req, res) => res.json({ proposals: proposals.list(agentTaskOwner()) }));
+app.post('/api/proposals/:id/approve', async (req, res) => {
+  try {
+    const proposal = await proposals.approve(req.params.id, agentTaskOwner());
+    if (!proposal) return fail(res, 404, 'PROPOSAL_NOT_FOUND', 'Proposal not found');
+    await saveState(state);
+    return res.json({ proposal });
+  } catch (error) { return fail(res, 400, error.code || 'PROPOSAL_APPROVE_FAILED', error.message); }
+});
+app.post('/api/proposals/:id/reject', async (req, res) => {
+  const proposal = proposals.reject(req.params.id, agentTaskOwner());
+  if (!proposal) return fail(res, 404, 'PROPOSAL_NOT_FOUND', 'Proposal not found');
+  await saveState(state);
+  return res.json({ proposal });
+});
+app.get('/api/workbench/agents', (_, res) => res.json({ agents: [
+  { id: 'codex', label: 'Codex', protocol: 'codex-app-server', available: Boolean(process.env.CODEX_BIN || process.env.CODEX_ENABLED !== 'false') },
+  { id: 'pi', label: 'Pi Agent', protocol: 'pi-rpc', available: process.env.PI_ENABLED !== 'false' },
+  { id: 'claude', label: 'Claude Code', protocol: 'claude-cli-stream-json', available: Boolean(process.env.CLAUDE_BIN || process.env.CLAUDE_ENABLED === 'true') }
+] }));
+app.get('/api/workbench/tasks', (_, res) => res.json({ tasks: agentTasks.list(agentTaskOwner()) }));
+app.get('/api/workbench/tasks/:id', (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  return task ? res.json({ task }) : fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+});
+const runTaskVerification = async (task, workdir) => {
+  const root = path.resolve(process.cwd());
+  try {
+    await taskEvent(task, 'verification_started', { workdir });
+    const result = await verifyAgentTask({ task, cwd: workdir });
+    await taskEvent(task, 'verification_finished', { ok: result.ok, checks: result.checks.map(check => ({ name: check.name, args: check.args, ok: check.ok, code: check.code, output: check.output })) });
+    await recordTaskEvidence(task, 'verification', JSON.stringify({ ok: result.ok, checks: result.checks }));
+    if (!result.ok) {
+      await agentTasks.transition(task, 'failed', 'verification_failed');
+      taskScheduler.notify(task);
+      return;
+    }
+    await agentTasks.transition(task, 'reviewing', '验证通过，等待独立审查。');
+    if (task.workflowId && task.role === 'implementer') await completeWorkflowVerifier(task);
+  } catch (error) {
+    await taskEvent(task, 'verification_error', { code: error.code || 'VERIFICATION_FAILED' });
+    await agentTasks.transition(task, 'failed', 'verification_failed');
+    taskScheduler.notify(task);
+  } finally { activeVerifications.delete(task.id); }
+};
+const triggerWorkflowVerification = task => {
+  if (!task.workflowId || task.role !== 'implementer' || task.status !== 'verifying' || activeVerifications.has(task.id)) return;
+  activeVerifications.add(task.id);
+  const workdir = task.sandboxPath
+    ? path.resolve(task.sandboxPath)
+    : resolveVerificationWorkdir(path.resolve(process.cwd()), task.workdir || '.');
+  void runTaskVerification(task, workdir);
+};
+const completeWorkflowVerifier = async implementationTask => {
+  // 实际 test/build 在 implementer 上运行；此 builtin task 只透传验证结论，负责释放 review 依赖。
+  const verifierTask = state.agentTasks.find(task => task.ownerId === implementationTask.ownerId
+    && task.workflowId === implementationTask.workflowId
+    && task.role === 'verifier'
+    && (task.dependsOn || []).includes(implementationTask.id));
+  if (!verifierTask || verifierTask.status !== 'submitted') return;
+  await agentTasks.transition(verifierTask, 'running', '协作实现阶段验证已自动启动。');
+  await agentTasks.transition(verifierTask, 'verifying', '协作实现阶段验证已通过。');
+  await recordTaskEvidence(verifierTask, 'verification', '实现阶段自动验证通过。');
+  await agentTasks.finish(verifierTask, { summary: '实现阶段自动验证通过。', evidence: ['verification'] });
+  taskScheduler.notify(verifierTask);
+};
+app.post('/api/workbench/tasks/:id/verify', async (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  if (!task) return fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+  if (task.status !== 'verifying') return fail(res, 409, 'TASK_NOT_READY_FOR_VERIFY', 'Task is not waiting for verification');
+  if (activeVerifications.has(task.id)) return fail(res, 409, 'VERIFICATION_IN_PROGRESS', 'Task verification is already running');
+  const root = path.resolve(process.cwd());
+  let workdir;
+  try {
+    if (task.sandboxPath) {
+      workdir = path.resolve(task.sandboxPath);
+      if (!fs.existsSync(workdir)) throw Object.assign(new Error('Task sandbox no longer exists'), { code: 'TASK_SANDBOX_MISSING' });
+    } else workdir = resolveVerificationWorkdir(root, task.workdir || '.');
+  } catch (error) { return fail(res, 400, error.code || 'TASK_WORKDIR_INVALID', error.message); }
+  activeVerifications.add(task.id);
+  void runTaskVerification(task, workdir);
+  return res.status(202).json({ verificationId: task.id, task });
+});
+app.post('/api/workbench/tasks/:id/review', async (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  if (!task) return fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+  if (task.status !== 'reviewing') return fail(res, 409, 'TASK_NOT_READY_FOR_REVIEW', 'Task is not waiting for review');
+  const decision = String(req.body?.decision || '');
+  if (!['approve', 'request_changes', 'reject'].includes(decision)) return fail(res, 400, 'REVIEW_DECISION_INVALID', 'Invalid review decision');
+  const feedback = String(req.body?.feedback || '').trim().slice(0, 4000);
+  await taskEvent(task, 'review_decided', { decision, feedback: feedback || null });
+  await recordTaskEvidence(task, 'review', JSON.stringify({ decision, feedback: feedback || null }));
+  if (decision === 'approve') {
+    await agentTasks.finish(task, { summary: task.result?.summary || '任务已通过人工审查。', evidence: [...(task.result?.evidence || []), 'human_review_approved'] });
+  } else if (decision === 'request_changes') {
+    await agentTasks.transition(task, 'verifying', feedback || '审查要求修改后重新验证。');
+  } else {
+    await agentTasks.transition(task, 'failed', 'review_rejected');
+  }
+  taskScheduler.notify(task);
+  return res.json({ task });
+});
+app.post('/api/workbench/tasks/:id/merge', async (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  if (!task) return fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+  if (!['reviewing', 'completed'].includes(task.status)) return fail(res, 409, 'TASK_NOT_READY_FOR_MERGE', 'Task is not waiting for review');
+  if (!task.sandboxPath) return fail(res, 409, 'TASK_SANDBOX_MISSING', 'Task sandbox is unavailable');
+  const sandbox = { path: task.sandboxPath, root: process.cwd(), parent: path.dirname(task.sandboxPath), mode: 'git-worktree' };
+  const patch = await readTaskPatch(sandbox);
+  await taskEvent(task, 'merge_prepared', { patch: patch.slice(0, 120000), applied: false });
+  await agentTasks.recordResult(task, { summary: task.result?.summary || '已生成待合并补丁。', evidence: [...(task.result?.evidence || []), 'merge_patch_prepared'] });
+  if (task.status === 'reviewing') await agentTasks.transition(task, 'completed', '已生成补丁，未自动合并主分支。');
+  taskScheduler.notify(task);
+  return res.json({ task, patch });
+});
+app.post('/api/workbench/tasks/:id/discard', async (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  if (!task) return fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+  if (!['reviewing', 'completed', 'failed'].includes(task.status)) return fail(res, 409, 'TASK_NOT_READY_FOR_DISCARD', 'Task is not ready to discard');
+  if (task.sandboxPath) await removeTaskSandbox({ path: task.sandboxPath, root: process.cwd(), parent: path.dirname(task.sandboxPath), mode: 'git-worktree' });
+  await taskEvent(task, 'sandbox_discarded', { discarded: true });
+  if (task.status === 'reviewing') await agentTasks.transition(task, 'completed', '已丢弃隔离目录变更。');
+  taskScheduler.notify(task);
+  return res.json({ task });
+});
+app.post('/api/workbench/tasks', async (req, res) => {
+  try {
+    const task = await agentTasks.create(req.body || {}, agentTaskOwner());
+    taskScheduler.enqueue(task);
+    return res.status(202).json({ task });
+  } catch (error) { return fail(res, 400, error.code || 'TASK_INVALID', error.message); }
+});
+app.post('/api/workbench/tasks/:id/cancel', async (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  if (!task) return fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+  const runner = activeAgentRuns.get(task.id);
+  if (runner?.close) runner.close();
+  try { await agentTasks.transition(task, 'cancelled', '用户取消任务'); taskScheduler.notify(task); return res.json(task); }
+  catch (error) { return fail(res, 409, 'TASK_CANCEL_FAILED', error.message); }
+});
+app.post('/api/workbench/tasks/:id/approve', async (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  if (!task) return fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+  const requestId = String(req.body?.requestId || '');
+  const resolveApproval = pendingAgentApprovals.get(`${task.id}:${requestId}`);
+  if (!resolveApproval) return fail(res, 404, 'APPROVAL_NOT_FOUND', 'Approval request not found or expired');
+  const decision = ['accept', 'acceptForSession', 'decline', 'cancel'].includes(req.body?.decision) ? req.body.decision : 'decline';
+  resolveApproval({ decision });
+  await taskEvent(task, 'approval_decided', { requestId, decision });
+  return res.json({ ok: true, decision });
+});
+app.post('/api/workbench/tasks/:id/gate', async (req, res) => {
+  const task = agentTasks.get(req.params.id, agentTaskOwner());
+  if (!task) return fail(res, 404, 'TASK_NOT_FOUND', 'Task not found');
+  const decision = String(req.body?.decision || '');
+  if (!['allow', 'interrupt', 'deny'].includes(decision)) return fail(res, 400, 'GATE_DECISION_INVALID', 'Invalid gate decision');
+  const feedback = String(req.body?.feedback || '').trim().slice(0, 4000);
+  const approval = [...(task.events || [])].reverse().find(event => event.type === 'approval_required')?.approval;
+  const resolveApproval = approval ? pendingAgentApprovals.get(`${task.id}:${approval.requestId}`) : null;
+  if (!resolveApproval) return fail(res, 404, 'APPROVAL_NOT_FOUND', 'Approval request not found or expired');
+  await taskEvent(task, 'gate_decided', { decision, feedback: feedback || null });
+  resolveApproval({ decision: decision === 'allow' ? 'accept' : decision === 'deny' ? 'decline' : 'interrupt', approved: decision === 'allow', feedback: feedback || null });
+  if (decision === 'deny') { await agentTasks.transition(task, 'failed', feedback || 'gate_denied'); taskScheduler.notify(task); }
+  return res.json({ ok: true, decision, feedback: feedback || null, task });
+});
 app.patch('/api/mode', async (req, res) => {
   const mode = String(req.body?.mode || '');
   if (!['companion', 'work'].includes(mode)) return fail(res, 400, 'INVALID_MODE', 'Mode must be companion or work');
@@ -510,13 +853,7 @@ app.patch('/api/mode', async (req, res) => {
   res.json({ mode: session.mode, companionIntent: session.companionIntent || 'listen', sessionId: session.id });
 });
 app.post('/api/chat/approve', (req, res) => {
-  const { runId, toolCallId, approved } = req.body || {};
-  const key = `${runId}:${toolCallId}`;
-  const resolve = pendingApprovals.get(key);
-  if (!resolve) return fail(res, 404, 'NO_PENDING_APPROVAL', 'No pending approval');
-  pendingApprovals.delete(key);
-  resolve({ approved: approved === true });
-  res.json({ ok: true });
+  return approvalRegistry.respondApproval(req, res, fail);
 });
 // 文件上传：手机/网页上传文件到服务端，供工作模式 read 工具处理
 app.post('/api/upload', async (req, res) => {
@@ -534,366 +871,12 @@ app.post('/api/upload', async (req, res) => {
     return res.json({ name: fileName, path: `uploads/${fileName}`, size: buffer.length });
   } catch (error) { return fail(res, 400, 'UPLOAD_FAILED', error.message); }
 });
-app.get('/api/personality', (_, res) => res.json({ ...state.personality, evidenceCount: state.evidence.length }));
-app.get('/api/personality/history', (_, res) => res.json(state.personalityHistory.map(version => ({
-  version: version.version,
-  traits: version.traits,
-  summary: version.summary,
-  updatedAt: version.updatedAt
-}))));
-app.get('/api/personality/audit', (_, res) => res.json(state.personalityAudit || []));
-app.get('/api/growth/evidence', (req, res) => {
-  const status = req.query.status ? String(req.query.status) : '';
-  if (status && !['draft', 'confirmed', 'rejected'].includes(status)) return fail(res, 400, 'INVALID_EVIDENCE_STATUS', 'Invalid evidence status');
-  const result = queryCollection(state.evidence, {
-    search: req.query.search,
-    limit: req.query.limit,
-    offset: req.query.offset,
-    filter: item => !status || item.status === status,
-    text: item => `${item.claim} ${item.evidence} ${item.type}`
-  });
-  if (req.query.paginated !== 'true' && !req.query.search && !status) return res.json(state.evidence);
-  return res.json(req.query.paginated === 'true' ? result : result.items);
-});
-app.get('/api/growth/evidence/:id', async (req, res) => { const item = growthEvidence.trace(req.params.id); item ? res.json(item) : fail(res, 404, 'EVIDENCE_NOT_FOUND', 'Evidence not found'); });
-const reviewEvidence = async (item, status, previousStatus = item.status) => {
-  const updated = await growthEvidence.updateEvidence(item.id, status);
-  if (status === 'confirmed' && previousStatus !== 'confirmed') {
-    const change = applyPersonalityChange(state.personality, state.personalityHistory, { evidenceId: updated.id, proposedChange: updated.proposedChange });
-    if (change) {
-      state.personality = change.personality;
-      state.personalityHistory = change.history;
-      state.personalityAudit.unshift({ id: randomUUID(), action: 'growth_confirmed', evidenceId: updated.id, version: state.personality.version, createdAt: new Date().toISOString() });
-    }
-  }
-  return updated;
-};
-app.patch('/api/growth/evidence/:id', async (req, res) => {
-  try {
-    const requestedStatus = req.body?.status === 'approved' ? 'confirmed' : req.body?.status;
-    const previous = growthEvidence.trace(req.params.id);
-    if (!previous) return fail(res, 404, 'EVIDENCE_NOT_FOUND', 'Evidence not found');
-    if (!['draft', 'confirmed', 'rejected'].includes(requestedStatus)) return fail(res, 400, 'INVALID_EVIDENCE_STATUS', 'Invalid evidence status');
-    const item = await reviewEvidence(previous, requestedStatus, previous.status);
-    await saveState(state);
-    return res.json(item);
-  } catch (error) { return fail(res, 400, 'INVALID_EVIDENCE_STATUS', error.message); }
-});
-app.post('/api/growth/evidence/batch', async (req, res) => {
-  try {
-    const requestedStatus = req.body?.status === 'approved' ? 'confirmed' : req.body?.status;
-    const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(String))] : [];
-    if (!['confirmed', 'rejected'].includes(requestedStatus)) return fail(res, 400, 'INVALID_EVIDENCE_STATUS', 'Batch status must be confirmed or rejected');
-    if (!ids.length || ids.length > 100) return fail(res, 400, 'INVALID_EVIDENCE_IDS', 'Batch evidence ids must contain 1 to 100 items');
-    const previousItems = ids.map(id => state.evidence.find(item => item.id === id));
-    if (previousItems.some(item => !item)) return fail(res, 404, 'EVIDENCE_NOT_FOUND', 'One or more evidence items were not found');
-    const items = [];
-    let personalityChanges = 0;
-    for (const previous of previousItems) {
-      const versionBefore = state.personality.version;
-      const item = await reviewEvidence(previous, requestedStatus, previous.status);
-      if (state.personality.version !== versionBefore) personalityChanges += 1;
-      items.push(item);
-    }
-    await saveState(state);
-    return res.json({ requested: ids.length, status: requestedStatus, updated: items.length, personalityChanges, items });
-  } catch (error) { return fail(res, 400, 'INVALID_EVIDENCE_STATUS', error.message); }
-});
-app.post('/api/personality/rollback', async (req, res) => {
-  const version = Number(req.body?.version);
-  const snapshot = state.personalityHistory.find(item => item.version === version);
-  if (!snapshot) return fail(res, 404, 'PERSONALITY_VERSION_NOT_FOUND', 'Personality version not found');
-  const fromVersion = state.personality.version;
-  state.personality = { version: snapshot.version, traits: structuredClone(snapshot.traits), summary: snapshot.summary, updatedAt: new Date().toISOString() };
-  state.personalityAudit.unshift(createPersonalityRollbackAudit({ fromVersion, toVersion: snapshot.version }));
-  await saveState(state); res.json({ ...state.personality, audit: state.personalityAudit[0] });
-});
 
-const detectModeSwitch = text => {
-  const t = String(text || '').trim();
-  const wantsWork = /(切换到|进入|开启|切到|回到|切换).{0,4}工作模式/.test(t) || t === '工作模式';
-  const wantsCompanion = /(切换到|进入|开启|切到|回到|切换).{0,4}陪伴模式/.test(t) || t === '陪伴模式';
-  if (wantsWork) return 'work';
-  if (wantsCompanion) return 'companion';
-  return null;
-};
+app.post('/api/chat/stream', (req, res) => chatRuntime.handleChatStream(req, res));
+app.post('/api/chat/regenerate', (req, res) => chatRuntime.handleChatStream(req, res, { regenerateMessageId: String(req.body?.messageId || '').trim() || null }));
+app.post('/api/chat/retry', (req, res) => chatRuntime.handleChatStream(req, res, { regenerateMessageId: String(req.body?.messageId || '').trim() || null, retry: true }));
 
-// 用 Pi RPC 执行工作模式任务：spawn `pi --mode rpc`，把事件流映射为 Cochpia 的 SSE 事件
-async function runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode = 'work' }) {
-  const pi = createPiClient({ cwd: process.cwd() });
-  let fullText = '';
-  await pi.prompt(userMessage.content, event => {
-    if (run.cancelled) return;
-    if (event.type === 'message_update') {
-      const e = event.assistantMessageEvent;
-      if (e?.type === 'text_delta') { fullText += e.delta; send(res, 'text', { delta: e.delta }, run); }
-    } else if (event.type === 'tool_execution_start') {
-      send(res, 'tool', { runId: run.id, name: event.toolName, args: event.args }, run);
-    } else if (event.type === 'tool_execution_end') {
-      const text = (event.result?.content || []).filter(c => c.type === 'text').map(c => c.text).join('') || '';
-      send(res, 'tool_result', { runId: run.id, name: event.toolName, result: text.slice(0, 4000) }, run);
-    }
-  });
-  assistantMessage.content = fullText || '（Pi 未返回内容）';
-  state.messages[sessionId].push(assistantMessage);
-  touchSession(getSession(sessionId));
-  await saveState(state);
-  return true;
-}
-
-async function finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel }) {
-  let memoryId = null;
-  try {
-    await chatMemory.recordTurn({ eventId: `chat:${sessionId}:${assistantMessage.id}`, content: assistantMessage.content, eventRole: 'agent', channel });
-    if (shouldRemember(userMessage.content)) {
-      const remembered = await chatMemory.remember({ messageId: userMessage.id, content: userMessage.content, sourceEventId: userEvent?.rawEventId || null });
-      memoryId = remembered?.memory?.memoryId || remembered?.memory?.id || null;
-      if (memoryId) {
-        await growthEvidence.grow({
-          claim: 'Cochpia 正在学习把共同经历纳入后续回应。',
-          evidence: `Memory Module 已形成记忆 ${memoryId}`,
-          sourceMessageId: assistantMessage.id,
-          proposedChange: { traitKey: 'warmth', delta: 0.005 }
-        });
-      }
-    }
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'memory_chat_write_failed', code: error.code || 'MEMORY_MODULE_WRITE_FAILED' }));
-  }
-  return memoryId;
-}
-
-async function handleChatStream(req, res, { regenerateMessageId = null, retry = false } = {}) {
-  const { sessionId, message, provider, model: requestedModel, channel, companionIntent } = req.body || {};
-  const activeChannel = String(channel || '默认').slice(0, 60);
-  const validCompanionIntents = new Set(['listen', 'comfort', 'advice', 'accompany', 'quiet']);
-  if (!sessionId || (!regenerateMessageId && !String(message || '').trim())) return res.status(400).json({ error: 'sessionId and message are required' });
-  if (!getSession(sessionId)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-  if (!state.messages[sessionId]) state.messages[sessionId] = [];
-  const regeneration = regenerateMessageId ? findRegenerationTarget(state.messages[sessionId], regenerateMessageId) : null;
-  if (regenerateMessageId && !regeneration) return fail(res, 404, 'REGENERATE_TARGET_NOT_FOUND', 'Assistant message with a preceding user message was not found');
-  const userMessage = regeneration?.user || { id: randomUUID(), role: 'user', content: String(message).trim().slice(0, 8000), createdAt: new Date().toISOString(), channel: activeChannel };
-  const session = getSession(sessionId);
-  const currentMode = () => session.mode || state.mode || 'companion';
-  const activeCompanionIntent = validCompanionIntents.has(companionIntent) ? companionIntent : (session.companionIntent || 'listen');
-  if (currentMode() === 'companion' && validCompanionIntents.has(companionIntent) && session.companionIntent !== companionIntent) {
-    session.companionIntent = companionIntent;
-    touchSession(session);
-  }
-  const hasRequestSelection = Boolean(provider || requestedModel);
-  const requestedProvider = provider || session.modelProvider || process.env.MODEL_PROVIDER || 'mock';
-  const requestedName = requestedModel || session.modelName || '';
-  const selection = resolveModelSelection(requestedProvider, requestedName);
-  if (!selection.ok) return fail(res, selection.code === 'MODEL_NOT_CONFIGURED' ? 503 : 400, selection.code, selection.error);
-  const selectedModel = createModelProvider(requestedProvider, { model: selection.config.model });
-  if (hasRequestSelection) {
-    session.modelProvider = selection.config.provider;
-    session.modelName = selection.config.model;
-    touchSession(session);
-  }
-  if (!regeneration) {
-    state.messages[sessionId].push(userMessage);
-    try {
-      await saveState(state);
-    } catch (error) {
-      state.messages[sessionId].pop();
-      return fail(res, 503, error.code || 'STORAGE_WRITE_FAILED', error.message);
-    }
-  }
-  const chatMemory = chatMemoryForRequest(req);
-  let recalled = [];
-  let memoryBundle = null;
-  let userEvent = null;
-  try {
-    userEvent = await chatMemory.recordTurn({ eventId: `chat:${sessionId}:${userMessage.id}`, content: userMessage.content, eventRole: 'user', channel: activeChannel });
-    const retrieved = await chatMemory.retrieve(userMessage.content);
-    recalled = retrieved.recalled;
-    memoryBundle = retrieved.bundle;
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'memory_chat_retrieve_failed', code: error.code || 'MEMORY_MODULE_RETRIEVE_FAILED' }));
-  }
-  const assistantMessage = { id: randomUUID(), role: 'assistant', content: '', createdAt: new Date().toISOString(), regeneratedFrom: regeneration?.assistant.id || null, channel: activeChannel };
-  if (regeneration) {
-    regeneration.assistant.supersededAt = new Date().toISOString();
-    regeneration.assistant.supersededBy = assistantMessage.id;
-  }
-  const restoreRegeneration = () => {
-    if (regeneration) {
-      delete regeneration.assistant.supersededAt;
-      delete regeneration.assistant.supersededBy;
-    }
-  };
-  const runKey = runtimeKey(sessionId);
-  if (activeRuns.has(runKey)) return fail(res, 409, 'CHAT_ALREADY_RUNNING', 'A chat run is already active for this session');
-  const run = { id: randomUUID(), key: runKey, userId: currentUserId(), sessionId, controller: new AbortController(), cancelled: false, finished: false, sequence: 0, events: [], response: null, connected: false };
-  activeRuns.set(runKey, run);
-  streamRuns.set(run.id, run);
-  attachStreamResponse(run, res);
-  send(res, 'meta', { runId: run.id, messageId: assistantMessage.id, recalled: recalled.length, protocol: 'cochpia.sse.v1', provider: selectedModel.provider, model: selectedModel.model, regeneratedFrom: regeneration?.assistant.id || null, retry }, run);
-  let summary = session.summary || '';
-  try {
-    const compact = await maybeCompactConversation(session, state.messages[sessionId], selectedModel);
-    summary = compact.summary;
-    if (compact.changed) await saveState(state);
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'compaction_failed', code: error.code || 'COMPACTION_FAILED' }));
-  }
-  // 语言切换工作/陪伴模式
-  const switchTo = detectModeSwitch(userMessage.content);
-  if (switchTo && switchTo !== currentMode()) {
-    session.mode = switchTo;
-    touchSession(session);
-    await saveState(state);
-    assistantMessage.content = switchTo === 'work'
-      ? '已切换到「工作模式」。现在我会以任务为导向，帮你执行具体任务。需要切回时，说「切换到陪伴模式」即可。'
-      : '已切回「陪伴模式」。我会继续像平常一样陪着你。需要工作时，说「切换到工作模式」即可。';
-    state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
-    send(res, 'text', { delta: assistantMessage.content }, run);
-    send(res, 'done', { runId: run.id, messageId: assistantMessage.id, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run);
-    finishRun(run); if (run.response) run.response.end();
-    return;
-  }
-  // 工作模式：优先 Pi RPC（强引擎），失败回退本地工具
-  if (currentMode() === 'work') {
-    try {
-      if (await runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode: currentMode() })) {
-        const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
-        send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, engine: 'pi', mode: currentMode() }, run);
-        finishRun(run); if (run.response) run.response.end(); return;
-      }
-    } catch (error) {
-      console.error(JSON.stringify({ event: 'pi_rpc_unavailable', error: error.code || error.message }));
-    }
-    try {
-      // 工作模式可用独立模型（WORK_MODEL_PROVIDER / WORK_MODEL_NAME），未配置则用会话模型
-      const workProviderName = process.env.WORK_MODEL_PROVIDER || requestedProvider;
-      const workModelName = process.env.WORK_MODEL_NAME || selection.config.model;
-      const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model)
-        ? selectedModel
-        : createModelProvider(workProviderName, { model: workModelName });
-      const rt = buildRuntimeContext({ messages: [], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent });
-      const system = workModel.composeSystemPrompt({ recalled, runtimeContext: rt });
-      const history = state.messages[sessionId].slice(0, -1).slice(-10).map(m => ({ role: m.role, content: m.content }));
-      const conversation = [...history, { role: 'user', content: userMessage.content }];
-      let finalContent = '';
-      for (let step = 0; step < 8; step += 1) {
-        if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
-        const result = await workModel.generateWithTools({ system, messages: conversation, tools: toOpenAITools(), signal: run.controller.signal });
-        if (!result.toolCalls.length) { finalContent = result.content; break; }
-        conversation.push({ role: 'assistant', content: result.content || '', tool_calls: result.toolCalls });
-        for (const tc of result.toolCalls) {
-          const name = tc.function?.name || '';
-          let args = {};
-          try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = {}; }
-          const tool = findTool(name);
-          send(res, 'tool', { runId: run.id, name, args }, run);
-          let toolResult;
-          if (tool?.requiresApproval) {
-            send(res, 'tool_pending', { runId: run.id, toolCallId: tc.id, name, args }, run);
-            const approval = await waitForApproval(run.id, tc.id);
-            if (!approval.approved) {
-              toolResult = '用户拒绝了这次修改';
-              send(res, 'tool_result', { runId: run.id, name, result: toolResult }, run);
-              conversation.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });
-              continue;
-            }
-            toolResult = await executeTool(name, args);
-          } else {
-            toolResult = await executeTool(name, args);
-          }
-          send(res, 'tool_result', { runId: run.id, name, result: String(toolResult).slice(0, 4000) }, run);
-          conversation.push({ role: 'tool', tool_call_id: tc.id, content: String(toolResult).slice(0, 8000) });
-        }
-      }
-      assistantMessage.content = finalContent || '（工具调用未产生最终回复，请换个问法）';
-      state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
-      send(res, 'text', { delta: assistantMessage.content }, run);
-      send(res, 'done', { runId: run.id, messageId: assistantMessage.id, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run);
-      finishRun(run); if (run.response) run.response.end();
-    } catch (error) {
-      send(res, 'error', { code: error.code || 'WORK_MODE_FAILED', message: error.message }, run);
-      send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run);
-      restoreRegeneration(); finishRun(run);
-      if (run.response) run.response.end();
-    }
-    return;
-  }
-  try {
-    for await (const delta of selectedModel.stream({
-      message: userMessage.content,
-      recalled,
-      runtimeContext: buildRuntimeContext({ messages: state.messages[sessionId], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent }),
-      signal: run.controller.signal
-    })) {
-      if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
-      assistantMessage.content += delta;
-      send(res, 'text', { delta }, run);
-    }
-  }
-  catch (error) {
-    if (!run.cancelNotified) { send(res, 'error', { code: error.code || 'MODEL_UNAVAILABLE', message: error.message }, run); send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run); if (run.response) run.response.end(); }
-    restoreRegeneration();
-    finishRun(run);
-    return;
-  }
-  if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
-  let heldMemoryId = null;
-  try {
-    state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
-    heldMemoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
-    await saveState(state);
-  } catch (error) {
-    send(res, 'error', { code: 'FINALIZE_FAILED', message: error.message }, run);
-    send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run);
-    restoreRegeneration();
-    finishRun(run);
-    if (run.response) return run.response.end();
-    return;
-  }
-  send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId: heldMemoryId, personalityVersion: state.personality.version, provider: selectedModel.provider, model: selectedModel.model, regeneratedFrom: regeneration?.assistant.id || null, retry }, run); finishRun(run); if (run.response) run.response.end();
-}
-
-app.post('/api/chat/stream', (req, res) => handleChatStream(req, res));
-app.post('/api/chat/regenerate', (req, res) => handleChatStream(req, res, { regenerateMessageId: String(req.body?.messageId || '').trim() || null }));
-app.post('/api/chat/retry', (req, res) => handleChatStream(req, res, { regenerateMessageId: String(req.body?.messageId || '').trim() || null, retry: true }));
-app.post('/api/chat/group', async (req, res) => {
-  const { sessionId, message, channel } = req.body || {};
-  if (!sessionId || !String(message || '').trim()) return fail(res, 400, 'INVALID_REQUEST', 'sessionId and message are required');
-  const session = getSession(sessionId);
-  if (!session) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-  const activeChannel = String(channel || '默认').slice(0, 60);
-  if (!state.messages[sessionId]) state.messages[sessionId] = [];
-  const userMessage = { id: randomUUID(), role: 'user', content: String(message).trim().slice(0, 8000), createdAt: new Date().toISOString(), channel: activeChannel };
-  state.messages[sessionId].push(userMessage);
-  const agentIds = Array.isArray(session.agentIds) ? session.agentIds : [];
-  const replies = [];
-  for (const agentId of agentIds) {
-    const agent = agents.get(agentId);
-    if (!agent) continue;
-    let content;
-    try {
-      const provider = agent.provider || session.modelProvider || process.env.MODEL_PROVIDER || 'mock';
-      const modelName = agent.model || session.modelName || '';
-      const selection = resolveModelSelection(provider, modelName);
-      let model;
-      if (selection.ok) {
-        model = createModelProvider(provider, { model: selection.config.model });
-      } else {
-        // Agent 模型无效时回退到会话/默认模型（避免落到 mock）
-        const fallbackProvider = session.modelProvider || process.env.MODEL_PROVIDER || 'mock';
-        const fallbackSelection = resolveModelSelection(fallbackProvider, session.modelName || '');
-        model = fallbackSelection.ok ? createModelProvider(fallbackProvider, { model: fallbackSelection.config.model }) : createModelProvider('mock');
-      }
-      content = await model.generate({ message: String(message), recalled: [], runtimeContext: buildRuntimeContext({ messages: state.messages[sessionId], personality: state.personality, persona: agent.persona || session.persona, profile: { ...state.profile, name: agent.name } }) });
-    } catch (error) { content = `（${agent.name} 暂时无法回应）`; }
-    const reply = { id: randomUUID(), role: 'assistant', content: String(content || '').trim(), createdAt: new Date().toISOString(), channel: activeChannel, senderId: agent.id, senderName: agent.name, senderAvatar: agent.avatar };
-    state.messages[sessionId].push(reply);
-    replies.push(reply);
-  }
-  touchSession(session);
-  await saveState(state);
-  res.json({ messages: replies });
-});
+app.post('/api/chat/group', (req, res) => chatRuntime.handleGroupChat(req, res));
 
 app.post('/mcp', async (req, res) => {
   const { id, method, params = {} } = req.body || {};
@@ -929,4 +912,7 @@ app.use((error, req, res, next) => {
 const clientDist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 app.use(express.static(clientDist));
 app.use((_, res) => res.sendFile(path.join(clientDist, 'index.html')));
-app.listen(port, () => console.log(`Cochpia server listening on http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`Cochpia server listening on http://localhost:${port}`);
+  void cleanupOrphanTaskSandboxes({ maxAgeMs: Number(process.env.TASK_SANDBOX_MAX_AGE_MS) || 24 * 60 * 60 * 1000 });
+});
