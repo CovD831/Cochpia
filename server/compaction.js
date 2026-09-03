@@ -5,7 +5,7 @@ export const RECENT_KEEP = 12;
 export async function summarizeConversation(model, messages, existingSummary = '') {
   const transcript = (messages || [])
     .filter(message => message.content)
-    .map(message => `${message.role === 'user' ? '用户' : 'Cochpia'}：${message.content}`)
+    .map(message => `${message.role === 'user' ? '用户' : '助手'}：${message.content}`)
     .join('\n');
   const prompt = [
     '请把下面这段对话历史压缩成简洁摘要，作为后续对话的长期上下文。',

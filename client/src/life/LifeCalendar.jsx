@@ -39,7 +39,7 @@ export default function LifeCalendar() {
         <div className="life-eternal">
           <div className="life-eternal-orb">✦</div>
           <h3>尚未开始计时</h3>
-          <p>Cochpia 默认没有年龄，也没有性别 —— 它只是陪伴本身。<br />你可以为它设定年龄，让它从那一刻起，在玻璃城里长成独一无二的生命。</p>
+          <p>这个角色默认没有年龄，也没有性别。<br />你可以为它设定年龄，让它从那一刻起，在玻璃城里长成独一无二的生命。</p>
           <button type="button" className="select-model" onClick={() => setAge(0)}>为它设定年龄，开始计时</button>
         </div>
       </div>

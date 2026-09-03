@@ -42,7 +42,7 @@ function App() {
   const [authNotice, setAuthNotice] = useState('');
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [sessions, setSessions] = useState([]);
-  const [sessionId, setSessionId] = useState('welcome');
+  const [sessionId, setSessionId] = useState('');
   const [messages, setMessages] = useState([]);
   const [memory, setMemory] = useState({ count: 0, memories: [] });
   const [syncCursor, setSyncCursor] = useState('');
@@ -297,15 +297,18 @@ function App() {
   useEffect(() => {
     if (!authReady || (supabase && !user)) return;
     void loadAgents();
-    refresh().then(async availableSessions => {
-      if (availableSessions[0]?.id) await load(availableSessions[0].id);
-      else setPageState('home');
-    }).catch(err => {
+    refresh().then(() => setPageState('home')).catch(err => {
       // 登录状态切换期间的 401 是预期状态，不应在 Splash 上显示误导性的红色提示。
       if (isAuthenticationError(err) && !user) return;
       setError(err.message);
     });
   }, [authReady, user]);
+
+  useEffect(() => {
+    const openAgentModal = () => { setEditingAgent(null); setAgentModalOpen(true); };
+    window.addEventListener('cochpia:create-agent', openAgentModal);
+    return () => window.removeEventListener('cochpia:create-agent', openAgentModal);
+  }, []);
 
   useEffect(() => {
     if (!authReady || (supabase && !user)) return undefined;

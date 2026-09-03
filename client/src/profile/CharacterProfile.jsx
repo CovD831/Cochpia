@@ -28,7 +28,7 @@ export default function CharacterProfile({ onClose }) {
 
       <div className="profile-section">
         <label className="profile-label" htmlFor="profile-name">名字</label>
-        <input id="profile-name" value={profile.name} onChange={event => setField('name', event.target.value.slice(0, 20))} placeholder="Cochpia" />
+        <input id="profile-name" value={profile.name} onChange={event => setField('name', event.target.value.slice(0, 20))} placeholder="你的名字" />
       </div>
 
       <div className="profile-section">
@@ -75,7 +75,7 @@ export default function CharacterProfile({ onClose }) {
       </div>
 
       <div className="profile-foot">
-        <button type="button" className="text-button muted-button" onClick={reset}>恢复默认（Cochpia · 永恒 · 无性别）</button>
+        <button type="button" className="text-button muted-button" onClick={reset}>恢复默认（永恒 · 无性别）</button>
       </div>
     </div>
   );

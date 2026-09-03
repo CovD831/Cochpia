@@ -8,7 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getStorageStatus, loadState, loadUserState, saveState, storageProvider } from './store.js'; import { createMemoryModuleRuntime } from './memory-module-runtime.js'; import { createGrowthEvidenceService } from './growth-evidence.js';
 import { createModelProvider, listModelProviders, resolveModelConfig, resolveModelSelection } from './model-provider.js'; import { authenticateRequest, authMode, validateAuthStorage } from './auth.js'; import { buildRuntimeContext, findRegenerationTarget } from './runtime-context.js';
-import { createSseEvent, formatSseEvent } from './sse.js'; import { queryCollection } from './collection-query.js'; import { agentAvatar, createAgentService } from './agent-service.js'; import { collectSyncChanges } from './sync-service.js'; import { createObservability } from './observability.js';
+import { createSseEvent, formatSseEvent } from './sse.js'; import { queryCollection } from './collection-query.js'; import { agentAvatar, createAgentService, resolveMessageAvatar } from './agent-service.js'; import { collectSyncChanges } from './sync-service.js'; import { createObservability } from './observability.js';
 import { createMusicService } from './music-service.js'; import { createNeteaseMusicAdapter } from './netease-music-adapter.js'; import { executeTool, findTool, getToolRisk, toOpenAITools } from './tools.js'; import { createPiClient } from './pi-client.js'; import { maybeCompactConversation } from './compaction.js';
 import { mergeState } from './state-merge.js'; import { shouldRemember } from './auto-memory.js'; import { sanitizeWorkspacePreferences } from './workspace-preferences.js'; import { routeMessage } from './dynamic-alpha-router.js'; import { assertProductionDbSsl } from './db-ssl.js'; import { createAgentTaskService } from './agent-task.js';
 import { verifyAgentTask, resolveVerificationWorkdir } from './verifier.js'; import { readTaskPatch, removeTaskSandbox, cleanupOrphanTaskSandboxes } from './task-sandbox.js'; import { loadWorkflowSpec, listWorkflows } from './workflows.js'; import { runCollaborationWorkflow } from './orchestrator.js';
@@ -111,7 +111,7 @@ for (const session of state.sessions) {
   if (!session.modelProvider || !session.modelName) Object.assign(session, defaultModelSelection());
 }
 state.agents ||= [];
-state.profile ||= { name: 'Cochpia', gender: 'none', age: null, avatar: '✦' };
+state.profile ||= { name: '', gender: 'none', age: null, avatar: '✦' };
 state.mode ||= 'companion';
 state.agentTasks ||= [];
 state.evidence ||= [];
@@ -210,7 +210,7 @@ const chatRuntime = createChatRuntime({
   waitForApproval: approvalRegistry.waitForApproval, randomUUID
 });
 
-const routeDeps = { state, saveState, fail, getSession, getMessage, touchSession, currentUserId, sessionBelongsToCurrentUser, agentTaskOwner, agents, music, observability, model, storageProvider, getStorageStatus, listModelProviders, dynamicAlphaObservations, queryCollection, randomUUID, defaultModelSelection, resolveModelSelection, createModelProvider, compatibilityMemoryForRequest, chatMemoryForRequest, memoryRuntime, collectSyncChanges, mergeState, sanitizeWorkspacePreferences, growthEvidence, collaborationRuns, loadWorkflowSpec, listWorkflows, runCollaborationWorkflow, proposals, agentTasks, taskScheduler, taskEvent, recordTaskEvidence, activeAgentRuns, activeVerifications, verifyAgentTask, resolveVerificationWorkdir, path, fs, readTaskPatch, removeTaskSandbox, pendingAgentApprovals, activeRuns, streamRuns, runtimeKey, attachStreamResponse, send, finishRun, approvalRegistry, chatRuntime, workflowHooks };
+const routeDeps = { state, saveState, fail, getSession, getMessage, touchSession, currentUserId, sessionBelongsToCurrentUser, agentTaskOwner, agents, resolveMessageAvatar, music, observability, model, storageProvider, getStorageStatus, listModelProviders, dynamicAlphaObservations, queryCollection, randomUUID, defaultModelSelection, resolveModelSelection, createModelProvider, compatibilityMemoryForRequest, chatMemoryForRequest, memoryRuntime, collectSyncChanges, mergeState, sanitizeWorkspacePreferences, growthEvidence, collaborationRuns, loadWorkflowSpec, listWorkflows, runCollaborationWorkflow, proposals, agentTasks, taskScheduler, taskEvent, recordTaskEvidence, activeAgentRuns, activeVerifications, verifyAgentTask, resolveVerificationWorkdir, path, fs, readTaskPatch, removeTaskSandbox, pendingAgentApprovals, activeRuns, streamRuns, runtimeKey, attachStreamResponse, send, finishRun, approvalRegistry, chatRuntime, workflowHooks };
 app.use('/', createMiscRouter(routeDeps));
 app.use('/', createMusicRouter(routeDeps));
 app.use('/', createSessionsRouter(routeDeps));

@@ -17,6 +17,9 @@ const queryTimeoutMs = Number(process.env.DATABASE_QUERY_TIMEOUT_MS || 15000);
 const retryAttempts = Math.max(1, Number(process.env.STORAGE_RETRY_ATTEMPTS || 3));
 const retryDelaysMs = [500, 1000, 2000];
 const legacyNormalizedUserId = '00000000-0000-0000-0000-000000000001';
+// 用户 state 内存缓存：跨地域 DB 单次查询约几十秒，缓存可让读请求基本秒回。
+const userStateCache = new Map();
+const userStateCacheTtlMs = Math.max(1000, Number(process.env.USER_STATE_CACHE_TTL_MS) || 30_000);
 
 export class StorageError extends Error {
   constructor(code, message, cause) {
@@ -63,17 +66,9 @@ async function withRetry(operation, name) {
 }
 
 const initialState = {
-  sessions: [{ id: 'welcome', title: '第一次相遇', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }],
-  messages: {
-    welcome: [{ id: 'm-1', role: 'assistant', content: '你好，我是 Cochpia。这里会记录我们共同经历过的事，也会把变化保留成可以查看的证据。今天想从哪里开始？', createdAt: new Date().toISOString() }]
-  },
+  sessions: [],
+  messages: {},
   memoryModule: createMemoryModuleState(),
-  personality: {
-    version: 1,
-    traits: [{ key: 'curiosity', label: '好奇心', value: 0.74 }, { key: 'warmth', label: '温度感', value: 0.68 }, { key: 'caution', label: '谨慎度', value: 0.42 }],
-    summary: '温和、好奇，正在学习如何更准确地陪伴。',
-    updatedAt: new Date().toISOString()
-  },
   evidence: [],
 };
 
@@ -150,12 +145,15 @@ function emptyUserState(baseState) {
   next.messages = {};
   next.memories = [];
   next.evidence = [];
+  next.agentTasks = [];
   return next;
 }
 
 export async function loadUserState(userId, baseState) {
   if (storageProvider !== 'postgres' || userId === 'local-user') return baseState;
-  return withRetry(async () => {
+  const cached = userStateCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return JSON.parse(cached.json);
+  const state = await withRetry(async () => {
     const database = await getPostgresPool();
     await database.query('CREATE TABLE IF NOT EXISTS cochpia_user_states (user_id text PRIMARY KEY, state jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())');
     await database.query('CREATE TABLE IF NOT EXISTS cochpia_legacy_claim (id integer PRIMARY KEY CHECK (id = 1), user_id text NOT NULL, claimed_at timestamptz NOT NULL DEFAULT now())');
@@ -178,13 +176,17 @@ export async function loadUserState(userId, baseState) {
     } catch (error) { await database.query('ROLLBACK'); throw error; }
     return next;
   }, 'load_user');
+  userStateCache.set(userId, { json: JSON.stringify(state), expiresAt: Date.now() + userStateCacheTtlMs });
+  return state;
 }
 
 async function saveUserState(userId, state) {
-  return withRetry(async () => {
+  const json = JSON.stringify(state);
+  await withRetry(async () => {
     const database = await getPostgresPool();
-    await database.query('INSERT INTO cochpia_user_states (user_id,state,updated_at) VALUES ($1,$2::jsonb,now()) ON CONFLICT (user_id) DO UPDATE SET state=EXCLUDED.state, updated_at=now()', [userId, JSON.stringify(state)]);
+    await database.query('INSERT INTO cochpia_user_states (user_id,state,updated_at) VALUES ($1,$2::jsonb,now()) ON CONFLICT (user_id) DO UPDATE SET state=EXCLUDED.state, updated_at=now()', [userId, json]);
   }, 'save_user');
+  userStateCache.set(userId, { json, expiresAt: Date.now() + userStateCacheTtlMs });
 }
 
 export function getStorageStatus() {
