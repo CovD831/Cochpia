@@ -190,45 +190,42 @@ export function createChatRuntime(deps) {
       state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId)); send(res, 'text', { delta: assistantMessage.content }, run); send(res, 'done', { runId: run.id, messageId: assistantMessage.id, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run); finishRun(run); if (run.response) run.response.end(); return;
     }
     if (currentMode() === 'work') {
+      // 工作模式：优先让 LLM 直接调用工具（读/写/执行/派发），走统一审批流；模型/供应商不支持工具时才回退 pi RPC。
+      try {
+        const workProviderName = process.env.WORK_MODEL_PROVIDER || requestedProvider;
+        const workModelName = process.env.WORK_MODEL_NAME || selection.config.model;
+        const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model) ? selectedModel : createModelProvider(workProviderName, { model: workModelName });
+        const workRuntime = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, dynamicRouting: { ...routing, placement: routing.placements?.work } });
+        const toolResult = await runModelWithTools({ model: workModel, system: workModel.composeSystemPrompt?.({ recalled, runtimeContext: workRuntime }), messages: state.messages[sessionId].slice(0, -1).slice(-10).map(item => ({ role: item.role, content: item.content })).concat({ role: 'user', content: userMessage.content }), res, run, sessionId });
+        if (toolResult?.cancelled) { restoreRegeneration(); finishRun(run); return; }
+        if (toolResult) {
+          assistantMessage.content = toolResult.content || (toolResult.termination ? toolTerminationMessage(toolResult.termination) : '');
+          if (toolResult.termination) send(res, 'error', { runId: run.id, code: toolResult.termination, message: assistantMessage.content }, run);
+          state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
+          const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
+          await saveState(state);
+          send(res, 'text', { delta: assistantMessage.content }, run);
+          send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run); finishRun(run); if (run.response) run.response.end(); return;
+        }
+      } catch (error) { console.error(JSON.stringify({ event: 'work_tool_loop_failed', error: error.code || error.message })); }
+      // 回退 1：模型/供应商不支持工具调用时，用 pi RPC 子进程执行。
       try {
         if (await runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode: currentMode() })) {
           const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
           send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, engine: 'pi', mode: currentMode() }, run); finishRun(run); if (run.response) run.response.end(); return;
         }
       } catch (error) { console.error(JSON.stringify({ event: 'pi_rpc_unavailable', error: error.code || error.message })); }
+      // 回退 2：普通流式回复。
       try {
         const workProviderName = process.env.WORK_MODEL_PROVIDER || requestedProvider;
         const workModelName = process.env.WORK_MODEL_NAME || selection.config.model;
         const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model) ? selectedModel : createModelProvider(workProviderName, { model: workModelName });
-        const rt = buildRuntimeContext({ messages: [], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, dynamicRouting: { ...routing, placement: routing.placements?.work } });
-        const system = workModel.composeSystemPrompt({ recalled, runtimeContext: rt });
-        const history = state.messages[sessionId].slice(0, -1).slice(-10).map(m => ({ role: m.role, content: m.content }));
-        const conversation = [...history, { role: 'user', content: userMessage.content }];
-        let finalContent = ''; let termination = null; let lastToolSignature = ''; let repeatedToolCalls = 0;
-        for (let step = 0; step < 12; step += 1) {
-          if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
-          const result = await workModel.generateWithTools({ system, messages: conversation, tools: toOpenAITools(), signal: run.controller.signal });
-          if (!result.toolCalls.length) { finalContent = result.content; break; }
-          conversation.push({ role: 'assistant', content: result.content || '', tool_calls: result.toolCalls });
-          for (const tc of result.toolCalls) {
-            const name = tc.function?.name || ''; let args = {};
-            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = {}; }
-            const toolSignature = `${name}:${JSON.stringify(args)}`; repeatedToolCalls = toolSignature === lastToolSignature ? repeatedToolCalls + 1 : 0; lastToolSignature = toolSignature;
-            if (repeatedToolCalls >= 2) { termination = 'TOOL_LOOP_REPEATED'; break; }
-            const tool = findTool(name); send(res, 'tool', { runId: run.id, name, args }, run); let toolResult;
-            if (tool?.requiresApproval) {
-              const risk = getToolRisk(name, args); send(res, 'tool_pending', { runId: run.id, toolCallId: tc.id, name, args, risk }, run);
-              const approval = await waitForApproval(run.id, tc.id, { risk, sessionId });
-              if (!approval.approved) { toolResult = approval.decision === 'interrupt' ? `用户打断了这次修改，补充意见：${approval.feedback || '请先补充上下文'}。请根据意见调整后重试。` : '用户拒绝了这次修改'; send(res, 'tool_result', { runId: run.id, name, result: toolResult }, run); conversation.push({ role: 'tool', tool_call_id: tc.id, content: toolResult }); continue; }
-              toolResult = await executeChatTool(name, args, res, run);
-            } else toolResult = await executeChatTool(name, args, res, run);
-            send(res, 'tool_result', { runId: run.id, name, result: String(toolResult).slice(0, 4000) }, run); conversation.push({ role: 'tool', tool_call_id: tc.id, content: String(toolResult).slice(0, 8000) });
-          }
-          if (termination) break;
-        }
-        termination ||= finalContent ? null : 'TOOL_LOOP_LIMIT'; assistantMessage.content = finalContent || toolTerminationMessage(termination);
-        if (termination) send(res, 'error', { runId: run.id, code: termination, message: assistantMessage.content }, run);
-        state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId)); send(res, 'text', { delta: assistantMessage.content }, run); send(res, 'done', { runId: run.id, messageId: assistantMessage.id, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run); finishRun(run); if (run.response) run.response.end();
+        const workRuntime = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, dynamicRouting: { ...routing, placement: routing.placements?.work } });
+        for await (const delta of workModel.stream({ message: userMessage.content, recalled, runtimeContext: workRuntime, signal: run.controller.signal })) { if (run.cancelled) { restoreRegeneration(); finishRun(run); return; } assistantMessage.content += delta; send(res, 'text', { delta }, run); }
+        state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
+        const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
+        await saveState(state);
+        send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run); finishRun(run); if (run.response) run.response.end();
       } catch (error) { send(res, 'error', { code: error.code || 'WORK_MODE_FAILED', message: error.message }, run); send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run); restoreRegeneration(); finishRun(run); if (run.response) run.response.end(); }
       return;
     }
