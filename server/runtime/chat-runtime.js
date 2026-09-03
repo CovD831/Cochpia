@@ -6,6 +6,7 @@ export function createChatRuntime(deps) {
     recordDynamicAlphaObservation, chatMemoryForRequest, shouldRemember,
     maybeCompactConversation, executeTool, findTool, getToolRisk, toOpenAITools,
     innerContinuity,
+    wakeEngine,
     createPiClient, agentTasks, taskScheduler, send, fail, activeRuns, streamRuns,
     attachStreamResponse, finishRun, chatRunTimeoutMs, waitForApproval, randomUUID
   } = deps;
@@ -152,6 +153,7 @@ export function createChatRuntime(deps) {
     if (regenerateMessageId && !regeneration) return fail(res, 404, 'REGENERATE_TARGET_NOT_FOUND', 'Assistant message with a preceding user message was not found');
     const userMessage = regeneration?.user || { id: randomUUID(), role: 'user', content: String(message).trim().slice(0, 8000), createdAt: new Date().toISOString(), channel: activeChannel };
     const session = getSession(sessionId);
+    await wakeEngine?.reconcileAll?.();
     // 私聊绑定到某个 Agent 时，用该 Agent 的人格与模型覆盖会话默认（群聊走 /api/chat/group，不受此影响）。
     const boundAgent = session?.agentId ? agents.get(session.agentId) : null;
     if (session?.kind === 'private' && session.agentId && !boundAgent) return fail(res, 409, 'AGENT_NOT_FOUND', 'This private session is bound to an agent that no longer exists');
@@ -223,6 +225,7 @@ export function createChatRuntime(deps) {
           state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
           const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
           await saveState(state);
+          await wakeEngine?.kick(boundAgent?.id);
           send(res, 'text', { delta: assistantMessage.content }, run);
           send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run); finishRun(run); if (run.response) run.response.end(); return;
         }
@@ -231,6 +234,7 @@ export function createChatRuntime(deps) {
       try {
         if (await runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode: currentMode() })) {
           const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
+          await wakeEngine?.kick(boundAgent?.id);
           send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, engine: 'pi', mode: currentMode() }, run); finishRun(run); if (run.response) run.response.end(); return;
         }
       } catch (error) { console.error(JSON.stringify({ event: 'pi_rpc_unavailable', error: error.code || error.message })); }
@@ -244,6 +248,7 @@ export function createChatRuntime(deps) {
         state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
         const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
         await saveState(state);
+        await wakeEngine?.kick(boundAgent?.id);
         send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run); finishRun(run); if (run.response) run.response.end();
       } catch (error) { send(res, 'error', { code: error.code || 'WORK_MODE_FAILED', message: error.message }, run); send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run); restoreRegeneration(); finishRun(run); if (run.response) run.response.end(); }
       return;
@@ -259,6 +264,7 @@ export function createChatRuntime(deps) {
     let heldMemoryId = null;
     try { state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId)); heldMemoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel }); await saveState(state); }
     catch (error) { send(res, 'error', { code: 'FINALIZE_FAILED', message: error.message }, run); send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run); restoreRegeneration(); finishRun(run); if (run.response) return run.response.end(); return; }
+    await wakeEngine?.kick(boundAgent?.id);
     send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId: heldMemoryId, provider: selectedModel.provider, model: selectedModel.model, regeneratedFrom: regeneration?.assistant.id || null, retry }, run); finishRun(run); if (run.response) run.response.end();
   }
 
@@ -266,6 +272,7 @@ export function createChatRuntime(deps) {
     const { sessionId, message, channel } = req.body || {};
     if (!sessionId || !String(message || '').trim()) return fail(res, 400, 'INVALID_REQUEST', 'sessionId and message are required');
     const session = getSession(sessionId);
+    await wakeEngine?.reconcileAll?.();
     if (!session) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
     const runKey = runtimeKey(sessionId);
     if (activeRuns.has(runKey)) return fail(res, 409, 'CHAT_ALREADY_RUNNING', 'A chat run is already active for this session');
@@ -298,6 +305,7 @@ export function createChatRuntime(deps) {
     if (session.groupMode === 'turn') { const turnReplies = []; for (const agent of members) { if (run.cancelled) break; const reply = await generateAgentReply(agent, turnReplies); if (reply) turnReplies.push(reply); } replies = turnReplies; }
     else { const settled = await Promise.allSettled(members.map(agent => generateAgentReply(agent))); replies = settled.filter(item => item.status === 'fulfilled' && item.value).map(item => item.value); }
     for (const reply of replies) state.messages[sessionId].push(reply); touchSession(session);
+    for (const reply of replies) await wakeEngine?.kick(reply.senderId);
     try { await saveState(state); } catch (error) { console.error(JSON.stringify({ event: 'group_save_failed', code: error.code || 'STORAGE_WRITE_FAILED' })); }
     for (const reply of replies) { try { await chatMemory.recordTurn({ eventId: `chat:group:${sessionId}:${reply.id}`, content: reply.content, eventRole: 'agent', channel: activeChannel, sourceLabel: reply.senderName || 'Agent', sourceAgentId: reply.senderId || null }); } catch (error) { console.error(JSON.stringify({ event: 'group_memory_record_failed', agentId: reply.senderId, code: error.code || 'MEMORY_MODULE_WRITE_FAILED' })); } }
     send(res, 'done', { runId: run.id, sessionId, messages: replies }, run); finishRun(run); if (run.response && !run.response.writableEnded) run.response.end();

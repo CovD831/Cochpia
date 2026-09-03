@@ -138,6 +138,7 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
     const profileBlock = profileParts.length ? `\n${profileParts.join('，')}` : '';
 
     const reminders = [];
+    if (runtimeContext?.dynamic?.wakeup) reminders.push('本轮是一次主动醒来的机会，沉默是合法结果。');
     if (runtimeContext?.mode === 'work') reminders.push('当前是工作模式：以任务执行为导向，直接、高效地完成用户请求。你可以调用系统提供的工具来完成任务：查看文件/目录/搜索用 ls、read、grep、find；写文件用 write、改文件用 edit；执行命令用 bash；把复杂子任务交给外部执行器用 dispatch_task（可选 codex/pi/claude）。写入、修改、执行、派发等操作需要用户确认后才能进行；工具返回的结果才是真实结果，不要假装已经执行或成功；不确定时直接说明，不要乱调工具。');
     else if (runtimeContext?.companionIntent && runtimeContext.companionIntent !== 'listen') {
       reminders.push(COMPANION_INTENT_LABELS[runtimeContext.companionIntent] || `本轮倾向：${runtimeContext.companionIntent}`);

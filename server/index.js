@@ -12,7 +12,7 @@ import { createSseEvent, formatSseEvent } from './sse.js'; import { queryCollect
 import { createMusicService } from './music-service.js'; import { createNeteaseMusicAdapter } from './netease-music-adapter.js'; import { executeTool, findTool, getToolRisk, toOpenAITools } from './tools.js'; import { createPiClient } from './pi-client.js'; import { maybeCompactConversation } from './compaction.js';
 import { mergeState } from './state-merge.js'; import { shouldRemember } from './auto-memory.js'; import { sanitizeWorkspacePreferences } from './workspace-preferences.js'; import { routeMessage } from './dynamic-alpha-router.js'; import { assertProductionDbSsl } from './db-ssl.js'; import { createAgentTaskService } from './agent-task.js';
 import { verifyAgentTask, resolveVerificationWorkdir } from './verifier.js'; import { readTaskPatch, removeTaskSandbox, cleanupOrphanTaskSandboxes } from './task-sandbox.js'; import { loadWorkflowSpec, listWorkflows } from './workflows.js'; import { runCollaborationWorkflow } from './orchestrator.js';
-import { createEvidenceLedger } from './evidence.js'; import { createProposalService } from './proposals.js'; import { applyProposalPatch } from './code-modifier.js'; import { createRunRegistry } from './runtime/runs.js'; import { createApprovalRegistry } from './runtime/approval.js'; import { createChatRuntime } from './runtime/chat-runtime.js'; import { createAgentRunner } from './runtime/agent-runner.js'; import { createInnerContinuity } from './runtime/inner-continuity.js';
+import { createEvidenceLedger } from './evidence.js'; import { createProposalService } from './proposals.js'; import { applyProposalPatch } from './code-modifier.js'; import { createRunRegistry } from './runtime/runs.js'; import { createApprovalRegistry } from './runtime/approval.js'; import { createChatRuntime } from './runtime/chat-runtime.js'; import { createAgentRunner } from './runtime/agent-runner.js'; import { createInnerContinuity } from './runtime/inner-continuity.js'; import { createWakeEngine } from './runtime/wake-engine.js';
 import { createRouter as createMiscRouter } from './routes/misc.js'; import { createRouter as createMusicRouter } from './routes/music.js'; import { createRouter as createSessionsRouter } from './routes/sessions.js'; import { createRouter as createAgentsRouter } from './routes/agents.js';
 import { createRouter as createMemoriesRouter } from './routes/memories.js'; import { createRouter as createProfileRouter } from './routes/profile.js'; import { createRouter as createWorkflowsRouter } from './routes/workflows.js'; import { createRouter as createWorkbenchRouter } from './routes/workbench.js';
 
@@ -198,6 +198,7 @@ void Promise.all(state.agentTasks.filter(task => ['running', 'verifying'].includ
 const workflowHooks = { trigger: null };
 const { runAgentTask, taskScheduler } = createAgentRunner({ state, agentTasks, createPiClient, activeAgentRuns, pendingAgentApprovals, taskEvent, recordTaskEvidence, workflowHooks });
 const innerContinuity = createInnerContinuity({ state, saveState: currentState => saveState(currentState) });
+const wakeEngine = createWakeEngine({ state, saveState: currentState => saveState(currentState), innerContinuity, agents, model, createModelProvider, resolveModelSelection, getSession, chatMemoryForRequest, randomUUID, agentAvatar, buildRuntimeContext });
 const runRegistry = createRunRegistry({ activeRuns, streamRuns, send, streamRetentionMs });
 const { finishRun, attachStreamResponse } = runRegistry;
 const chatRuntime = createChatRuntime({
@@ -207,6 +208,7 @@ const chatRuntime = createChatRuntime({
   recordDynamicAlphaObservation, chatMemoryForRequest, shouldRemember,
   maybeCompactConversation, executeTool, findTool, getToolRisk, toOpenAITools,
   innerContinuity,
+  wakeEngine,
   createPiClient, agentTasks, taskScheduler, send, fail, activeRuns, streamRuns,
   attachStreamResponse, finishRun, chatRunTimeoutMs,
   waitForApproval: approvalRegistry.waitForApproval, randomUUID

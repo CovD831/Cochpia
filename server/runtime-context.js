@@ -1,6 +1,6 @@
 const MAX_CONTEXT_MESSAGES = 20;
 
-export function buildRuntimeContext({ messages = [], recalled = [], memoryBundle = null, summary = '', persona = '', upcomingEvents = [], profile = null, mode = 'companion', companionIntent = 'listen', dynamicRouting = null, groupContext = null, innerState = null } = {}) {
+export function buildRuntimeContext({ messages = [], recalled = [], memoryBundle = null, summary = '', persona = '', upcomingEvents = [], profile = null, mode = 'companion', companionIntent = 'listen', dynamicRouting = null, groupContext = null, innerState = null, dynamic = null } = {}) {
   return {
     messages: messages.filter(message => !message.supersededAt).slice(-MAX_CONTEXT_MESSAGES).map(message => ({
       id: message.id,
@@ -52,6 +52,12 @@ export function buildRuntimeContext({ messages = [], recalled = [], memoryBundle
       alphaWork: Number(dynamicRouting.alphaWork || 0),
       alphaLove: Number(dynamicRouting.alphaLove || 0),
       placement: String(dynamicRouting.placement || '')
+    } : null,
+    dynamic: dynamic?.wakeup ? {
+      wakeup: {
+        source: String(dynamic.wakeup.source || 'spontaneous'),
+        wakeId: String(dynamic.wakeup.wakeId || '')
+      }
     } : null
   };
 }
