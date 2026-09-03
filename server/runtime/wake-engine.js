@@ -73,8 +73,6 @@ export function createWakeEngine({
     };
   }
 
-  state.wakeStates ||= {};
-  const lambda0 = envNumber('WAKE_LAMBDA0_PER_HOUR', DEFAULT_LAMBDA0);
   const lambdaMin = envNumber('WAKE_LAMBDA_MIN_PER_HOUR', DEFAULT_LAMBDA_MIN);
   const lambdaMax = envNumber('WAKE_LAMBDA_MAX_PER_HOUR', DEFAULT_LAMBDA_MAX);
   const tauD = envNumber('WAKE_TAU_D_MS', DEFAULT_TAU_D);
@@ -90,7 +88,7 @@ export function createWakeEngine({
     return clamp(1 + (DEFAULT_M_MAX - 1) * activation ** DEFAULT_GAMMA, 0.6, 3);
   };
   const calculateRate = (current, agentId, now) => clamp(
-    lambda0 * Math.exp(1.8 * (current.activationDrive - 0.5) + 1.6 * (current.latentActivityTone - 0.5) + 1.2 * current.stochasticDriftState) * modulation(agentId, now),
+    finite(state.wakePreferences?.lambda0PerHour, envNumber('WAKE_LAMBDA0_PER_HOUR', DEFAULT_LAMBDA0)) * Math.exp(1.8 * (current.activationDrive - 0.5) + 1.6 * (current.latentActivityTone - 0.5) + 1.2 * current.stochasticDriftState) * modulation(agentId, now),
     lambdaMin, lambdaMax
   );
   const persist = async () => { if (typeof saveState === 'function') await saveState(state); };
@@ -161,7 +159,7 @@ export function createWakeEngine({
     });
     const decision = parseWakeDecision(result);
     if (!decision || decision.action !== 'message' || !String(decision.message || '').trim()) return { action: 'silent' };
-    const message = { id: randomUUID?.() || `${wakeId}:message`, role: 'assistant', content: String(decision.message).trim().slice(0, 8000), createdAt: new Date().toISOString(), senderId: agent.id, senderName: agent.name, senderAvatar: agentAvatar?.(agent) || agent.name };
+    const message = { id: randomUUID?.() || `${wakeId}:message`, role: 'assistant', content: String(decision.message).trim().slice(0, 8000), createdAt: new Date().toISOString(), source: 'wake', senderId: agent.id, senderName: agent.name, senderAvatar: agentAvatar?.(agent) || agent.name };
     state.messages[session.id] ||= [];
     state.messages[session.id].push(message);
     await persist();
@@ -169,6 +167,7 @@ export function createWakeEngine({
   };
 
   const reconcile = async (agentId, now = Date.now()) => {
+    if (!state.wakePreferences?.enabled) return null;
     state.wakeStates ||= {};
     if (!agentId || !getAgent(agentId)) return null;
     const result = reconcileState(agentId, Number(now));
@@ -185,6 +184,7 @@ export function createWakeEngine({
   };
 
   const kick = async (agentId, now = Date.now()) => {
+    if (!state.wakePreferences?.enabled) return null;
     state.wakeStates ||= {};
     if (!agentId || !getAgent(agentId)) return null;
     const current = getState(agentId, Number(now));
@@ -195,6 +195,7 @@ export function createWakeEngine({
   };
 
   const directWake = async (agentId, reason = 'direct') => {
+    if (!state.wakePreferences?.enabled) return null;
     state.wakeStates ||= {};
     if (!agentId || !getAgent(agentId)) return null;
     const wakeId = `${agentId}:${Date.now()}:direct:${randomUUID?.() || '1'}`;
@@ -212,6 +213,7 @@ export function createWakeEngine({
   };
 
   const reconcileAll = async () => {
+    if (!state.wakePreferences?.enabled) return null;
     state.wakeStates ||= {};
     const list = typeof agents?.list === 'function' ? agents.list() : [];
     for (const agent of list) {

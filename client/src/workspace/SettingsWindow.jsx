@@ -1,4 +1,5 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
 import { FloatingWindow } from '../windows/WindowManager';
 import { useMaterial } from '../material/MaterialProvider';
 import { useWorkspacePreferences } from './WorkspacePreferencesProvider';
@@ -13,7 +14,7 @@ import FeatherIcon from '../icons/FeatherIcon';
 const sections = [
   ['appearance', '外观'], ['typography', '字体'], ['background', '背景'],
   ['sound', '声音'], ['time', '时间'], ['language', '语言'],
-  ['workspace', '工作区'], ['accessibility', '无障碍']
+  ['workspace', '工作区'], ['wake', '主动唤醒'], ['accessibility', '无障碍'], ['data', '数据']
 ];
 
 function SettingRow({ label, children }) { return <label className="setting-row"><span>{label}</span>{children}</label>; }
@@ -21,8 +22,9 @@ function RangeRow({ label, value, min, max, step, onChange, format = item => ite
   return <SettingRow label={<>{label}<b>{format(value)}</b></>}><input type="range" min={min} max={max} step={step} value={value} onChange={event => onChange(Number(event.target.value))} /></SettingRow>;
 }
 
-export function SettingsWindow({ onClose }) {
+export function SettingsWindow({ onClose, onExport, onImport }) {
   const [active, setActive] = useState('appearance');
+  const [wake, setWake] = useState({ enabled: false, lambda0PerHour: 1.5 });
   const { state, setSetting, resetSlice, resetAll } = useWorkspacePreferences();
   const { state: materialState, materialOptions, setWorkspaceMaterial, resetMaterial } = useMaterial();
   const { musicActive, toggleAmbientMusic } = useAudio();
@@ -42,6 +44,17 @@ export function SettingsWindow({ onClose }) {
   const currentSlice = active === 'materials' || active === 'glass' ? 'material' : active;
   const resetCurrent = () => active === 'materials' || active === 'glass' ? resetMaterial() : resetSlice(currentSlice);
   const currentLabel = sections.find(([id]) => id === active)?.[1];
+  useEffect(() => {
+    let mounted = true;
+    api('/api/wake').then(result => { if (mounted && result?.wake) setWake(result.wake); }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+  const patchWake = async patch => {
+    const next = { ...wake, ...patch };
+    setWake(next);
+    try { const result = await api('/api/wake', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }); if (result?.wake) setWake(result.wake); }
+    catch { setWake(wake); }
+  };
 
   return <FloatingWindow id="settings" title={t('settings')}>
     <div className="settings-window-body">
@@ -60,7 +73,9 @@ export function SettingsWindow({ onClose }) {
         {active === 'time' && <><SettingRow label={t('clockFormat')}><select value={state.time.clockFormat} onChange={event => set('time', 'clockFormat')(event.target.value)}><option value="24h">{t('twentyFourHour')}</option><option value="12h">{t('twelveHour')}</option></select></SettingRow><SettingRow label={t('showSeconds')}><input type="checkbox" checked={state.time.showSeconds} onChange={event => set('time', 'showSeconds')(event.target.checked)} /></SettingRow><SettingRow label={t('showDate')}><input type="checkbox" checked={state.time.showDate} onChange={event => set('time', 'showDate')(event.target.checked)} /></SettingRow><SettingRow label={t('timezone')}><select value={state.time.timezoneMode} onChange={event => set('time', 'timezoneMode')(event.target.value)}><option value="system">{t('systemTimezone')}</option><option value="custom">{t('customTimezone')}</option></select></SettingRow>{state.time.timezoneMode === 'custom' && <SettingRow label="IANA 时区"><input className="setting-text-input" value={state.time.timezone || ''} onChange={event => set('time', 'timezone')(event.target.value)} placeholder="Asia/Shanghai" /></SettingRow>}</>}
         {active === 'language' && <><SettingRow label={t('locale')}><select value={state.language.locale} onChange={event => set('language', 'locale')(event.target.value)}><option value="zh-CN">{t('chinese')}</option><option value="en">{t('english')}</option><option value="system">{t('followSystem')}</option></select></SettingRow><p className="settings-note">语言变更会立即更新已注册的界面文本、日期和时间。</p></>}
         {active === 'workspace' && <><SettingRow label="吸附窗口"><input type="checkbox" checked={state.workspace.snapEnabled} onChange={event => set('workspace', 'snapEnabled')(event.target.checked)} /></SettingRow><SettingRow label="显示停靠栏"><input type="checkbox" checked={state.workspace.dockVisible} onChange={event => set('workspace', 'dockVisible')(event.target.checked)} /></SettingRow></>}
+        {active === 'wake' && <><SettingRow label="主动唤醒"><input type="checkbox" checked={wake.enabled} onChange={event => patchWake({ enabled: event.target.checked })} /></SettingRow><SettingRow label="频率档位"><select value={String(wake.lambda0PerHour)} onChange={event => patchWake({ lambda0PerHour: Number(event.target.value) })}><option value="0.5">低</option><option value="1.5">中</option><option value="3">高</option></select></SettingRow><p className="settings-note">开启后，角色可能主动发来消息；保持关闭时不会主动唤醒。</p></>}
         {active === 'accessibility' && <><SettingRow label="高对比度"><input type="checkbox" checked={state.accessibility.highContrast} onChange={event => set('accessibility', 'highContrast')(event.target.checked)} /></SettingRow><SettingRow label="大号文字"><input type="checkbox" checked={state.accessibility.largeText} onChange={event => set('accessibility', 'largeText')(event.target.checked)} /></SettingRow><SettingRow label="显示焦点"><input type="checkbox" checked={state.accessibility.focusVisible} onChange={event => set('accessibility', 'focusVisible')(event.target.checked)} /></SettingRow></>}
+        {active === 'data' && <div className="settings-data-actions"><p className="settings-note">管理当前账户的对话与记忆数据。导入会覆盖服务端对应数据，请先确认文件来源。</p><div className="settings-data-buttons"><button type="button" className="select-model" onClick={onExport}><FeatherIcon name="download" size={15} /> 导出数据</button><label className="select-model"><FeatherIcon name="upload" size={15} /> 导入数据<input type="file" accept="application/json,.json" onChange={onImport} hidden /></label></div></div>}
       </section>
     </div>
   </FloatingWindow>;

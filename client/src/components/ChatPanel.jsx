@@ -95,7 +95,7 @@ export default function ChatPanel({
           <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}>
             <div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || '助') : '你'}</div>
             <div className="message-content">
-              <div className="message-meta">{item.role === 'assistant' ? (item.senderName || '助手') : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>
+              <div className="message-meta">{item.role === 'assistant' ? (item.senderName || '助手') : '你'}{item.source === 'wake' && <span className="agent-badge" title="TA 主动">TA 主动</span>}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>
               {editingMessageId === item.id && item.lastInGroup ? (
                 <div className="message-edit">
                   <textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus />

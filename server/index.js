@@ -15,6 +15,7 @@ import { verifyAgentTask, resolveVerificationWorkdir } from './verifier.js'; imp
 import { createEvidenceLedger } from './evidence.js'; import { createProposalService } from './proposals.js'; import { applyProposalPatch } from './code-modifier.js'; import { createRunRegistry } from './runtime/runs.js'; import { createApprovalRegistry } from './runtime/approval.js'; import { createChatRuntime } from './runtime/chat-runtime.js'; import { createAgentRunner } from './runtime/agent-runner.js'; import { createInnerContinuity } from './runtime/inner-continuity.js'; import { createWakeEngine } from './runtime/wake-engine.js';
 import { createRouter as createMiscRouter } from './routes/misc.js'; import { createRouter as createMusicRouter } from './routes/music.js'; import { createRouter as createSessionsRouter } from './routes/sessions.js'; import { createRouter as createAgentsRouter } from './routes/agents.js';
 import { createRouter as createMemoriesRouter } from './routes/memories.js'; import { createRouter as createProfileRouter } from './routes/profile.js'; import { createRouter as createWorkflowsRouter } from './routes/workflows.js'; import { createRouter as createWorkbenchRouter } from './routes/workbench.js';
+import { createRouter as createWakeRouter } from './routes/wake.js';
 
 const app = express(); const observability = createObservability({ rateLimitMax: Number(process.env.API_RATE_LIMIT_MAX || 120) }); const port = Number(process.env.PORT || 8787);
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
@@ -223,6 +224,7 @@ app.use('/', createMemoriesRouter(routeDeps));
 app.use('/', createProfileRouter(routeDeps));
 app.use('/', createWorkflowsRouter(routeDeps));
 app.use('/', createWorkbenchRouter(routeDeps));
+app.use('/', createWakeRouter(routeDeps));
 
 app.use('/api', (_, res) => fail(res, 404, 'API_ROUTE_NOT_FOUND', 'API route not found'));
 

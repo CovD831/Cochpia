@@ -6,7 +6,7 @@ import { buildRuntimeContext } from '../runtime-context.js';
 const make = ({ enabled = true, model = null, now = 0 } = {}) => {
   const previous = process.env.WAKEUP_ENABLED;
   if (enabled) process.env.WAKEUP_ENABLED = 'true'; else delete process.env.WAKEUP_ENABLED;
-  const state = { agents: [{ id: 'a1', name: 'A', provider: 'mock' }], sessions: [{ id: 's1', kind: 'private', agentId: 'a1' }], messages: { s1: [] } };
+  const state = { agents: [{ id: 'a1', name: 'A', provider: 'mock' }], sessions: [{ id: 's1', kind: 'private', agentId: 'a1' }], messages: { s1: [] }, wakePreferences: { enabled: enabled, lambda0PerHour: 1.5 } };
   let saves = 0;
   const engine = createWakeEngine({ state, saveState: async () => { saves += 1; }, agents: { list: () => state.agents, get: id => state.agents.find(agent => agent.id === id) }, model, randomUUID: () => 'uuid', agentAvatar: agent => agent.name, innerContinuity: { activation: () => 0, snapshot: () => ({ items: [] }) }, buildRuntimeContext, now });
   if (previous === undefined) delete process.env.WAKEUP_ENABLED; else process.env.WAKEUP_ENABLED = previous;
@@ -21,25 +21,38 @@ test('default off does not initialize state, interval, or persistence', async ()
   assert.equal(saves, 0);
 });
 
+test('enabled runtime stays dormant when the current user preference is off', async () => {
+  const { state, engine, saves } = make();
+  state.wakePreferences.enabled = false;
+  assert.equal(await engine.reconcileAll(), null);
+  assert.equal(state.wakeStates, undefined);
+  assert.equal(saves, 0);
+});
+
 test('request-style state proxy lazily initializes wakeStates for each user', async () => {
   const userStates = new Map([
-    ['u1', { agents: [{ id: 'a1', name: 'A' }], sessions: [], messages: {} }],
-    ['u2', { agents: [{ id: 'a1', name: 'A' }], sessions: [], messages: {} }]
+    ['u1', { agents: [{ id: 'a1', name: 'A' }], sessions: [], messages: {}, wakePreferences: { enabled: true, lambda0PerHour: 1.5 } }],
+    ['u2', { agents: [{ id: 'a1', name: 'A' }], sessions: [], messages: {}, wakePreferences: { enabled: true, lambda0PerHour: 1.5 } }]
   ]);
   let active = 'u1';
   const proxy = new Proxy({}, {
     get(_, key) { return userStates.get(active)[key]; },
     set(_, key, value) { userStates.get(active)[key] = value; return true; }
   });
-  process.env.WAKEUP_ENABLED = 'true';
-  const engine = createWakeEngine({ state: proxy, saveState: async () => {}, agents: { get: () => ({ id: 'a1', name: 'A' }), list: () => [{ id: 'a1', name: 'A' }] }, innerContinuity: { activation: () => 0 }, randomUUID: () => 'proxy-id' });
-  await engine.kick('a1', 1000);
-  assert.ok(userStates.get('u1').wakeStates?.a1);
-  active = 'u2';
-  await engine.kick('a1', 1000);
-  assert.ok(userStates.get('u2').wakeStates?.a1);
-  assert.notEqual(userStates.get('u1').wakeStates, userStates.get('u2').wakeStates);
-  engine.stop();
+  const previous = process.env.WAKEUP_ENABLED;
+  try {
+    process.env.WAKEUP_ENABLED = 'true';
+    const engine = createWakeEngine({ state: proxy, saveState: async () => {}, agents: { get: () => ({ id: 'a1', name: 'A' }), list: () => [{ id: 'a1', name: 'A' }] }, innerContinuity: { activation: () => 0 }, randomUUID: () => 'proxy-id' });
+    await engine.kick('a1', 1000);
+    assert.ok(userStates.get('u1').wakeStates?.a1);
+    active = 'u2';
+    await engine.kick('a1', 1000);
+    assert.ok(userStates.get('u2').wakeStates?.a1);
+    assert.notEqual(userStates.get('u1').wakeStates, userStates.get('u2').wakeStates);
+    engine.stop();
+  } finally {
+    if (previous === undefined) delete process.env.WAKEUP_ENABLED; else process.env.WAKEUP_ENABLED = previous;
+  }
 });
 
 test('D/T/X regress to bounded means with deterministic seeded noise', async () => {
@@ -57,9 +70,11 @@ test('D/T/X regress to bounded means with deterministic seeded noise', async () 
 });
 
 test('lambda clamps and modulation maps U to [1, 3]', () => {
-  const { engine } = make();
+  const { state, engine } = make();
   assert.ok(engine.rate('a1', 0) >= .15 && engine.rate('a1', 0) <= 8);
   assert.equal(engine.modulation('a1', 0), 1);
+  state.wakePreferences.lambda0PerHour = 0.5;
+  assert.equal(engine.rate('a1', 0), 0.5);
 });
 
 test('theta remains fixed within a cycle and hazard threshold triggers once', async () => {
@@ -88,5 +103,6 @@ test('wake run uses the agent private session and materializes only message deci
   assert.equal(calls, 1);
   assert.equal(result.outcome.action, 'message');
   assert.equal(state.messages.s1.at(-1).content, '我主动想起你了');
+  assert.equal(state.messages.s1.at(-1).source, 'wake');
   assert.equal(state.wakeStates.a1.events.at(-1).type, 'wake_materialized');
 });
