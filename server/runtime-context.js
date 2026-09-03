@@ -1,6 +1,6 @@
 const MAX_CONTEXT_MESSAGES = 20;
 
-export function buildRuntimeContext({ messages = [], recalled = [], memoryBundle = null, summary = '', persona = '', upcomingEvents = [], profile = null, mode = 'companion', companionIntent = 'listen', dynamicRouting = null, groupContext = null } = {}) {
+export function buildRuntimeContext({ messages = [], recalled = [], memoryBundle = null, summary = '', persona = '', upcomingEvents = [], profile = null, mode = 'companion', companionIntent = 'listen', dynamicRouting = null, groupContext = null, innerState = null } = {}) {
   return {
     messages: messages.filter(message => !message.supersededAt).slice(-MAX_CONTEXT_MESSAGES).map(message => ({
       id: message.id,
@@ -32,6 +32,19 @@ export function buildRuntimeContext({ messages = [], recalled = [], memoryBundle
       description: String(groupContext.description || '').slice(0, 300),
       currentAgent: String(groupContext.currentAgent || '').slice(0, 80),
       members: Array.isArray(groupContext.members) ? groupContext.members.map(member => String(member).slice(0, 80)).filter(Boolean).slice(0, 20) : []
+    } : null,
+    innerState: innerState ? {
+      agentId: String(innerState.agentId || ''),
+      version: Number(innerState.version || 1),
+      anchorAt: innerState.anchorAt || null,
+      updatedAt: innerState.updatedAt || null,
+      items: Array.isArray(innerState.items) ? innerState.items.map(item => ({
+        id: String(item.id || ''),
+        kind: String(item.kind || ''),
+        level: Number(item.level || 0),
+        direction: String(item.direction || 'uncertain'),
+        freshness: Number(item.freshness == null ? 0 : item.freshness)
+      })) : []
     } : null,
     dynamicRouting: dynamicRouting ? {
       decision: String(dynamicRouting.decision || ''),

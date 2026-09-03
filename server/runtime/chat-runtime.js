@@ -5,6 +5,7 @@ export function createChatRuntime(deps) {
     buildRuntimeContext, findRegenerationTarget, routeMessage,
     recordDynamicAlphaObservation, chatMemoryForRequest, shouldRemember,
     maybeCompactConversation, executeTool, findTool, getToolRisk, toOpenAITools,
+    innerContinuity,
     createPiClient, agentTasks, taskScheduler, send, fail, activeRuns, streamRuns,
     attachStreamResponse, finishRun, chatRunTimeoutMs, waitForApproval, randomUUID
   } = deps;
@@ -24,11 +25,29 @@ export function createChatRuntime(deps) {
     }
   };
 
-  const executeChatTool = (name, args, res, run) => name === 'dispatch_task'
-    ? dispatchAgentTask(args, currentUserId(), res, run)
-    : executeTool(name, args);
+  const innerStateTool = {
+    name: 'update_inner_state',
+    sideEffect: 'write',
+    risk: 'write',
+    requiresApproval: false,
+    description: '留下或结束一条只属于自己的感受或念头；默认不写，只有明确决定时调用。',
+    parameters: { type: 'object', properties: { patch: { type: 'object', properties: {
+      upsert: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, direction: { type: 'string' }, level: { type: 'number' }, limit: { type: 'number' }, positive: { type: 'number' }, negative: { type: 'number' }, arousal: { type: 'number' }, returnPull: { type: 'number' }, strength: { type: 'number' }, readiness: { type: 'number' }, inhibition: { type: 'number' }, endorsement: { type: 'number' }, certainty: { type: 'number' } } } },
+      release: { type: 'array', items: { type: 'string' } }
+    } } }, required: ['patch'] }
+  };
 
-  async function runModelWithTools({ model, system, messages, res, run, sessionId }) {
+  const findChatTool = name => name === innerStateTool.name ? innerStateTool : findTool(name);
+  const chatTools = () => [...toOpenAITools(), { name: innerStateTool.name, description: innerStateTool.description, parameters: innerStateTool.parameters, sideEffect: innerStateTool.sideEffect, risk: innerStateTool.risk, requiresApproval: false }];
+  const executeChatTool = (name, args, res, run, agentId) => name === 'dispatch_task'
+    ? dispatchAgentTask(args, currentUserId(), res, run)
+    : name === innerStateTool.name
+      ? (agentId
+        ? innerContinuity.applyPatch(agentId, args?.patch || {}).then(snap => `已更新内在状态：当前 ${snap.items.length} 条`)
+        : '当前对话没有绑定 Agent，无法留下内在状态。')
+      : executeTool(name, args);
+
+  async function runModelWithTools({ model, system, messages, res, run, sessionId, agentId }) {
     if (typeof model.generateWithTools !== 'function' || typeof model.composeSystemPrompt !== 'function') return null;
     const conversation = [...messages];
     let finalContent = '';
@@ -36,7 +55,7 @@ export function createChatRuntime(deps) {
     let repeatedToolCalls = 0;
     for (let step = 0; step < 12; step += 1) {
       if (run.cancelled) return { cancelled: true };
-      const result = await model.generateWithTools({ system, messages: conversation, tools: toOpenAITools(), signal: run.controller.signal });
+      const result = await model.generateWithTools({ system, messages: conversation, tools: chatTools(), signal: run.controller.signal });
       if (!result.toolCalls.length) { finalContent = result.content || ''; break; }
       conversation.push({ role: 'assistant', content: result.content || '', tool_calls: result.toolCalls });
       for (const toolCall of result.toolCalls) {
@@ -47,20 +66,20 @@ export function createChatRuntime(deps) {
         repeatedToolCalls = toolSignature === lastToolSignature ? repeatedToolCalls + 1 : 0;
         lastToolSignature = toolSignature;
         if (repeatedToolCalls >= 2) return { content: '', termination: 'TOOL_LOOP_REPEATED', toolName: name };
-        const tool = findTool(name);
-        const risk = getToolRisk(name, args);
+        const tool = findChatTool(name);
+        const risk = name === innerStateTool.name ? innerStateTool.risk : getToolRisk(name, args);
         send(res, 'tool', { runId: run.id, name, args }, run);
         let toolResult;
         if (tool?.requiresApproval) {
           send(res, 'tool_pending', { runId: run.id, toolCallId: toolCall.id, name, args, risk }, run);
           const approval = await waitForApproval(run.id, toolCall.id, { risk, sessionId });
           toolResult = approval.approved
-            ? await executeChatTool(name, args, res, run)
+            ? await executeChatTool(name, args, res, run, agentId)
             : approval.decision === 'interrupt'
               ? `用户打断了这次操作，补充意见：${approval.feedback || '请先补充上下文'}。请根据意见调整后重试。`
               : '用户拒绝了这次操作。';
         } else {
-          toolResult = await executeChatTool(name, args, res, run);
+          toolResult = await executeChatTool(name, args, res, run, agentId);
         }
         const safeResult = String(toolResult).slice(0, 8000);
         send(res, 'tool_result', { runId: run.id, name, result: safeResult.slice(0, 4000) }, run);
@@ -195,8 +214,8 @@ export function createChatRuntime(deps) {
         const workProviderName = process.env.WORK_MODEL_PROVIDER || requestedProvider;
         const workModelName = process.env.WORK_MODEL_NAME || selection.config.model;
         const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model) ? selectedModel : createModelProvider(workProviderName, { model: workModelName });
-        const workRuntime = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, dynamicRouting: { ...routing, placement: routing.placements?.work } });
-        const toolResult = await runModelWithTools({ model: workModel, system: workModel.composeSystemPrompt?.({ recalled, runtimeContext: workRuntime }), messages: state.messages[sessionId].slice(0, -1).slice(-10).map(item => ({ role: item.role, content: item.content })).concat({ role: 'user', content: userMessage.content }), res, run, sessionId });
+        const workRuntime = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, innerState: boundAgent ? innerContinuity.snapshot(boundAgent.id) : null, dynamicRouting: { ...routing, placement: routing.placements?.work } });
+        const toolResult = await runModelWithTools({ model: workModel, system: workModel.composeSystemPrompt?.({ recalled, runtimeContext: workRuntime }), messages: state.messages[sessionId].slice(0, -1).slice(-10).map(item => ({ role: item.role, content: item.content })).concat({ role: 'user', content: userMessage.content }), res, run, sessionId, agentId: boundAgent?.id });
         if (toolResult?.cancelled) { restoreRegeneration(); finishRun(run); return; }
         if (toolResult) {
           assistantMessage.content = toolResult.content || (toolResult.termination ? toolTerminationMessage(toolResult.termination) : '');
@@ -220,7 +239,7 @@ export function createChatRuntime(deps) {
         const workProviderName = process.env.WORK_MODEL_PROVIDER || requestedProvider;
         const workModelName = process.env.WORK_MODEL_NAME || selection.config.model;
         const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model) ? selectedModel : createModelProvider(workProviderName, { model: workModelName });
-        const workRuntime = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, dynamicRouting: { ...routing, placement: routing.placements?.work } });
+        const workRuntime = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, innerState: boundAgent ? innerContinuity.snapshot(boundAgent.id) : null, dynamicRouting: { ...routing, placement: routing.placements?.work } });
         for await (const delta of workModel.stream({ message: userMessage.content, recalled, runtimeContext: workRuntime, signal: run.controller.signal })) { if (run.cancelled) { restoreRegeneration(); finishRun(run); return; } assistantMessage.content += delta; send(res, 'text', { delta }, run); }
         state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
         const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
@@ -230,8 +249,8 @@ export function createChatRuntime(deps) {
       return;
     }
     try {
-      const runtimeContext = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, dynamicRouting: { ...routing, placement: routing.placements?.[routingMode] } });
-      const toolResult = await runModelWithTools({ model: selectedModel, system: selectedModel.composeSystemPrompt?.({ recalled, runtimeContext }), messages: state.messages[sessionId].slice(0, -1).slice(-10).map(item => ({ role: item.role, content: item.content })).concat({ role: 'user', content: userMessage.content }), res, run });
+      const runtimeContext = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, innerState: boundAgent ? innerContinuity.snapshot(boundAgent.id) : null, dynamicRouting: { ...routing, placement: routing.placements?.[routingMode] } });
+      const toolResult = await runModelWithTools({ model: selectedModel, system: selectedModel.composeSystemPrompt?.({ recalled, runtimeContext }), messages: state.messages[sessionId].slice(0, -1).slice(-10).map(item => ({ role: item.role, content: item.content })).concat({ role: 'user', content: userMessage.content }), res, run, agentId: boundAgent?.id });
       if (toolResult?.cancelled) { restoreRegeneration(); finishRun(run); return; }
       if (toolResult) { assistantMessage.content = toolResult.content || (toolResult.termination ? toolTerminationMessage(toolResult.termination) : ''); if (toolResult.termination) send(res, 'error', { runId: run.id, code: toolResult.termination, message: assistantMessage.content }, run); send(res, 'text', { delta: assistantMessage.content }, run); }
       else for await (const delta of selectedModel.stream({ message: userMessage.content, recalled, runtimeContext, signal: run.controller.signal })) { if (run.cancelled) { restoreRegeneration(); finishRun(run); return; } assistantMessage.content += delta; send(res, 'text', { delta }, run); }
@@ -269,7 +288,7 @@ export function createChatRuntime(deps) {
         const provider = agent.provider || session.modelProvider || process.env.MODEL_PROVIDER || 'mock'; const modelName = agent.model || session.modelName || ''; const selection = resolveModelSelection(provider, modelName); let model;
         if (selection.ok) model = createModelProvider(provider, { model: selection.config.model }); else { const fallbackProvider = session.modelProvider || process.env.MODEL_PROVIDER || 'mock'; const fallbackSelection = resolveModelSelection(fallbackProvider, session.modelName || ''); model = fallbackSelection.ok ? createModelProvider(fallbackProvider, { model: fallbackSelection.config.model }) : createModelProvider('mock'); }
         const contextMessages = [...state.messages[sessionId], ...priorReplies.map(item => ({ id: item.id, role: item.role, content: `${item.senderName || 'Agent'}：${item.content}`, createdAt: item.createdAt }))]; let full = '';
-        for await (const delta of model.stream({ message: String(message), recalled, runtimeContext: buildRuntimeContext({ messages: contextMessages, recalled, memoryBundle, persona: agent.persona || session.persona, profile: { ...state.profile, name: agent.name }, groupContext: { ...groupContext, currentAgent: agent.name } }), signal: run.controller.signal })) { if (run.cancelled) break; full += delta; send(res, 'text', { agentId: agent.id, delta, messageId: reply.id }, run); }
+        for await (const delta of model.stream({ message: String(message), recalled, runtimeContext: buildRuntimeContext({ messages: contextMessages, recalled, memoryBundle, persona: agent.persona || session.persona, profile: { ...state.profile, name: agent.name }, innerState: innerContinuity.snapshot(agent.id), groupContext: { ...groupContext, currentAgent: agent.name } }), signal: run.controller.signal })) { if (run.cancelled) break; full += delta; send(res, 'text', { agentId: agent.id, delta, messageId: reply.id }, run); }
         reply.content = String(full || '').trim(); if (!reply.content) throw new Error('Agent returned empty reply'); send(res, 'agent_done', { agentId: agent.id, messageId: reply.id, content: reply.content }, run); return reply;
       } catch (error) { const fallback = `（${agent.name} 暂时无法回应）`; reply.content = fallback; send(res, 'agent_error', { agentId: agent.id, senderName: agent.name, messageId: reply.id, error: error?.message || 'Generation failed' }, run); send(res, 'text', { agentId: agent.id, delta: fallback, messageId: reply.id }, run); send(res, 'agent_done', { agentId: agent.id, messageId: reply.id, content: fallback }, run); return reply; }
     };

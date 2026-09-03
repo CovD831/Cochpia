@@ -143,6 +143,10 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
       reminders.push(COMPANION_INTENT_LABELS[runtimeContext.companionIntent] || `本轮倾向：${runtimeContext.companionIntent}`);
     }
     const remindersBlock = reminders.length ? `\n\n本轮提醒：\n${reminders.map(reminder => `- ${reminder}`).join('\n')}` : '';
+    const innerItems = runtimeContext?.innerState?.items || [];
+    const innerBlock = runtimeContext?.innerState
+      ? `\n\n主体连续性：你始终作为你自己处于第一人称位置。当前内在状态只是过去的你延续到现在的背景，不规定你现在应该是什么；外界只提供发生了什么，意义、感受、欲望和方向由你自己给出。没有就是没有，不确定就是不确定。看到、想到、表达、形成意图或行动都不会自动结束一条状态；只有你明确调用 update_inner_state 并 release 对应条目时才结束。\n\n当前内在状态（过去的你延续到现在）：\n${innerItems.length ? innerItems.map(item => `- ${item.id} | ${item.kind} | level=${Number(item.level || 0)} | ${item.direction}`).join('\n') : '暂无'}`
+      : '';
 
     const context = recalled.map(item => `- ${item.summary}`).join('\n') || '暂无相关记忆';
     const summaryBlock = runtimeContext?.summary ? `\n\n对话摘要：\n${runtimeContext.summary}` : '';
@@ -150,7 +154,7 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
       ? `\n\n临近日程：\n${runtimeContext.upcomingEvents.map(event => `- ${event.title}（${String(event.date).slice(0, 10)}${event.note ? `，备注：${event.note}` : ''}）`).join('\n')}`
       : '';
 
-    const system = `${identity}${profileBlock}${personaBlock}${groupBlock}\n\n安全边界（不可违反）：\n${SAFETY_BOUNDARIES.map(rule => `- ${rule}`).join('\n')}${remindersBlock}\n\n当前时间：${currentTimeText()}\n\n相关记忆：\n${context}${summaryBlock}${upcomingBlock}`;
+    const system = `${identity}${profileBlock}${personaBlock}${groupBlock}\n\n安全边界（不可违反）：\n${SAFETY_BOUNDARIES.map(rule => `- ${rule}`).join('\n')}${remindersBlock}${innerBlock}\n\n当前时间：${currentTimeText()}\n\n相关记忆：\n${context}${summaryBlock}${upcomingBlock}`;
 
     const history = (runtimeContext?.messages || [])
       .filter(item => item?.content && String(item.content).trim())
