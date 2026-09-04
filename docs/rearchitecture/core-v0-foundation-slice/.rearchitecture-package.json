@@ -2,7 +2,7 @@
   "package_id": "R-002-core-v0-foundation-slice",
   "size": "implementation",
   "baseline_revision": "7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2",
-  "current_revision": "7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2",
+  "current_revision": "70ae31796cae9a1637e67a99c156dad870ac3929",
   "documents": {
     "scope": "00-scope.md",
     "positioning": "01-positioning.md",
@@ -18,11 +18,13 @@
     "l3": "07-l3-task-contract.md",
     "fixtures": "fixtures/README.md",
     "acceptance": "acceptance.md",
-    "rollback": "rollback.md"
+    "rollback": "rollback.md",
+    "review_report": "review-report.json",
+    "review_ledger": "review-ledger.json"
   },
   "review": {
-    "status": "pending",
-    "reviewer": ""
+    "status": "blocked",
+    "reviewer": "01a06d8c-1a15-74d1-8d93-364df45b8bb2"
   },
   "next_task": {
     "id": "R-002-PREFLIGHT-REVIEW",

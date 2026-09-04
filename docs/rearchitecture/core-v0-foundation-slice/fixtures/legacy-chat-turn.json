@@ -10,6 +10,8 @@
   "expected": {
     "legacy": true,
     "assistantResult": "deterministic-fixture-response",
-    "comparisonOnly": true
+    "comparisonOnly": true,
+    "knownGaps": ["legacy-route-has-no-client-idempotency-key", "legacy-route-may-use-null-memory-session"],
+    "minimumObservationKeys": ["httpStatus", "assistantMessageCount", "memoryReceipt", "checkpoint"]
   }
 }

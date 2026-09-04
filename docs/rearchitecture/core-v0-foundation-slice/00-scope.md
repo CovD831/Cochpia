@@ -8,6 +8,10 @@
 - Design authority: [`R-001 Core v0 design`](../core-v0-design/00-scope.md)
 - Product plan: [`companion-core-foundation-plan.md`](../../companion-core-foundation-plan.md)
 
+## Package revision provenance
+
+The manifest keeps `7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2` as the design baseline and must set `current_revision` to the commit that freezes this package. A package review input and the manifest's current revision must refer to the same commit.
+
 ## Objective
 
 Freeze the smallest implementable Memory-first chat slice and its evidence gates:
@@ -37,4 +41,3 @@ This package is the implementation preflight. It defines the L3 contract, durabl
 - closing GitHub PRs or making production-readiness claims.
 
 Runtime code is not authorized by this preflight until its own review gate is satisfied and the R-001 blocking findings have evidence-backed closure.
-

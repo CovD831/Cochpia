@@ -14,9 +14,9 @@ The stable L2 definitions are inherited from [`R-001 L2`](../core-v0-design/04-l
 
 **Queries/views:** bounded `MemoryContextView`, never mutable Memory records.
 
-**Receipts:** binding receipt, raw-event receipt and retrieval status.
+**Receipts and reconciliation:** binding receipt, raw-event receipt, `getSessionBinding(bindingKey)`, `getRawEventReceipt(eventId, sourceRevision)` and a bounded reconciliation result. The same binding key and event IDs are used for every retry.
 
-**Failure:** retrieval may be `available`, `degraded`, `not_found` or `uncertain`; append/binding returns `pending` or `failed` when durable admission is not known.
+**Failure:** retrieval may be `available`, `degraded`, `not_found` or `uncertain`; append/binding returns `pending` or `failed` when durable admission is not known. A missing response is not treated as `not_found` unless the adapter's read-after-write lookup completed.
 
 ## Companion Durable Store
 
@@ -25,6 +25,8 @@ The stable L2 definitions are inherited from [`R-001 L2`](../core-v0-design/04-l
 **Records:** `memory_session_binding`, `turn_admission`, `conversation_message` and `assistant_commit`.
 
 **Invariant:** a user turn is not exposed as an admitted/completed turn until the corresponding durable record and required Memory receipt exist.
+
+**Idempotent writes/queries:** `upsertTurnAdmission`, `getTurnAdmission`, `upsertAssistantCommit`, `getAssistantCommitReceipt` and `reconcileTurn` use the persisted turn/commit IDs. An already-completed assistant commit is returned, never inserted again.
 
 ## Context Builder
 
@@ -46,3 +48,6 @@ The stable L2 definitions are inherited from [`R-001 L2`](../core-v0-design/04-l
 
 Durable receipts use `pending`, `processing`, `completed`, `failed` and `dead_letter`; the target API may present `admitted`, `commit_pending` and `degraded` as domain statuses with an explicit mapping. `applied` and `retrying` are not new persisted states.
 
+## Ingress policy
+
+`POST /v1/events`, `/v1/sessions` and `/v1/memories` mutations require a verified internal service identity with configured issuer/audience, unexpired bearer credentials (or an equivalent mTLS-authenticated identity), producer `companion-core`, correlation ID and idempotency key. Missing/invalid service identity is `403 MEMORY_SERVICE_IDENTITY_REQUIRED`; missing mutation context is `400 MEMORY_WRITE_CONTEXT_REQUIRED`. A trusted header alone is never sufficient.

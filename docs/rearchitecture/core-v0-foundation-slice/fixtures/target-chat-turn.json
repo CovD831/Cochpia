@@ -15,6 +15,10 @@
     "memorySessionId": "fixture-memory-session-01",
     "applicationMessageId": "stable-per-admission",
     "eventId": "stable-per-admission",
-    "assistantResult": "deterministic-fixture-response"
+    "assistantResult": "deterministic-fixture-response",
+    "memoryPortCalls": {"ensureBinding": 1, "appendRawEvent": 1, "retrieveContext": 1},
+    "modelCalls": 1,
+    "durableReceiptStatuses": ["completed"],
+    "checkpointKeys": ["turnId", "applicationMessageId", "eventId", "sourceRevision"]
   }
 }

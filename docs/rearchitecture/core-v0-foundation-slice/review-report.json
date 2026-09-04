@@ -1,0 +1,81 @@
+{
+  "package_id": "R-002-core-v0-foundation-slice",
+  "input_revision": "70ae31796cae9a1637e67a99c156dad870ac3929",
+  "reviewer": "01a06d8c-1a15-74d1-8d93-364df45b8bb2",
+  "review_mode": "implementation-preflight",
+  "findings": [
+    {
+      "id": "R002-F-001",
+      "severity": "blocking",
+      "statement": "Binding contract does not actually state two independent bidirectional unique constraints or the bindingKey, race winner, pending receipt and repair behavior needed to prevent session drift.",
+      "evidence_refs": [
+        "docs/rearchitecture/core-v0-foundation-slice/07-l3-task-contract.md",
+        "docs/rearchitecture/core-v0-foundation-slice/05-adr.md"
+      ],
+      "recommendation": "Freeze independent uniqueness for applicationSessionId and memorySessionId, deterministic bindingKey, concurrent creation behavior and binding receipt queries."
+    },
+    {
+      "id": "R002-F-002",
+      "severity": "blocking",
+      "statement": "Unknown admission or assistant-commit outcomes cannot yet be reconciled from a defined durable receipt query contract, so a lost response could cause a duplicate external write.",
+      "evidence_refs": [
+        "docs/rearchitecture/core-v0-foundation-slice/04-l2-contracts.md",
+        "docs/rearchitecture/core-v0-foundation-slice/07-l3-task-contract.md"
+      ],
+      "recommendation": "Define deterministic IDs, idempotent upsert/get operations, unknown state, reconciliation and visibility rules for binding, raw event, assistant message and commit receipt."
+    },
+    {
+      "id": "R002-F-003",
+      "severity": "blocking",
+      "statement": "The /v1 and public Memory mutation ingress boundary is not frozen: current /v1 can map ordinary requests to user context, /v1/events does not require an idempotency key, and /api/memories can write through the compatibility adapter.",
+      "evidence_refs": [
+        "docs/rearchitecture/core-v0-foundation-slice/03-current-to-target-map.md",
+        "server/index.js",
+        "server/memory-module-runtime.js",
+        "server/memory-module-api.js"
+      ],
+      "recommendation": "Specify verified service identity, required producer/correlation/idempotency fields, rejection codes and whether /api/memories is a scoped governance adapter or blocked."
+    },
+    {
+      "id": "R002-F-004",
+      "severity": "blocking",
+      "statement": "Fixtures and acceptance were only data and future command references; no executable harness, failure injection, call-count oracle, restart check or ingress test existed at the frozen revision.",
+      "evidence_refs": [
+        "docs/rearchitecture/core-v0-foundation-slice/acceptance.md",
+        "docs/rearchitecture/core-v0-foundation-slice/fixtures/legacy-chat-turn.json",
+        "docs/rearchitecture/core-v0-foundation-slice/fixtures/target-chat-turn.json"
+      ],
+      "recommendation": "Add executable fixture/schema tests and an acceptance harness that reports pending until the target runtime is supplied; runtime evidence must cover duplicate, conflict, unknown, commit visibility, restart and ingress bypass."
+    },
+    {
+      "id": "R002-F-005",
+      "severity": "blocking",
+      "statement": "The package manifest current revision did not match the review input revision, so package provenance was ambiguous even though the structural checker passed.",
+      "evidence_refs": [
+        "docs/rearchitecture/core-v0-foundation-slice/.rearchitecture-package.json",
+        "docs/rearchitecture/core-v0-foundation-slice/00-scope.md"
+      ],
+      "recommendation": "Keep the design baseline separate from the frozen package revision and align current_revision with the commit that contains the package."
+    },
+    {
+      "id": "R002-F-006",
+      "severity": "non-blocking",
+      "statement": "Feature rollback covers pending and unknown records but needs an explicit in-flight drain barrier and evidence for distinguishing no external effect from unknown outcome.",
+      "evidence_refs": [
+        "docs/rearchitecture/core-v0-foundation-slice/rollback.md"
+      ],
+      "recommendation": "Add an in-flight barrier, bounded drain timeout and operator repair record."
+    }
+  ],
+  "steelman": {
+    "strongest_support": "The package keeps the slice small, separates legacy and target routes, prohibits dual writable Memory authorities, makes identity server-owned, and treats pending as an honest unknown outcome.",
+    "strongest_opposition": "Most of the package was still declarative at the frozen revision; without executable target runtime evidence, a precise contract can still fail at the route and persistence seams.",
+    "decision_refs": [
+      "docs/rearchitecture/core-v0-foundation-slice/07-l3-task-contract.md",
+      "docs/rearchitecture/core-v0-foundation-slice/03-current-to-target-map.md",
+      "docs/rearchitecture/core-v0-foundation-slice/acceptance.md",
+      "docs/rearchitecture/core-v0-foundation-slice/rollback.md"
+    ]
+  },
+  "overall": "blocked"
+}
