@@ -1,0 +1,20 @@
+{
+  "scenario": "core-v0-single-chat-turn",
+  "path": "/api/chat/turns",
+  "request": {
+    "sessionId": "fixture-app-session-01",
+    "message": "我今天有点累",
+    "channel": "默认",
+    "headers": {
+      "Idempotency-Key": "fixture-turn-key-01"
+    }
+  },
+  "expected": {
+    "status": "committed",
+    "applicationSessionId": "fixture-app-session-01",
+    "memorySessionId": "fixture-memory-session-01",
+    "applicationMessageId": "stable-per-admission",
+    "eventId": "stable-per-admission",
+    "assistantResult": "deterministic-fixture-response"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "package_id": "R-002-core-v0-foundation-slice",
+  "size": "implementation",
+  "baseline_revision": "7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2",
+  "current_revision": "7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2",
+  "documents": {
+    "scope": "00-scope.md",
+    "positioning": "01-positioning.md",
+    "l1": "02-l1-target.md",
+    "mapping": "03-current-to-target-map.md",
+    "l2": [
+      "04-l2-contracts.md"
+    ],
+    "adr": [
+      "05-adr.md"
+    ],
+    "handoff": "06-handoff.md",
+    "l3": "07-l3-task-contract.md",
+    "fixtures": "fixtures/README.md",
+    "acceptance": "acceptance.md",
+    "rollback": "rollback.md"
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": ""
+  },
+  "next_task": {
+    "id": "R-002-PREFLIGHT-REVIEW",
+    "owner": "Codex + CovD"
+  },
+  "advancement_trigger": "An independent review confirms the L3 mapping, ingress enforcement, fixture oracles and rollback boundary; then runtime implementation may begin only under the R-001 gate.",
+  "stop_rule": "Stop before code if the binding has no unique durable identity, public Memory writes can bypass admission, or unknown external outcomes cannot be replayed safely."
+}

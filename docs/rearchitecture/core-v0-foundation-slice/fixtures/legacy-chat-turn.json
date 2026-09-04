@@ -1,0 +1,15 @@
+{
+  "scenario": "core-v0-single-chat-turn",
+  "path": "/api/chat/stream",
+  "request": {
+    "sessionId": "fixture-app-session-01",
+    "message": "我今天有点累",
+    "channel": "默认",
+    "provider": "mock"
+  },
+  "expected": {
+    "legacy": true,
+    "assistantResult": "deterministic-fixture-response",
+    "comparisonOnly": true
+  }
+}
