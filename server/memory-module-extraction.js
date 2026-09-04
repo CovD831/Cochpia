@@ -45,22 +45,35 @@ function validateCandidate(candidate, event) {
   };
 }
 
+// 群聊/多 agent 场景：agent 说话提取出的默认 user 作用域候选，重映射为「该 agent 的关系作用域」，
+// 避免把 agent 的观察当成用户全局事实，并利用作用域做 agent 间隔离。
+function attributeScope(candidate, event) {
+  const sourceAgentId = event.metadata?.source_agent_id || null;
+  if (sourceAgentId && event.eventRole === 'agent' && candidate.scopeType === 'user') {
+    return { ...candidate, scopeType: 'relationship', relationshipAgentId: sourceAgentId };
+  }
+  return candidate;
+}
+
 export async function extractCandidates({ event, modelGateway = null, allowSensitiveModelInput = false } = {}) {
   if (!event || !event.id || !event.content) return { status: 'invalid_event', candidates: [], modelCalled: false };
   if (isSecretMemoryContent(event.content)) return { status: 'blocked_s3', candidates: [], modelCalled: false };
   const eventSensitivity = classifyMemorySensitivity({ content: event.content });
   if (eventSensitivity === 'S2' && !allowSensitiveModelInput) return { status: 'quarantined_sensitive_input', candidates: [], modelCalled: false };
-  if (!modelGateway) return { status: 'heuristic', candidates: heuristicCandidates(event).map(candidate => validateCandidate(candidate, event)).filter(Boolean), modelCalled: false };
+  if (!modelGateway) return { status: 'heuristic', candidates: heuristicCandidates(event).map(candidate => validateCandidate(candidate, event)).filter(Boolean).map(candidate => attributeScope(candidate, event)), modelCalled: false };
   if (typeof modelGateway.extract !== 'function') return { status: 'invalid_model_gateway', candidates: [], modelCalled: false };
+  const sourceAgentId = event.metadata?.source_agent_id || null;
   const modelResult = await modelGateway.extract({
     eventId: event.id,
     content: event.content,
     eventRole: event.eventRole,
     sessionId: event.sessionId,
-    sourceRevision: event.sourceRevision
+    sourceRevision: event.sourceRevision,
+    sourceLabel: event.metadata?.source_label || null,
+    sourceAgentId
   }, { allowSensitiveInput: allowSensitiveModelInput });
   const rawCandidates = Array.isArray(modelResult) ? modelResult : modelResult?.candidates;
   if (!Array.isArray(rawCandidates)) return { status: 'quarantined_schema', candidates: [], modelCalled: true };
-  const candidates = rawCandidates.slice(0, 10).map(candidate => validateCandidate(candidate, event)).filter(Boolean);
+  const candidates = rawCandidates.slice(0, 10).map(candidate => validateCandidate(candidate, event)).filter(Boolean).map(candidate => attributeScope(candidate, event));
   return { status: 'model', candidates, modelCalled: true };
 }

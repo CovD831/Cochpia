@@ -92,12 +92,13 @@ export function createChatMemoryAdapter({ memoryModule, state, context, persistS
     }
   };
 
-  const retrieve = async query => {
+  const retrieve = async (query, agentId = null) => {
     await ensureLegacyImport();
     const bundle = await memoryModule.contextBundleAsync(context, {
       query: String(query || '').slice(0, 1000),
       purpose: 'answer_user_query',
-      tokenBudget: 1800
+      tokenBudget: 1800,
+      ...(agentId ? { agentId } : {})
     });
     return { bundle, recalled: memoryBundleToRecalled(bundle) };
   };
@@ -108,7 +109,7 @@ export function createChatMemoryAdapter({ memoryModule, state, context, persistS
     return { bundle, memories: memoryBundleToOverview(bundle) };
   };
 
-  const recordTurn = async ({ eventId, content, eventRole, sourceRevision = '1', channel = '默认' } = {}) => {
+  const recordTurn = async ({ eventId, content, eventRole, sourceRevision = '1', channel = '默认', sourceLabel = null, sourceAgentId = null } = {}) => {
     if (!String(content || '').trim()) return null;
     return memoryModule.recordEvent(context, {
       eventId,
@@ -117,7 +118,7 @@ export function createChatMemoryAdapter({ memoryModule, state, context, persistS
       eventRole,
       contentType: 'plain_text',
       isStreamFinal: true,
-      metadata: { channel: String(channel || '默认').slice(0, 200) }
+      metadata: { channel: String(channel || '默认').slice(0, 200), ...(sourceLabel ? { source_label: String(sourceLabel).slice(0, 200) } : {}), ...(sourceAgentId ? { source_agent_id: String(sourceAgentId).slice(0, 200) } : {}) }
     });
   };
 

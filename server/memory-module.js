@@ -151,7 +151,7 @@ function detectS2(content) {
 function sanitizeMetadata(metadata) {
   if (metadata == null) return {};
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new MemoryModuleError('INVALID_METADATA', 'metadata must be an object');
-  const allowed = new Set(['language', 'channel', 'source_label', 'client_revision', 'turn_id', 'sequence_no']);
+  const allowed = new Set(['language', 'channel', 'source_label', 'source_agent_id', 'client_revision', 'turn_id', 'sequence_no']);
   if (Object.keys(metadata).some(key => !allowed.has(key))) throw new MemoryModuleError('INVALID_METADATA', 'metadata contains unsupported fields');
   return Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, normalizeText(value, 200)]));
 }
@@ -921,12 +921,30 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return { status: 'active', memory: serializeAssertion(state, assertion, { includeGovernance: true }), consistencyToken: tokenFor(state, context) };
   };
 
+  const sourceAgentIdsForAssertion = (assertion, versionId = null) => {
+    const version = versionId ? findVersion(state, versionId) : currentVersion(state, assertion);
+    return (state.assertionVersionSources || [])
+      .filter(source => source.versionId === version?.id && source.sourceType === 'raw_event')
+      .map(source => (state.rawEvents || []).find(event => event.id === source.sourceId)?.metadata?.source_agent_id || null);
+  };
+  const assertionMatchesAgent = (assertion, agentId, versionId = null) => {
+    if (!agentId || !assertion) return true;
+    if (assertion.scopeType === 'relationship') return assertion.relationshipAgentId === agentId;
+    return sourceAgentIdsForAssertion(assertion, versionId).every(sourceAgentId => !sourceAgentId || sourceAgentId === agentId);
+  };
+  const currentStateMatchesAgent = (currentState, agentId) => !agentId || !currentState?.agentId || currentState.agentId === agentId;
+  const filterRetrievedItemsByAgent = (items, agentId) => !agentId ? items : items.filter(item => {
+    const assertion = item.assertion || state.assertions.find(candidate => candidate.id === (item.memoryId || item.id));
+    return assertion ? assertionMatchesAgent(assertion, agentId) : currentStateMatchesAgent(item.currentState, agentId);
+  });
+
   const list = (rawContext, options = {}) => {
     const context = contextOf(rawContext);
     const purpose = options.purpose || 'profile_view';
     const scopeType = options.scopeType ?? options.scope_type ?? null;
     const sensitivity = options.sensitivity ?? null;
     const status = options.status ?? null;
+    const agentId = normalizeText(options.agentId ?? options.agent_id, 200) || null;
     assertEnum(purpose, allowedPurposes, 'INVALID_PURPOSE', 'purpose');
     let cursor = null;
     const cursorValue = options.cursor ?? options.nextCursor ?? options.next_cursor;
@@ -944,6 +962,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       .filter(assertion => !scopeType || assertion.scopeType === scopeType)
       .filter(assertion => !sensitivity || assertion.sensitivity === sensitivity)
       .filter(assertion => !status || assertion.status === status)
+      .filter(assertion => assertionMatchesAgent(assertion, agentId))
       .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt) || String(b.id).localeCompare(String(a.id)));
     const page = pageNewestFirst(visible.map(assertion => ({ assertion, id: assertion.id, sortValue: assertion.updatedAt })), {
       cursor,
@@ -968,7 +987,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     assertEnum(purpose, allowedPurposes, 'INVALID_PURPOSE', 'purpose');
     const query = normalizeText(input.query, 1000).toLowerCase();
     if (!query) throw new MemoryModuleError('INVALID_QUERY', 'query is required');
-    return { context, purpose, query, queryRoute: routeMemoryQuery(query) };
+    return { context, purpose, query, queryRoute: routeMemoryQuery(query), agentId: normalizeText(input.agentId ?? input.agent_id, 200) || null };
   };
 
   const activeSessionForContext = context => {
@@ -1012,7 +1031,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return rankedItems.filter(item => !mentionCooldownActive(context, item.assertion, topicKey));
   };
 
-  const retrievalDocuments = (context, purpose, queryRoute = 'unknown') => {
+  const retrievalDocuments = (context, purpose, queryRoute = 'unknown', agentId = null) => {
     if (queryRoute === 'state_current') {
       if (purpose === 'proactive_mention') return [];
       const activeSession = activeSessionForContext(context);
@@ -1022,9 +1041,10 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
         .filter(currentState => currentState.status === 'active' && new Date(currentState.expiresAt).getTime() > Date.now())
         .filter(currentState => currentState.sessionId === activeSession.id)
         .filter(currentState => context.actorType !== 'agent' || currentState.agentId === context.callerAgentId)
+        .filter(currentState => currentStateMatchesAgent(currentState, agentId))
         .map(currentState => ({ id: currentState.id, text: `${currentState.stateType} ${currentState.value}`, currentState }));
     }
-    return state.assertions.filter(assertion => canSee(state, context, assertion, purpose)).map(assertion => {
+    return state.assertions.filter(assertion => canSee(state, context, assertion, purpose)).filter(assertion => assertionMatchesAgent(assertion, agentId)).map(assertion => {
       const version = currentVersion(state, assertion);
       const indexDocument = (state.indexDocuments || []).find(item => item.sourceId === assertion.id && item.sourceVersion === version?.id && item.indexStatus === 'active');
       return { id: assertion.id, text: `${version?.content || ''} ${JSON.stringify(version?.structuredData || {})}`, embedding: indexDocument?.embedding || null, assertion };
@@ -1059,29 +1079,29 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   };
 
   const retrieve = (rawContext, input = {}) => {
-    const { context, purpose, query, queryRoute } = retrieveInputs(rawContext, input);
+    const { context, purpose, query, queryRoute, agentId } = retrieveInputs(rawContext, input);
     if (purpose === 'proactive_mention' && !proactiveMentionEnabled) return proactiveMentionDisabledResult(context, { ...input, queryRoute });
-    const lexical = bm25Search(retrievalDocuments(context, purpose, queryRoute), query, { limit: 50 });
+    const lexical = bm25Search(retrievalDocuments(context, purpose, queryRoute, agentId), query, { limit: 50 });
     return finalizeRetrieve(context, { ...input, queryRoute }, lexical, 'bm25');
   };
 
   const retrieveAsync = async (rawContext, input = {}) => {
-    const { context, purpose, query, queryRoute } = retrieveInputs(rawContext, input);
+    const { context, purpose, query, queryRoute, agentId } = retrieveInputs(rawContext, input);
     if (purpose === 'proactive_mention' && !proactiveMentionEnabled) return proactiveMentionDisabledResult(context, { ...input, queryRoute });
     if (nativeRetriever) {
       try {
-        const native = await nativeRetriever(context, { ...input, purpose, query, queryRoute });
+        const native = await nativeRetriever(context, { ...input, purpose, query, queryRoute, agentId });
         if (native && Array.isArray(native.items)) {
           const consistencyToken = input.consistency_token || input.consistencyToken;
           const hasConsistencyToken = consistencyToken
             && Number.isInteger(Number(consistencyToken.sourceCommitSeq ?? consistencyToken.source_commit_seq))
             && Number(consistencyToken.sourceCommitSeq ?? consistencyToken.source_commit_seq) > 0;
-          let rankedItems = native.items;
+          let rankedItems = filterRetrievedItemsByAgent(native.items, agentId);
           let retrievalMode = native.retrievalMode || 'postgres_native';
           if (hasConsistencyToken) {
-            const canonicalItems = bm25Search(retrievalDocuments(context, purpose, queryRoute), query, { limit: 50 });
+            const canonicalItems = bm25Search(retrievalDocuments(context, purpose, queryRoute, agentId), query, { limit: 50 });
             if (canonicalItems.length) {
-              const merged = new Map(native.items.map(item => [item.id || item.memoryId, item]));
+              const merged = new Map(rankedItems.map(item => [item.id || item.memoryId, item]));
               for (const item of canonicalItems) {
                 const key = item.id || item.memoryId;
                 if (key && !merged.has(key)) merged.set(key, item);
@@ -1098,7 +1118,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
         if (input.requireNativeRetrieval === true) throw error;
       }
     }
-    const documents = retrievalDocuments(context, purpose, queryRoute);
+    const documents = retrievalDocuments(context, purpose, queryRoute, agentId);
     const hybridEnabled = featureFlags.hybridRetrieval === true;
     const vectorEnabled = featureFlags.vectorRetrieval === true;
     let result;
@@ -1116,7 +1136,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return result;
   };
 
-  const relevantEpisodes = (context, query = '', purpose = 'answer_user_query') => {
+  const relevantEpisodes = (context, query = '', purpose = 'answer_user_query', agentId = null) => {
     const isAgent = context.actorType === 'agent';
     const canContextualize = !isAgent || state.scopeGrants.some(grant => grant.tenantId === context.tenantId
       && grant.subjectUserId === context.subjectUserId
@@ -1132,6 +1152,13 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       .filter(episode => episode.tenantId === context.tenantId && episode.userId === context.subjectUserId && episode.status === 'active')
       .filter(episode => episode.scopeType !== 'relationship' || !isAgent || episode.relationshipAgentId === context.callerAgentId)
       .filter(episode => episode.scopeType !== 'session' || (activeSession && episode.sessionId === activeSession.id))
+      .filter(episode => !agentId || (episode.scopeType === 'relationship'
+        ? episode.relationshipAgentId === agentId
+        : (state.episodeMembers || []).filter(member => member.episodeId === episode.id && member.rawEventId).every(member => {
+          const event = (state.rawEvents || []).find(candidate => candidate.id === member.rawEventId);
+          const sourceAgentId = event?.metadata?.source_agent_id || null;
+          return !sourceAgentId || sourceAgentId === agentId;
+        })))
       .filter(episode => !(state.episodeMembers || []).some(member => {
         if (member.episodeId !== episode.id || !member.rawEventId) return false;
         const event = (state.rawEvents || []).find(candidate => candidate.id === member.rawEventId);
@@ -1216,7 +1243,8 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const context = contextOf(rawContext);
     const purpose = input.purpose || 'answer_user_query';
     const retrieved = input[retrievedOverride] || (input.query ? retrieve(context, input) : { answerability: 'not_found', consistency: 'fresh', serviceMode: 'normal', retrievalMode: 'bm25', policyResult: 'allowed', items: [], blocks: [], uncertainties: [], consistencyToken: tokenFor(state, context) });
-    const episodes = relevantEpisodes(context, input.query || '', purpose);
+    const agentId = normalizeText(input.agentId ?? input.agent_id, 200) || null;
+    const episodes = relevantEpisodes(context, input.query || '', purpose, agentId);
     const activeSession = activeSessionForContext(context);
     const snapshot = activeSession?.profileSnapshotId
       ? state.profileSnapshots.find(item => item.id === activeSession.profileSnapshotId
@@ -1234,11 +1262,12 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
         .map(item => {
           const assertion = findAssertion(state, item.assertionId, context);
           if (!canSee(state, context, assertion, purpose, { allowGovernance: purpose === 'governance' })) return null;
+          if (!assertionMatchesAgent(assertion, agentId, item.versionId)) return null;
           return serializeAssertion(state, assertion, { includeGovernance: purpose === 'governance', versionIdOverride: item.versionId });
         })
         .filter(Boolean)
       : []
-      : list(context, { purpose, limit: 100 })).filter(bundlePolicyAllows);
+      : list(context, { purpose, limit: 100, agentId })).filter(bundlePolicyAllows);
     const pinned = all.filter(item => item.pinned);
     const core = pinned.map(item => serializeAssertion(state, state.assertions.find(assertion => assertion.id === item.memoryId), { pinVersion: true, versionIdOverride: item.versionId }));
     const profile = all.filter(item => item.scope.type === 'user' && !item.pinned);
@@ -1248,6 +1277,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
         .filter(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId && item.sessionId === activeSession.id)
         .filter(item => item.status === 'active' && (!item.expiresAt || new Date(item.expiresAt).getTime() > Date.now()))
         .filter(item => context.actorType !== 'agent' || item.agentId === context.callerAgentId)
+        .filter(item => currentStateMatchesAgent(item, agentId))
         .map(clone)
       : [];
     const tokenBudget = Math.min(1800, Math.max(1, Number(input.tokenBudget ?? input.token_budget) || 1200));

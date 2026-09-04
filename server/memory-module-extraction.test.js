@@ -42,3 +42,26 @@ test('malformed or instruction-like model output is quarantined as data, not exe
   assert.equal(result.candidates[0].content, '安全候选');
   assert.equal(Object.hasOwn(result.candidates[0], 'tool'), false);
 });
+
+test('group chat source_label and source_agent_id are forwarded to the extraction model', async () => {
+  let receivedInput = null;
+  const gateway = { extract: async input => { receivedInput = input; return [{ content: '用户喜欢海', sensitivity: 'S0' }]; } };
+  await extractCandidates({ event: event('用户喜欢海', { eventRole: 'agent', metadata: { source_label: '观察者', source_agent_id: 'agent-1' } }), modelGateway: gateway });
+  assert.equal(receivedInput.sourceLabel, '观察者');
+  assert.equal(receivedInput.sourceAgentId, 'agent-1');
+  assert.equal(receivedInput.eventRole, 'agent');
+});
+
+test('agent-attributed candidates are remapped to relationship scope for isolation', async () => {
+  const gateway = { extract: async () => [{ content: '用户喜欢海', sensitivity: 'S0' }] };
+  const result = await extractCandidates({ event: event('用户喜欢海', { eventRole: 'agent', metadata: { source_label: '观察者', source_agent_id: 'agent-1' } }), modelGateway: gateway });
+  assert.equal(result.candidates[0].scopeType, 'relationship');
+  assert.equal(result.candidates[0].relationshipAgentId, 'agent-1');
+});
+
+test('user events keep user scope without an agent attribution', async () => {
+  const gateway = { extract: async () => [{ content: '用户喜欢海', sensitivity: 'S0' }] };
+  const result = await extractCandidates({ event: event('用户喜欢海', { eventRole: 'user' }), modelGateway: gateway });
+  assert.equal(result.candidates[0].scopeType, 'user');
+  assert.equal(result.candidates[0].relationshipAgentId, null);
+});

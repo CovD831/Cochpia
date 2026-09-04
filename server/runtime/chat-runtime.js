@@ -128,10 +128,10 @@ export function createChatRuntime(deps) {
     return true;
   }
 
-  async function finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel }) {
+  async function finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel, agentId = null }) {
     let memoryId = null;
     try {
-      await chatMemory.recordTurn({ eventId: `chat:${sessionId}:${assistantMessage.id}`, content: assistantMessage.content, eventRole: 'agent', channel });
+      await chatMemory.recordTurn({ eventId: `chat:${sessionId}:${assistantMessage.id}`, content: assistantMessage.content, eventRole: 'agent', channel, sourceAgentId: agentId });
       if (shouldRemember(userMessage.content)) {
         const remembered = await chatMemory.remember({ messageId: userMessage.id, content: userMessage.content, sourceEventId: userEvent?.rawEventId || null });
         memoryId = remembered?.memory?.memoryId || remembered?.memory?.id || null;
@@ -187,8 +187,8 @@ export function createChatRuntime(deps) {
     let memoryBundle = null;
     let userEvent = null;
     try {
-      userEvent = await chatMemory.recordTurn({ eventId: `chat:${sessionId}:${userMessage.id}`, content: userMessage.content, eventRole: 'user', channel: activeChannel });
-      const retrieved = await chatMemory.retrieve(userMessage.content);
+      userEvent = await chatMemory.recordTurn({ eventId: `chat:${sessionId}:${userMessage.id}`, content: userMessage.content, eventRole: 'user', channel: activeChannel, sourceAgentId: boundAgent?.id || null });
+      const retrieved = await chatMemory.retrieve(userMessage.content, boundAgent?.id || null);
       recalled = retrieved.recalled;
       memoryBundle = retrieved.bundle;
     } catch (error) { console.error(JSON.stringify({ event: 'memory_chat_retrieve_failed', code: error.code || 'MEMORY_MODULE_RETRIEVE_FAILED' })); }
@@ -223,7 +223,7 @@ export function createChatRuntime(deps) {
           assistantMessage.content = toolResult.content || (toolResult.termination ? toolTerminationMessage(toolResult.termination) : '');
           if (toolResult.termination) send(res, 'error', { runId: run.id, code: toolResult.termination, message: assistantMessage.content }, run);
           state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
-          const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
+          const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel, agentId: boundAgent?.id || null });
           await saveState(state);
           await wakeEngine?.kick(boundAgent?.id);
           send(res, 'text', { delta: assistantMessage.content }, run);
@@ -233,7 +233,7 @@ export function createChatRuntime(deps) {
       // 回退 1：模型/供应商不支持工具调用时，用 pi RPC 子进程执行。
       try {
         if (await runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode: currentMode() })) {
-          const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
+          const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel, agentId: boundAgent?.id || null });
           await wakeEngine?.kick(boundAgent?.id);
           send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, engine: 'pi', mode: currentMode() }, run); finishRun(run); if (run.response) run.response.end(); return;
         }
@@ -246,7 +246,7 @@ export function createChatRuntime(deps) {
         const workRuntime = buildRuntimeContext({ messages: state.messages[sessionId], recalled, memoryBundle, summary, persona: effectivePersona, profile: { ...state.profile, name: boundAgent?.name || '独立 Agent' }, mode: currentMode(), companionIntent: activeCompanionIntent, innerState: boundAgent ? innerContinuity.snapshot(boundAgent.id) : null, dynamicRouting: { ...routing, placement: routing.placements?.work } });
         for await (const delta of workModel.stream({ message: userMessage.content, recalled, runtimeContext: workRuntime, signal: run.controller.signal })) { if (run.cancelled) { restoreRegeneration(); finishRun(run); return; } assistantMessage.content += delta; send(res, 'text', { delta }, run); }
         state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
-        const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
+        const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel, agentId: boundAgent?.id || null });
         await saveState(state);
         await wakeEngine?.kick(boundAgent?.id);
         send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run); finishRun(run); if (run.response) run.response.end();
@@ -262,7 +262,7 @@ export function createChatRuntime(deps) {
     } catch (error) { if (!run.cancelNotified) { send(res, 'error', { code: error.code || 'MODEL_UNAVAILABLE', message: error.message }, run); send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run); if (run.response) run.response.end(); } restoreRegeneration(); finishRun(run); return; }
     if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
     let heldMemoryId = null;
-    try { state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId)); heldMemoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel }); await saveState(state); }
+    try { state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId)); heldMemoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel, agentId: boundAgent?.id || null }); await saveState(state); }
     catch (error) { send(res, 'error', { code: 'FINALIZE_FAILED', message: error.message }, run); send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run); restoreRegeneration(); finishRun(run); if (run.response) return run.response.end(); return; }
     await wakeEngine?.kick(boundAgent?.id);
     send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId: heldMemoryId, provider: selectedModel.provider, model: selectedModel.model, regeneratedFrom: regeneration?.assistant.id || null, retry }, run); finishRun(run); if (run.response) run.response.end();

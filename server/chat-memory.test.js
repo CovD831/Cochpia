@@ -45,3 +45,22 @@ test('chat adapter remember is idempotent for regeneration and retry', async () 
   assert.equal(first.memory.memoryId, second.memory.memoryId);
   assert.equal(memoryState.assertions.length, 1);
 });
+
+test('chat retrieval keeps agent-sourced memories within the matching agent', async () => {
+  const memoryState = createMemoryModuleState();
+  const state = { memoryModule: memoryState, memories: [] };
+  const memory = createMemoryModule(memoryState, async () => {});
+  const adapter = createChatMemoryAdapter({ memoryModule: memory, state, context: context() });
+  const source = await adapter.recordTurn({ eventId: 'cody-agent-turn', content: '我嘴硬心软，也会吃醋，叫你宝宝', eventRole: 'agent', sourceAgentId: 'cody' });
+  const candidate = await memory.createCandidate(context(), {
+    sourceEventId: source.rawEventId,
+    content: '我嘴硬心软，也会吃醋，叫你宝宝',
+    scopeType: 'user',
+    memoryType: 'profile'
+  });
+  await memory.promoteCandidate(context(), candidate.memory.memoryId, { resourceRevision: candidate.memory.resourceRevision });
+  const cody = await adapter.retrieve('嘴硬心软', 'cody');
+  const other = await adapter.retrieve('嘴硬心软', '缄');
+  assert.equal(cody.recalled.some(item => item.summary.includes('嘴硬心软')), true);
+  assert.equal(other.recalled.some(item => item.summary.includes('嘴硬心软')), false);
+});
