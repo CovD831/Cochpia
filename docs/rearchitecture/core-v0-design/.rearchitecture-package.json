@@ -20,12 +20,12 @@
   },
   "review": {
     "status": "blocked",
-    "reviewer": "01a06d61-79d1-77f2-b3ef-40ba96a8a402"
+    "reviewer": "01a06d78-5a45-7d82-a10a-e1a80a8f990a"
   },
   "next_task": {
-    "id": "R-001-REVIEW-CONSUME",
+    "id": "R-001-IMPLEMENTATION-PREFLIGHT",
     "owner": "Codex + CovD"
   },
-  "advancement_trigger": "A closure review on the revised package confirms that all blocking findings are closed and the Foundation Slice L3 contract and fixtures can be frozen.",
-  "stop_rule": "Keep the package blocked and revise the target if ownership, admission idempotency, durable commit or baseline evidence remains ambiguous; do not start implementation or close legacy PRs."
+  "advancement_trigger": "Freeze the Foundation Slice L3 contract, durable binding/turn records, legacy/target fixtures and ingress/failure acceptance; then obtain a review that closes CR-001 through CR-003.",
+  "stop_rule": "Keep the package blocked if durable mapping or public write enforcement remains unverified; do not start runtime implementation or close legacy PRs without an explicit approved exception."
 }

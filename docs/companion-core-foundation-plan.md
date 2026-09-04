@@ -1,6 +1,6 @@
 # Cochpia 陪伴核心基座建设计划
 
-> 状态：Draft v0.4（独立对抗性审查已完成；修订后待 closure review）
+> 状态：Draft v0.5（closure review 已完成；实现前置证据门禁仍 blocked）
 > 目标：先建立可持续、可验证、可治理的聊天式情感陪伴核心，再将游戏、任务、日历和其他交互形态作为上层模块接入。
 
 > 本文是目标架构与建设路线，不承担实时 changelog 职责。当前实现证据和未关闭门禁统一维护在 [`memory-module-evaluation-report.md`](./memory-module-evaluation-report.md)、[`memory-module-alpha-gate.md`](./memory-module-alpha-gate.md) 和 [R-001 design package](./rearchitecture/core-v0-design/00-scope.md)；生成的本地验收 JSON 不作为仓库内 Markdown 链接引用。
@@ -426,7 +426,7 @@ state.current.updated
 
 审查确认 Memory-first 分层和“模块化单体 + PostgreSQL”的保守方向有价值，但指出以下 blocking finding：Core v0 仍过宽；应用会话、Memory 会话、消息和 raw event 没有稳定映射；MemoryPort/部署切换尚未成为现有代码边界；turn 幂等和 assistant commit 失败语义不完整；restart/rollback/unknown external outcome 未落地；跨域 forget/delete/export 未闭环；第 12 节把不存在的实现和验收写成已完成；Collector 尚未实际封住公共写入口。另有两个 non-blocking finding：Extension Module 契约尚不可执行，Core/Memory 状态词汇尚未统一。
 
-本节不把设计意图写成实现事实。所有修订必须先被 R-001 ledger 消费，再由 closure review 验证；在 closure review 通过前，不进入 Core v0 代码实现。
+本节不把设计意图写成实现事实。原始审查 finding 已被 R-001 ledger 消费；closure review 已确认范围和表述修正有效，但仍留下 CR-001 至 CR-003 的实现前置证据门禁。在这些门禁关闭前，不进入 Core v0 运行时代码实现。
 
 ## 12. 基线实施审计快照（代码基线：7e86878）
 
@@ -602,4 +602,4 @@ user message
 - 删除传播、Extension host 和状态枚举是否都有 owner、触发条件和证据，而非空泛承诺；
 - 第 12 节是否只描述 `7e86878` 的实际代码。
 
-在 closure review 的 blocking finding 未消费前，不进入 Core v0 实现。
+closure review 已完成但结论仍为 `blocked`：在 CR-001 至 CR-003 有实际 L3、fixture、negative/failure acceptance 证据并被再次审查关闭前，不进入 Core v0 实现。
