@@ -2,7 +2,7 @@
   "package_id": "R-002-core-v0-foundation-slice",
   "size": "implementation",
   "baseline_revision": "7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2",
-  "current_revision": "6079d29445dfde7a4dc1931606903bf148acb471",
+  "current_revision": "1f86587cc2aa286b713c542b18d9212322cc5e2c",
   "documents": {
     "scope": "00-scope.md",
     "positioning": "01-positioning.md",
