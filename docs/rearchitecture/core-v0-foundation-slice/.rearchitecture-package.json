@@ -2,7 +2,7 @@
   "package_id": "R-002-core-v0-foundation-slice",
   "size": "implementation",
   "baseline_revision": "7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2",
-  "current_revision": "1f86587cc2aa286b713c542b18d9212322cc5e2c",
+  "current_revision": "2ea48fa2ef3385cb046ba9b9a0f4745406245edb",
   "documents": {
     "scope": "00-scope.md",
     "positioning": "01-positioning.md",
@@ -23,8 +23,8 @@
     "review_ledger": "review-ledger.json"
   },
   "review": {
-    "status": "blocked",
-    "reviewer": "01a06d9a-722f-7e20-9d9c-5ebc0a89be59"
+    "status": "consumed",
+    "reviewer": "01a06da4-c5d4-7e00-8951-f32c6cc29187"
   },
   "next_task": {
     "id": "R-002-PREFLIGHT-REVIEW",

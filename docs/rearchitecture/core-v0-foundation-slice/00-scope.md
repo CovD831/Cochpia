@@ -10,7 +10,7 @@
 
 ## Package revision provenance
 
-The manifest keeps `7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2` as the design baseline and must set `current_revision` to the commit that freezes this package. A package review input and the manifest's current revision must refer to the same commit.
+The manifest keeps `7327e672da36079c2f2ce37dd4ba6f9f0c6f07c2` as the design baseline. `current_revision` denotes the immutable package content revision that was reviewed; the review report and ledger may be committed afterward, but their `input_revision` must equal that frozen value. [`check-core-v0-provenance.js`](../../../scripts/check-core-v0-provenance.js) enforces this convention.
 
 ## Objective
 

@@ -1,50 +1,55 @@
 {
   "package_id": "R-002-core-v0-foundation-slice",
-  "input_revision": "e4c66ceb140c234f983e4f6f32ddd3f3763d4f86",
-  "prior_review_input": "70ae31796cae9a1637e67a99c156dad870ac3929",
-  "reviewer": "01a06d9a-722f-7e20-9d9c-5ebc0a89be59",
-  "cycle": "closure",
+  "input_revision": "2ea48fa2ef3385cb046ba9b9a0f4745406245edb",
+  "prior_review_input": "e4c66ceb140c234f983e4f6f32ddd3f3763d4f86",
+  "reviewer": "01a06da4-c5d4-7e00-8951-f32c6cc29187",
+  "cycle": "final-bounded-closure",
   "findings": [
     {
       "id": "R002-CLOSURE-F-001",
       "severity": "blocking",
-      "statement": "Package provenance is inconsistent: the reviewed revision, manifest current_revision and embedded review report input_revision do not identify the same frozen commit.",
+      "statement": "At the reviewed input, package provenance was not fully aligned: manifest current_revision and embedded review input_revision did not identify the same frozen commit.",
       "evidence_refs": [
         "docs/rearchitecture/core-v0-foundation-slice/.rearchitecture-package.json",
-        "docs/rearchitecture/core-v0-foundation-slice/00-scope.md",
-        "docs/rearchitecture/core-v0-foundation-slice/review-report.json"
+        "docs/rearchitecture/core-v0-foundation-slice/review-report.json",
+        "docs/rearchitecture/core-v0-foundation-slice/00-scope.md"
       ],
-      "recommendation": "Adopt one frozen revision convention and align manifest current_revision, review input_revision and the actual commit under review."
+      "recommendation": "Use one frozen revision convention and verify it mechanically."
     },
     {
       "id": "R002-CLOSURE-F-002",
-      "severity": "blocking",
-      "statement": "The acceptance harness accepts arbitrary adapter output; an empty or incomplete A-01..A-12 result set without fail/pending rows could exit successfully.",
+      "severity": "non-blocking",
+      "statement": "Acceptance harness result validation was tightened and now rejects empty, omitted, duplicate, unknown and invalid-status adapter results while keeping pending non-zero.",
       "evidence_refs": [
         "scripts/core-v0-foundation-acceptance.js",
         "docs/rearchitecture/core-v0-foundation-slice/acceptance.md"
       ],
-      "recommendation": "Require exactly one result for every A-01..A-12 row, reject unknown/duplicate/missing rows and invalid statuses, and keep pending non-zero."
+      "recommendation": "No further package-level action; runtime rows remain pending until target implementation exists."
     },
     {
       "id": "R002-CLOSURE-F-003",
       "severity": "non-blocking",
-      "statement": "The rollback barrier is correctly described at contract level but still needs race-free runtime implementation, crash recording and operator-repair evidence.",
+      "statement": "Rollback barrier remains a contract-level residual risk until race-free runtime implementation, crash recording and operator-repair evidence exist.",
       "evidence_refs": [
         "docs/rearchitecture/core-v0-foundation-slice/rollback.md"
       ],
-      "recommendation": "Keep the residual risk open until the target runtime implements and fault-tests the in-flight barrier."
+      "recommendation": "Keep this risk open for the runtime increment."
     }
   ],
   "steelman": {
-    "strongest_support": "The L3 contract now covers independent binding uniqueness, deterministic IDs, receipt queries, reconciliation, route policy, executable fixture/schema tests and honest pending semantics.",
-    "strongest_opposition": "The target runtime, durable store, real ingress guards and race-free rollback barrier are still absent; the preflight package must not be treated as runtime evidence.",
+    "strongest_support": "The acceptance harness is independently executable and honest about pending runtime rows; the target contract covers binding, receipts, route policy and rollback semantics.",
+    "strongest_opposition": "The target runtime and race-free rollback are still absent, so this review only clears package readiness, not production or runtime correctness.",
     "decision_refs": [
-      "docs/rearchitecture/core-v0-foundation-slice/07-l3-task-contract.md",
-      "docs/rearchitecture/core-v0-foundation-slice/04-l2-contracts.md",
+      "docs/rearchitecture/core-v0-foundation-slice/00-scope.md",
       "docs/rearchitecture/core-v0-foundation-slice/acceptance.md",
       "docs/rearchitecture/core-v0-foundation-slice/rollback.md"
     ]
+  },
+  "verification": {
+    "package_checker": "passed structurally while blocked",
+    "targeted_tests": "4 passed, 0 failed",
+    "acceptance_without_runtime_adapter": "A-01..A-12 pending; exit 2",
+    "runtime_code_authorized": false
   },
   "overall": "blocked"
 }

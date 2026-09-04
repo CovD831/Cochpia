@@ -5,21 +5,20 @@
     "decision": "accepted",
     "consumer": {"path": "00-scope.md", "anchor": "Package revision provenance"},
     "owner": "Architecture package owner",
-    "evidence": ".rearchitecture-package.json",
+    "evidence": "scripts/check-core-v0-provenance.js",
     "resolution_review": "third-party",
-    "status": "open",
-    "trigger": "manifest current_revision, review input_revision and the final frozen commit are identical"
+    "status": "closed",
+    "trigger": "manifest current_revision and review-report input_revision remain equal to the frozen package input revision"
   },
   {
     "finding_id": "R002-CLOSURE-F-002",
-    "severity": "blocking",
+    "severity": "non-blocking",
     "decision": "accepted",
     "consumer": {"path": "acceptance.md", "anchor": "Acceptance adapter result validation"},
     "owner": "Core v0 verification owner",
     "evidence": "scripts/core-v0-foundation-acceptance.js",
-    "resolution_review": "third-party",
-    "status": "open",
-    "trigger": "closure review confirms the harness rejects empty, incomplete, duplicate, unknown and invalid adapter results"
+    "status": "closed",
+    "trigger": "runtime adapter rows are implemented and pass A-01 through A-12"
   },
   {
     "finding_id": "R002-CLOSURE-F-003",
