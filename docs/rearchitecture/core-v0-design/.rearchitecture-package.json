@@ -2,7 +2,7 @@
   "package_id": "R-001-core-v0-design",
   "size": "design",
   "baseline_revision": "6923833",
-  "current_revision": "6923833",
+  "current_revision": "a11ddf3f937547d881d65ee2eeaf62a0bfe9dad1",
   "documents": {
     "scope": "00-scope.md",
     "positioning": "01-positioning.md",
