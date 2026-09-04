@@ -2,7 +2,7 @@
 
 ## Preflight status
 
-The first preflight review is complete and is `blocked`. The contract fixes are recorded in the package, but runtime evidence is still pending. R-001 remains blocked until its closure findings have evidence-backed resolution.
+The first preflight review and one closure review are complete and remain `blocked`. The contract fixes are recorded in the package, but runtime evidence is still pending. R-001 remains blocked until its closure findings have evidence-backed resolution.
 
 ## Code-entry gate
 
@@ -20,6 +20,8 @@ The fixture/schema tests currently pass; `scripts/core-v0-foundation-acceptance.
 ## Next task
 
 `R-002-PREFLIGHT-REVIEW-CONSUME`: consume the first review findings, run the closure review, and only after it passes consider the target application service. Do not migrate the UI or close old PRs in the same increment.
+
+The closure review found two package-level defects: provenance was not aligned to the reviewed commit, and an injected acceptance adapter could omit required rows without failing. These must be repaired before any further code-entry decision.
 
 ## Definition of done for the increment
 

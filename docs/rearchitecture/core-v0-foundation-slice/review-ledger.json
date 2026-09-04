@@ -1,50 +1,6 @@
 [
   {
-    "finding_id": "R002-F-001",
-    "severity": "blocking",
-    "decision": "accepted",
-    "consumer": {"path": "07-l3-task-contract.md", "anchor": "Required uniqueness"},
-    "owner": "MemoryPort integration owner",
-    "evidence": "07-l3-task-contract.md",
-    "resolution_review": "third-party",
-    "status": "open",
-    "trigger": "closure review confirms the two independent unique keys, bindingKey and concurrent creation/reconciliation rules"
-  },
-  {
-    "finding_id": "R002-F-002",
-    "severity": "blocking",
-    "decision": "accepted",
-    "consumer": {"path": "07-l3-task-contract.md", "anchor": "Deterministic IDs and receipt reconciliation"},
-    "owner": "Core turn lifecycle owner",
-    "evidence": "07-l3-task-contract.md",
-    "resolution_review": "third-party",
-    "status": "open",
-    "trigger": "closure review confirms receipt get/reconcile, idempotent commit upsert and assistant visibility rules"
-  },
-  {
-    "finding_id": "R002-F-003",
-    "severity": "blocking",
-    "decision": "accepted",
-    "consumer": {"path": "04-l2-contracts.md", "anchor": "Ingress policy"},
-    "owner": "Ingress boundary owner",
-    "evidence": "04-l2-contracts.md",
-    "resolution_review": "third-party",
-    "status": "open",
-    "trigger": "closure review confirms service identity verification, required context fields, rejection codes and /api/memories governance separation"
-  },
-  {
-    "finding_id": "R002-F-004",
-    "severity": "blocking",
-    "decision": "accepted",
-    "consumer": {"path": "acceptance.md", "anchor": "Preflight execution status"},
-    "owner": "Core v0 verification owner",
-    "evidence": "scripts/core-v0-foundation-acceptance.js",
-    "resolution_review": "third-party",
-    "status": "open",
-    "trigger": "closure review confirms the harness is executable and runtime rows remain honestly pending until target implementation exists"
-  },
-  {
-    "finding_id": "R002-F-005",
+    "finding_id": "R002-CLOSURE-F-001",
     "severity": "blocking",
     "decision": "accepted",
     "consumer": {"path": "00-scope.md", "anchor": "Package revision provenance"},
@@ -52,16 +8,27 @@
     "evidence": ".rearchitecture-package.json",
     "resolution_review": "third-party",
     "status": "open",
-    "trigger": "manifest current_revision equals the commit reviewed by the closure reviewer"
+    "trigger": "manifest current_revision, review input_revision and the final frozen commit are identical"
   },
   {
-    "finding_id": "R002-F-006",
+    "finding_id": "R002-CLOSURE-F-002",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "acceptance.md", "anchor": "Acceptance adapter result validation"},
+    "owner": "Core v0 verification owner",
+    "evidence": "scripts/core-v0-foundation-acceptance.js",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "closure review confirms the harness rejects empty, incomplete, duplicate, unknown and invalid adapter results"
+  },
+  {
+    "finding_id": "R002-CLOSURE-F-003",
     "severity": "non-blocking",
     "decision": "accepted",
     "consumer": {"path": "rollback.md", "anchor": "In-flight drain barrier"},
     "owner": "Core operations owner",
     "evidence": "rollback.md",
     "status": "open",
-    "trigger": "runtime implementation defines and tests the drain barrier and operator repair evidence"
+    "trigger": "runtime implementation and fault injection prove race-free drain and operator repair behavior"
   }
 ]

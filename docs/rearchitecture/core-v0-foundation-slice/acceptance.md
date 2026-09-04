@@ -32,3 +32,7 @@ The acceptance script must emit a JSON artifact under an ignored temporary path 
 ## Preflight execution status
 
 The package-level fixture and ingress-shape tests are executable now and are expected to pass. The runtime rows are intentionally `pending` until the target application service, MemoryPort adapter and route guards exist. This distinction is part of the gate; a passing schema harness must not close the runtime findings.
+
+## Acceptance adapter result validation
+
+When `CORE_V0_ACCEPTANCE_MODULE` is supplied, the harness requires exactly one result for each of A-01 through A-12. Unknown IDs, duplicate IDs, omitted rows, invalid statuses, an empty result, a missing adapter function or an adapter exception are failures. The harness accepts only `passed`, `fail` or `pending`, and a pending row keeps the process non-zero.
