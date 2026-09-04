@@ -1,0 +1,110 @@
+[
+  {
+    "finding_id": "AR-001",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "01-positioning.md", "anchor": "Core v0 base slice is intentionally four transitions"},
+    "owner": "Core v0 implementer",
+    "evidence": "01-positioning.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "closure review confirms the Foundation Slice contains only admission, bounded context, mock result and assistant commit"
+  },
+  {
+    "finding_id": "AR-002",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "02-l1-target.md", "anchor": "application_session_id ↔ memory_session_id mapping"},
+    "owner": "MemoryPort integration owner",
+    "evidence": "02-l1-target.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "closure review confirms owner separation and the implementation package freezes the binding record and message/event correlation"
+  },
+  {
+    "finding_id": "AR-003",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "05-adr.md", "anchor": "is a target boundary, not an existing implementation claim"},
+    "owner": "Core persistence owner",
+    "evidence": "05-adr.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "closure review confirms deployment wording is target intent and the implementation package defines adapter, migration and rollback evidence"
+  },
+  {
+    "finding_id": "AR-004",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "04-l2-contracts.md", "anchor": "Turn admission idempotency"},
+    "owner": "Core turn lifecycle owner",
+    "evidence": "04-l2-contracts.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "implementation acceptance proves exact replay, conflicting replay and failed commit behavior"
+  },
+  {
+    "finding_id": "AR-005",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "04-l2-contracts.md", "anchor": "Durable run/turn state machine"},
+    "owner": "Core turn lifecycle owner",
+    "evidence": "04-l2-contracts.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "implementation package freezes durable states and acceptance proves restart and unknown-outcome handling"
+  },
+  {
+    "finding_id": "AR-006",
+    "severity": "blocking",
+    "decision": "deferred",
+    "consumer": {"path": "01-positioning.md", "anchor": "Cross-domain deletion is a follow-up gate"},
+    "owner": "Memory governance owner",
+    "evidence": "01-positioning.md",
+    "status": "open",
+    "trigger": "a named deletion-propagation package proves tombstone/epoch, receipts, export and no-revival behavior before real user data"
+  },
+  {
+    "finding_id": "AR-007",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "00-scope.md", "anchor": "AR-007 current-state audit correction"},
+    "owner": "Architecture document owner",
+    "evidence": "00-scope.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "closure review verifies section 12 contains only evidence from baseline 7e86878"
+  },
+  {
+    "finding_id": "AR-008",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "03-current-to-target-map.md", "anchor": "Public write entry enforcement"},
+    "owner": "Ingress boundary owner",
+    "evidence": "03-current-to-target-map.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "implementation acceptance proves public writes cannot bypass admission and internal /v1 requires service identity"
+  },
+  {
+    "finding_id": "AR-009",
+    "severity": "non-blocking",
+    "decision": "deferred",
+    "consumer": {"path": "01-positioning.md", "anchor": "Extension host contract is deferred"},
+    "owner": "Extension host owner",
+    "evidence": "01-positioning.md",
+    "status": "open",
+    "trigger": "before the first real extension module is added"
+  },
+  {
+    "finding_id": "AR-010",
+    "severity": "non-blocking",
+    "decision": "accepted",
+    "consumer": {"path": "04-l2-contracts.md", "anchor": "Status mapping"},
+    "owner": "Memory/Core observability owner",
+    "evidence": "04-l2-contracts.md",
+    "resolution_review": "third-party",
+    "status": "open",
+    "trigger": "implementation contract tests freeze persisted and presentation status mappings"
+  }
+]

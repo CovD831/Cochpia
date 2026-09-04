@@ -1,0 +1,145 @@
+{
+  "package_id": "R-001-core-v0-design",
+  "input_revision": "6923833",
+  "code_baseline": "7e86878",
+  "reviewer": "01a06d61-79d1-77f2-b3ef-40ba96a8a402",
+  "findings": [
+    {
+      "id": "AR-001",
+      "statement": "Core v0 仍然过宽：首个可交付切片同时纳入事件接入、长期记忆全生命周期、身份/关系、流式模型、retry/regenerate/cancel、持久化投影和 forget/delete，跨越多个状态机与持久化边界。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L473-L497",
+        "docs/companion-core-foundation-plan.md:L560-L581"
+      ],
+      "recommendation": "将首个实现收缩为 turn admission → bounded context → mock result → assistant commit；记忆治理、投影 worker、删除传播分别作为后续切片。"
+    },
+    {
+      "id": "AR-002",
+      "statement": "状态所有权仍不自洽：原始事件同时指向 Event Log、迁移期 Memory raw event 和 Core v0 Memory Module；消息与 raw event 的一一映射未定义，实际聊天的 Memory sessionId 可能为空。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L131-L154",
+        "docs/companion-core-foundation-plan.md:L499-L514",
+        "server/memory-module-runtime.js:L69-L81",
+        "server/chat-memory.js:L111-L121",
+        "server/memory-module.js:L740-L805"
+      ],
+      "recommendation": "明确 application_session_id ↔ memory_session_id 映射；决定消息与事件的 canonical 角色；为 message/event/source revision 建立持久化关联。"
+    },
+    {
+      "id": "AR-003",
+      "statement": "模块化单体 + PostgreSQL 尚未成为可运行部署边界：主应用使用嵌入式 Memory runtime，默认存储可为 JSON，PostgreSQL 模式仍保存整体 JSONB；独立服务使用另一套 repository；没有可切换的 MemoryPort、迁移切换流程、回滚边界或主应用 projection worker。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L537-L546",
+        "server/index.js:L79-L83",
+        "server/memory-module-runtime.js:L84-L89",
+        "server/store.js:L11-L12",
+        "server/store.js:L80-L145",
+        "services/memory-module/index.js:L123-L160",
+        "services/memory-module/index.js:L199-L218"
+      ],
+      "recommendation": "先冻结唯一运行模式，用 MemoryPort 隔离 domain、in-process fixture 和 PostgreSQL repository，并为 outbox worker、迁移、切换和回滚定义可执行验收。"
+    },
+    {
+      "id": "AR-004",
+      "statement": "Memory 内部有幂等，但 Companion Core 的 turn 幂等和提交语义不完整：聊天请求生成随机 message ID、没有客户端幂等键，Memory 写入失败可能被吞掉，assistant 可能在 raw event 未提交时被返回为完成。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L548-L558",
+        "docs/companion-core-foundation-plan.md:L575-L581",
+        "server/index.js:L675-L714",
+        "server/index.js:L840-L853",
+        "server/chat-memory.js:L111-L136",
+        "server/memory-module.js:L757-L804"
+      ],
+      "recommendation": "在模型调用前持久化 turn admission，以客户端幂等键绑定 user turn、assistant attempt 和 source revision；提交失败必须返回 failed/pending。"
+    },
+    {
+      "id": "AR-005",
+      "statement": "restart、rollback 和 unknown external outcome 没有完整边界：run、cancel、SSE 事件位于进程内 Map/数组中，重启后无法恢复；模型请求没有持久化 attempt 或未知结果状态。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L548-L558",
+        "docs/companion-core-foundation-plan.md:L583-L594",
+        "server/index.js:L86-L91",
+        "server/index.js:L425-L445",
+        "server/sse.js:L1-L16",
+        "server/model-provider.js:L138-L191"
+      ],
+      "recommendation": "定义 durable run/turn 状态机，明确 admitted、generating、provider_unknown、cancel_requested、commit_pending、committed、superseded 以及重启、取消、重试和外部调用未知结果的处理。"
+    },
+    {
+      "id": "AR-006",
+      "statement": "forget/delete/export 尚未跨 Companion Runtime 与 Memory Foundation 闭环：删除消息/会话只修改主应用消息状态，删除 Memory 不删除对应消息；没有应用层 account-delete 路由、消息到 raw event 的传播关系或 tombstone/epoch 防复活规则。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L255",
+        "docs/companion-core-foundation-plan.md:L548-L558",
+        "server/index.js:L303-L325",
+        "server/index.js:L347-L374",
+        "server/index.js:L399-L402",
+        "server/state-merge.js:L41-L70"
+      ],
+      "recommendation": "建立跨域 deletion operation、消息/event 映射、传播 receipt 和恢复账本；若 Foundation Slice 不承担跨域删除，必须从其完成定义中移出并设置独立门禁。"
+    },
+    {
+      "id": "AR-007",
+      "statement": "计划第 12 节的当前实现审计与代码基线不符：计划声称已有 InteractionCollector、CompanionOrchestrator、ContextBuilder、InteractionFinalizer、InteractionOutbox 和多项 acceptance，但基线代码中不存在这些架构符号。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L435-L449",
+        "server/index.js:L1-L29",
+        "server/index.js:L644-L854",
+        "7e86878: git grep -n -E 'InteractionCollector|CompanionOrchestrator|ContextBuilder|InteractionFinalizer|IdentityRelationshipContext|InteractionOutbox' -- server services client scripts"
+      ],
+      "recommendation": "将第 12 节重建为基于 7e86878 的真实基线审计；不存在的实现和测试不得作为门禁证据。"
+    },
+    {
+      "id": "AR-008",
+      "statement": "Collector 边界尚未被强制执行：主应用直接挂载 /v1 Memory router，/api/memories 也直接写 Memory；外部调用者可以绕过统一 ingress、事件关联和 Core 级幂等。",
+      "severity": "blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L93-L98",
+        "server/index.js:L135-L148",
+        "server/index.js:L335-L402",
+        "server/memory-module-api.js:L51-L57"
+      ],
+      "recommendation": "将公共写入口统一收敛到 Collector；Memory /v1 只保留 internal service boundary，或强制校验 producer、correlation、subject context 和 idempotency contract。"
+    },
+    {
+      "id": "AR-009",
+      "statement": "Extension Module 契约目前是声明清单，不是可执行扩展面：没有 module registry、能力发现、版本协商、命令授权、生命周期、背压和统一 receipt；本项虽可后置，但不能据此宣称已经可扩展。",
+      "severity": "non-blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L516-L535",
+        "server/index.js:L9-L29",
+        "server/index.js:L204-L330",
+        "server/index.js:L547-L609",
+        "server/index.js:L859-L918"
+      ],
+      "recommendation": "在首个 Extension Module 接入前定义 executable module host contract，并用最小测试模块证明无需修改 Memory 内部即可注册、授权、回放、导出和删除。"
+    },
+    {
+      "id": "AR-010",
+      "statement": "失败状态词汇没有与现有实现统一：计划使用 applied、retrying，而 Memory worker/schema 实际使用 completed、pending、processing、dead_letter；receipt、监控和恢复工具可能出现语义分叉。",
+      "severity": "non-blocking",
+      "evidence_refs": [
+        "docs/companion-core-foundation-plan.md:L550-L556",
+        "server/memory-module-worker.js:L93-L115",
+        "server/memory-module-schema.sql:L581-L598"
+      ],
+      "recommendation": "冻结跨 Core/Memory 的状态枚举与映射，明确哪些状态持久化、哪些只是 API 展示别名。"
+    }
+  ],
+  "steelman": {
+    "strongest_support": "方案最强的价值是坚持事件事实、长期记忆、短期状态和模型上下文分层，并明确模型不能直接修改记忆、人格或权限；Memory Module 已有 scope、CAS、tombstone、outbox、lease/fencing 等治理基础。",
+    "strongest_opposition": "第 13 节已经排除游戏、Electron、独立 Memory HTTP、复杂向量依赖和社区 Agent，并选择模块化单体，是合理的保守取舍；但设计边界仍没有转化为当前代码可证明的 owner、幂等和恢复协议。",
+    "decision_refs": [
+      "docs/companion-core-foundation-plan.md#13-core-v0-实施补充",
+      "docs/rearchitecture/core-v0-design/05-adr.md"
+    ]
+  },
+  "overall": "blocked"
+}

@@ -1,9 +1,9 @@
 # Cochpia 陪伴核心基座建设计划
 
-> 状态：Draft v0.3（Core v0 补充待独立对抗性审查）
+> 状态：Draft v0.4（独立对抗性审查已完成；修订后待 closure review）
 > 目标：先建立可持续、可验证、可治理的聊天式情感陪伴核心，再将游戏、任务、日历和其他交互形态作为上层模块接入。
 
-> 本文是目标架构与建设路线，不承担实时 changelog 职责。当前实现证据和未关闭门禁统一维护在 [`memory-module-evaluation-report.md`](./memory-module-evaluation-report.md) 与 [`memory-module-alpha-gate.md`](./memory-module-alpha-gate.md)；生成的本地验收 JSON 不作为仓库内 Markdown 链接引用。
+> 本文是目标架构与建设路线，不承担实时 changelog 职责。当前实现证据和未关闭门禁统一维护在 [`memory-module-evaluation-report.md`](./memory-module-evaluation-report.md)、[`memory-module-alpha-gate.md`](./memory-module-alpha-gate.md) 和 [R-001 design package](./rearchitecture/core-v0-design/00-scope.md)；生成的本地验收 JSON 不作为仓库内 Markdown 链接引用。
 
 ## 0. 结论与建设原则
 
@@ -215,9 +215,9 @@ state.current.updated
 
 所有重要交互都应记录事件，但只有经过 policy、提取、冲突和生命周期判断的内容才成为记忆。事件层保留发生事实；Memory Module 决定哪些内容进入长期记忆、以何种 scope 和敏感度保存，以及如何被召回。
 
-## 4. 最小陪伴闭环（MVP）
+## 4. 产品级陪伴闭环（长期目标，不等于 Core v0 首个切片）
 
-第一阶段只做聊天，不依赖游戏：
+这是一条长期产品目标链。Core v0 的首个实现只取其中最小的可证伪子链，具体范围见第 13.7 节；不能用本节的完整链路宣称首个切片已经完成。
 
 ```text
 用户消息
@@ -233,7 +233,7 @@ state.current.updated
   → 下一次交互可读取新状态和记忆
 ```
 
-### 4.1 MVP 必须支持
+### 4.1 长期目标
 
 - 多轮会话和有 cursor 的断线恢复；重试、regenerate、cancel 和 assistant commit 必须有明确状态机。
 - user / relationship / session 三类记忆 scope。
@@ -244,15 +244,19 @@ state.current.updated
 - 用户边界和 do-not-store / do-not-mention 生效。
 - 每次人格/关系变化可以追溯到事件或记忆证据。
 
-### 4.2 MVP 明确不做
+### 4.2 Core v0 基础切片明确不承担
 
+- 记忆候选、确认、激活、修正、撤回、forget/delete 和跨域导出传播；这些属于 Memory 治理和删除传播后续门禁。
+- 持久化 projection worker、复杂 outbox 调度和独立事件总线；首个切片只证明 MemoryPort 的原始事件收据和提交收据。
+- 真实模型供应商、流式 chunk、regenerate/cancel 的完整恢复协议；先用可控 Mock Model Gateway 验证边界。
+- Relationship/Personality projection 的生产级演进；首个切片只消费已有的受策略约束视图。
 - 社区多 Agent。
 - 完整生命模拟。
 - 生育、死亡、传承和复杂经济系统。
 - 复杂向量基础设施作为硬依赖。
 - 让模型直接控制记忆、人格或工具权限。
 
-MVP 的“导出/删除”范围必须覆盖主应用消息、Memory Module 原始/派生数据、缓存、人格/关系投影、游戏派生物、日志和备份语义；外部模型供应商的保留/删除 SLA 需要单独记录，不能只删除 Memory Module 表。
+长期产品 MVP 的“导出/删除”范围仍必须覆盖主应用消息、Memory Module 原始/派生数据、缓存、人格/关系投影、游戏派生物、日志和备份语义；外部模型供应商的保留/删除 SLA 需要单独记录，不能只删除 Memory Module 表。Core v0 基础切片不得把尚未闭环的能力写成已完成。
 
 ## 5. 分阶段路线
 
@@ -270,21 +274,21 @@ MVP 的“导出/删除”范围必须覆盖主应用消息、Memory Module 原�
 
 完成标准：模块边界和 canonical 数据来源得到代码评审确认；没有两个模块同时拥有同一事实的写权限。
 
-### Phase 1：统一采集器与聊天垂直切片
+### Phase 1：统一采集器与聊天基础切片
 
-目标：聊天是第一个事件源，但架构上为游戏和其他来源留出入口。
+目标：先证明一轮聊天的 admission、Memory 事件关联、bounded context 和 assistant commit；聊天是第一个事件源，但架构上为游戏和其他来源留出入口。
 
 - 定义 canonical event envelope 和第一批事件类型。
 - 实现 `InteractionCollector`，统一认证上下文、隐私预检查、幂等和 source revision。
-- 将现有 chat `recordTurn` 和 assistant finalize 迁移到统一 collector。
-- 先以 Memory Module raw event/outbox 支撑聊天垂直切片；定义 ownership 和故障恢复证据后，再决定是否抽出跨领域 Event Log。
-- 增加事件 replay、重复提交、非 final stream、顺序冲突测试。
+- 将现有 chat `recordTurn` 和 assistant finalize 迁移到 `MemoryPort` + admission boundary；首个切片先使用 Mock Model Gateway，不承诺真实 provider 或流式恢复。
+- 先以 Memory Module raw event 能力支撑聊天基础切片；不要在没有 ownership、顺序和恢复证据前抽出跨领域 Event Log 或 projection worker。
+- 增加重复提交、消息/事件关联、Memory degraded、assistant commit 失败和重启后 pending admission 测试。
 
-完成标准：聊天通过 Collector 提交 canonical event；Memory Module 作为第一消费者处理。迁移期间若仍需同步写入，必须有单一 owner、幂等键和 reconciliation 证据，不能无条件双写。
+完成标准：聊天通过 Collector/admission 提交可追溯的 raw event；`application_session_id`、`memory_session_id`、`application_message_id`、`event_id` 和 source revision 可关联；Memory Module 作为第一消费者处理。迁移期间若仍需同步写入，必须有单一 owner、幂等键和 reconciliation 证据，不能无条件双写。
 
 ### Phase 2：陪伴运行时与 Context Builder
 
-目标：形成第一次稳定的聊天陪伴闭环。
+目标：在基础切片证据之上形成可恢复的聊天陪伴闭环。
 
 - 抽出 `CompanionOrchestrator`。
 - 抽出 `IdentityRelationshipContext`。
@@ -292,7 +296,7 @@ MVP 的“导出/删除”范围必须覆盖主应用消息、Memory Module 原�
 - 抽出 `ContextBuilder`，统一 Memory ContextBundle、人格、关系、当前状态和边界。
 - 将模型调用收敛到 `ModelGateway`。
 - 将 assistant event、状态更新和异步任务收敛到 `InteractionFinalizer`。
-- 为 run/turn/chunk/finalizer 定义状态机，明确断线恢复、retry、regenerate、cancel 和 supersede。
+- 为 run/turn/finalizer 定义 durable 状态机；真实 provider 的 chunk、retry、regenerate、cancel、provider_unknown 和 supersede 只在专项恢复切片中实现并验收。
 - 明确 RelationshipState、PersonalityProjection、Memory current-state 和主应用 session state 的唯一 owner 与 CAS/revision 策略。
 
 完成标准：一次交互可从 collector 走完整链路并安全提交；模型不可绕过 policy 读取未经授权的数据。
@@ -371,11 +375,11 @@ MVP 的“导出/删除”范围必须覆盖主应用消息、Memory Module 原�
 
 ## 7. 迁移与兼容策略
 
-1. 先保留现有 `/api` 兼容路由，但所有新写入走 canonical event 和 Memory Module。
+1. 先保留现有 `/api` 兼容路由，但公共聊天/记忆写入必须经过 Collector/admission；`/v1` Memory 写入口只允许内部 service identity。
 2. 旧 `state.memories` 只允许一次性迁移；迁移成功后删除旧字段，不再双写。
 3. 游戏第一阶段可以保留 UI，但禁止把 localStorage 视为 canonical source；迁移期间只读或作为临时草稿。
-4. in-process runtime 和独立 Memory Module 必须共享同一 V1 contract；最终生产路径以独立 PostgreSQL 服务为准。
-5. 每个迁移步骤提供 replay、rollback 和数据一致性检查，不直接覆盖用户数据。
+4. `MemoryPort` 先隔离 in-process fixture 与 PostgreSQL repository；独立 Memory Module 只作为 contract/parity 目标，不能与内嵌 runtime 同时作为可写事实源。
+5. 每个迁移步骤提供 message/event/session binding、replay、rollback 和数据一致性检查；出现 unknown external outcome 时进入 pending/unknown，不直接覆盖用户数据或声称成功。
 
 ## 8. 风险与反模式
 
@@ -390,18 +394,18 @@ MVP 的“导出/删除”范围必须覆盖主应用消息、Memory Module 原�
 
 ## 9. 第一批实施任务（建议顺序）
 
-1. 评审本计划和事件 envelope，冻结模块 ownership。
-2. 建立 `InteractionCollector` 和事件 schema 包。
-3. 把聊天 user/assistant turn 迁移到 collector + canonical event。
-4. 抽出 `CompanionOrchestrator`、`ContextBuilder`、`InteractionFinalizer`。
-5. 将现有 Memory Module 作为第一消费者，保持现有 `/v1` contract。
-6. 完成真实 PostgreSQL/Auth 的 Memory Module Alpha Gate 必要证据。
+1. 消费独立审查，修正当前实现审计和 Core v0 边界。
+2. 建立 `MemoryPort`、session binding 和 `InteractionCollector` admission contract。
+3. 把聊天 user turn 迁移到 admission + raw event receipt，建立 message/event/source revision 关联。
+4. 抽出 `ContextBuilder`、Mock Model Gateway 和 `Commit Coordinator`，只实现四转换基础切片。
+5. 用 legacy/target fixture 验证重复提交、degraded retrieval、commit failure 和 restart recovery。
+6. 再决定是否进入真实 PostgreSQL/Auth、projection worker、删除传播和真实 provider hardening。
 7. 接入关系状态和人格成长投影。
 8. 最后将共生人生改造成第二个交互源。
 
 ## 10. 完成定义
 
-陪伴核心基座完成，不以“有聊天页面”判断，而以以下闭环成立判断：
+长期陪伴核心基座完成，不以“有聊天页面”判断，而以以下闭环成立判断；它不是 Core v0 基础切片的完成定义：
 
 ```text
 任意交互源
@@ -416,37 +420,29 @@ MVP 的“导出/删除”范围必须覆盖主应用消息、Memory Module 原�
 
 只有当这条链在聊天场景中稳定、可测试、可治理，并且至少经过真实 PostgreSQL/Auth 验收后，才把游戏、社区 Agent 和其他玩法作为上层模块大规模扩展。
 
-## 11. 对抗性审查记录
+## 11. 独立对抗性审查记录（冻结输入：6923833）
 
-本版本由子代理按反对立场审查，重点检查“是否过度设计、是否与现有代码冲突、是否存在安全/一致性漏洞、是否不可落地”。审查结论已合并，主要修订如下：
+本轮审查由独立子代理完成，检查了范围、事实所有权、部署边界、失败恢复、兼容路径和证据。完整结构化报告及消费 ledger 见 [R-001 review report](./rearchitecture/core-v0-design/review-report.json) 和 [R-001 review ledger](./rearchitecture/core-v0-design/review-ledger.json)。冻结输入的结论为 `blocked`。
 
-- 将外部 Ingress Events 与内部 Domain Events 分离，禁止内部派生事件回流 Collector。
-- 增加跨 JSONB、Memory PostgreSQL 和主应用状态的至少一次投递、幂等、repair/reconciliation 一致性模型。
-- 明确 canonical envelope 的主体字段只能由服务端身份上下文派生，trusted headers 不能单独授权。
-- 将 Memory raw event/outbox 定位为第一阶段聊天垂直切片，避免未经证明就再造第三个全局事件事实源。
-- 增加 Current State、Relationship、Personality、World State 的 canonical owner 表，禁止同一字段双写。
-- 补充 run/turn/chunk/resume/retry/regenerate/finalizer 事件语义，禁止 partial assistant 内容进入长期记忆。
-- 将 Interaction Finalizer 拆为同步 `Commit Coordinator` 与异步 `Projection Dispatcher`。
-- 将最小真实 PostgreSQL/Auth 隔离和删除传播作为早期硬门禁，而不是等到所有性能验收完成后才验证。
-- 补充导出、删除、缓存、日志、备份和外部模型供应商副本的治理范围。
+审查确认 Memory-first 分层和“模块化单体 + PostgreSQL”的保守方向有价值，但指出以下 blocking finding：Core v0 仍过宽；应用会话、Memory 会话、消息和 raw event 没有稳定映射；MemoryPort/部署切换尚未成为现有代码边界；turn 幂等和 assistant commit 失败语义不完整；restart/rollback/unknown external outcome 未落地；跨域 forget/delete/export 未闭环；第 12 节把不存在的实现和验收写成已完成；Collector 尚未实际封住公共写入口。另有两个 non-blocking finding：Extension Module 契约尚不可执行，Core/Memory 状态词汇尚未统一。
 
-仍需在后续实现评审中继续验证：Memory raw event 到通用 Event Log 的迁移时机、Relationship/Personality projection 的冲突裁决，以及真实环境中的 SLO 和数据保留证据。
+本节不把设计意图写成实现事实。所有修订必须先被 R-001 ledger 消费，再由 closure review 验证；在 closure review 通过前，不进入 Core v0 代码实现。
 
-## 12. 历史实施审计记录（2026-08-25）
+## 12. 基线实施审计快照（代码基线：7e86878）
 
-以下表格保留本轮拆分前的审计快照，便于追溯设计决策；它不是实时状态。当前分支的测试、构建和 Alpha 门禁以 `memory-module-evaluation-report.md`、`memory-module-alpha-gate.md` 及实际命令输出为准。
+以下内容只描述 `7e86878` 实际可见的代码路径，不把目标名称当作当前实现。实时测试和 Alpha 门禁仍以实际命令输出及 [`memory-module-evaluation-report.md`](./memory-module-evaluation-report.md)、[`memory-module-alpha-gate.md`](./memory-module-alpha-gate.md) 为准。
 
-| 范围 | 当前实现 | 当前证据 | 仍未关闭的门禁 |
+| 范围 | 基线事实 | 目标处理 | 当前门禁 |
 | --- | --- | --- | --- |
-| Collector → Event → Context → Model → Finalizer | `InteractionCollector`、显式 `IdentityRelationshipContext`、canonical event、`CompanionOrchestrator`、`ContextBuilder`、`InteractionFinalizer` 已接入聊天和 LifeState 适配器；聊天预检 fail-closed；LifeState、任务、日历和音乐经 `InteractionOutbox` 接入统一 ingress，任务/日历提交失败会回滚 | domain/contract/unit tests、LifeState/task/calendar outbox HTTP acceptance、chat concurrency acceptance、outbox at-least-once/dead-letter tests、required Auth acceptance、双独立 worker crash-takeover acceptance、虚拟时钟 outage/backlog acceptance | 生产类独立事件日志、长期 outage SLO 和 provider 恢复证据 |
-| Memory Module 治理 | scope、CAS、forget/delete、projection/index/episode/outbox 清理、worker fencing、Memory export snapshot 已实现 | 全量测试、独立 Memory API/SDK smoke、本机 PostgreSQL lexical/pgvector acceptance、双进程 worker crash-takeover acceptance、隔离 PITR/tombstone replay | 托管 PostgreSQL、1M pgvector/HNSW、生产 RPO/RTO |
-| 产品级记忆生命周期与聊天修正 | `/api` compatibility adapter 支持候选、确认/拒绝、激活、修正、Pin/Unpin、撤回、忘记、删除、导出；聊天编辑使用 source revision，reconciliation 与多 revision 删除已接入 | `server/memory-module-runtime.test.js`、`scripts/companion-core-memory-lifecycle-acceptance.js`、`scripts/companion-core-chat-edit-acceptance.js`、`server/companion-reconciliation.test.js` | 外部生产数据传播延迟和供应商副本语义仍需部署证据 |
-| 产品级导出 | `POST /api/export-operations`、状态、下载；旧 `GET /api/export` 兼容；manifest 包含消息、Memory、人格、关系、LifeState、任务、事件、偏好和 reconciliation | 新增 governance unit tests、隔离临时 JSON HTTP smoke | 真实缓存清理、日志/备份导出语义、供应商副本 SLA |
-| 产品级账户删除 | local state 清理、Memory account delete、删除 manifest；Memory 已提交而主应用最终保存失败时恢复本地主应用快照并保留删除账本；缓存、备份和供应商职责显式列为 operator/provider obligation | `scripts/companion-core-account-delete-recovery-acceptance.js` 隔离 HTTP acceptance、既有 Auth acceptance 代码路径、Memory delete/recovery tests、隔离 PITR/tombstone replay | 真实删除延迟、生产 RPO/RTO、供应商审计 |
-| 人格/关系/生命状态 | 版本化 personality projection、source-event growth evidence、relationship signal/state、policy-filtered `/api/life/context`、游戏事件 forget/delete 投影清理、可恢复 LifeState governance operation ledger、服务端 canonical LifeState、离线 command queue | domain tests、Life context HTTP smoke、`companion-core-life-outbox` HTTP acceptance 覆盖双客户端同 revision 的 CAS 冲突与原幂等键重试、required Auth acceptance 覆盖 context isolation 与 forget/delete/retry/status、LifeState/relationship/personality/life-event projection tests | 正式多设备/生产数据回归 |
-| 质量和容量 | 代码级 600-case scaffold、真实 PostgreSQL lexical 1M/20 benchmark、真实 pgvector/HNSW 100k/20 benchmark、lean pgvector/HNSW 1M/20 benchmark、outage/backlog recovery artifact | synthetic 结果、lean 1M 与带容量限制说明的本机 benchmark | 真实脱敏 600-case、完整 canonical 1M pgvector/HNSW、生产积压/降级 SLO |
+| 聊天编排 | `server/index.js` 直接组合请求、Memory 调用、模型调用和响应；未发现可运行的 `InteractionCollector`、`CompanionOrchestrator`、`ContextBuilder` 或 `InteractionFinalizer` | 先抽出 MemoryPort/admission，再按四转换基础切片拆边界 | legacy/target parity、失败和重启验收 |
+| Memory runtime | 主应用装配嵌入式 Memory runtime；默认路径可使用 JSON/JSONB；独立服务另有规范化 repository | 以 MemoryPort 隔离 in-process fixture 与 PostgreSQL repository，禁止双写事实源 | adapter parity、迁移、切换、回滚和真实 PostgreSQL 证据 |
+| 应用消息与 Memory 事件 | 聊天消息和 Memory raw event 缺少持久化的一一关联；当前聊天 Memory session 可能为空 | 明确 `application_session_id ↔ memory_session_id` binding、`application_message_id`、`event_id` 和 source revision | mapping、重复提交和 replay 测试 |
+| 公共写入口 | `/api/memories` 和挂载的 `/v1` 路径仍可直接触达 Memory 写能力；Collector 尚未成为实际强制边界 | public write → Collector/admission；`/v1` 仅 internal service identity | auth/context/idempotency negative tests |
+| Turn 生命周期 | user message ID 由服务端随机生成；现有 Memory 失败路径可能只记录日志；进程内 Map/数组承载部分运行态 | durable admission、commit receipt 和有限状态机；provider_unknown/stream recovery 后置 | exact replay、commit failure、restart recovery |
+| 删除/导出 | 基线代码未证明 Companion message、raw event、派生 Memory 和缓存之间有完整传播图 | 作为独立 follow-up gate，使用 deletion operation、tombstone/epoch 和传播 receipt | propagation/revival/export acceptance |
+| Extension modules | 音乐、Agent、LifeState 等能力仍由应用入口硬编码装配；没有可执行 module host | 首个真实扩展前再冻结 registry、capability、lifecycle 和 recovery contract | minimal extension fixture |
 
-因此，本计划当前应标记为“核心实现已完成、Alpha/生产证据未完成”，而不是“生产就绪”。
+因此，当前正确表述是“已有 Memory domain 能力和聊天基线，Core v0 目标边界尚未实现；未达到生产就绪”，而不是“核心实现已完成”。
 
 ## 13. Core v0 实施补充（2026-09-04）
 
@@ -472,48 +468,53 @@ Memory 是连续性的基础，但不拥有聊天回复、游戏世界或全部�
 
 ### 13.2 Core v0 范围
 
-#### 必须包含
+Core v0 是一个分片交付，不把所有长期 MVP 能力塞进首个切片。其第一交付物称为 **Core v0 Foundation Slice**；后续 hardening/governance 切片必须分别验收。
 
-- conversation.user_message.created
-- conversation.assistant_message.completed
-- conversation.turn.failed
-- 多轮会话、session state 和短期 current state
-- Memory raw event、受策略约束的 retrieve/context bundle
-- 显式记忆写入、candidate/confirmation、correct/revoke/forget/delete
-- Identity/Relationship Context
-- Context Builder 和 token budget
-- Model Gateway、Mock provider、流式响应
-- Assistant commit、幂等、retry、regenerate、cancel 和可恢复状态
-- Memory/投影不可用时的显式 degraded、pending、failed 语义
+#### Foundation Slice 必须包含
 
-#### 明确不包含
+- 一个带客户端幂等键的 `conversation.user_message.created` admission；
+- `application_session_id`、`memory_session_id`、`application_message_id`、`event_id` 和 source revision 的持久化关联；
+- MemoryPort 的 raw event append receipt 和策略约束下的 Memory retrieval view；
+- `Context Builder`，能在 Memory 可用和 `degraded` 两种情况下生成 bounded context；
+- 可控的 Mock Model Gateway（先不承诺真实 provider 或 streaming）；
+- assistant result commit、重复提交保护和 durable commit receipt；
+- `conversation.assistant_message.completed` 或 `conversation.turn.failed` 的明确结果；
+- 一个可重启后继续处理 `admitted`/`commit_pending` 的最小 durable turn 状态。
 
-- LifeState 和完整共生人生模拟
-- Task、Calendar、Music 等产品模块
-- 社区多 Agent
-- Electron/macOS 交付
-- 复杂向量检索作为硬依赖
-- 独立 Memory HTTP 服务作为 Core v0 的运行依赖
-- 模型直接修改 Memory、Personality 或工具权限
+#### Foundation Slice 明确不承担
+
+- candidate/confirmation/correct/revoke/forget/delete/export 的跨 Companion/Memory 传播；
+- projection worker、复杂 outbox 调度、通用 Event Log 或第三个全局事实源；
+- 真实模型 provider、流式 chunk、regenerate/cancel/provider_unknown 的完整恢复协议；
+- Relationship/Personality projection 的生产级演进；
+- LifeState 和完整共生人生模拟；
+- Task、Calendar、Music 等产品模块；
+- 社区多 Agent、Electron/macOS 交付和复杂向量检索硬依赖；
+- 独立 Memory HTTP 服务作为运行依赖；
+- 模型直接修改 Memory、Personality 或工具权限。
+
+Memory Module 已有的治理能力继续由其自身测试和 Alpha 门禁负责；Foundation Slice 只通过 MemoryPort 消费它们，不重复实现或把尚未接通的能力写成 Core v0 已完成。
 
 ### 13.3 Core v0 状态所有权
 
 | 数据 | Core v0 唯一 owner | 其他模块可见形式 |
 | --- | --- | --- |
 | 已验证身份与主体上下文 | Auth/Companion Context | 不可变 Context DTO |
-| 会话、消息、会话摘要 | Companion Runtime | Chat read model |
-| 原始聊天交互事件 | Memory Module；迁移期间由同一 Memory Port 代理 | Memory raw event receipt |
+| `application_session_id`、会话、消息、会话摘要 | Companion Runtime | Chat read model |
+| `memory_session_id` | Memory Foundation | opaque Memory session view |
+| `application_session_id ↔ memory_session_id` binding | MemoryPort integration adapter 的 durable link record | immutable binding receipt |
+| 原始聊天交互事件 | Memory Foundation；Foundation Slice 通过同一 MemoryPort append | Memory raw event receipt |
 | 长期记忆 assertion/version | Memory Module | ContextBundle、Memory API |
-| Session/Current State | Companion Runtime；Memory current-state 仅在明确契约下提供 | Context Builder view |
+| Session/Current State | Companion Runtime | Context Builder view |
 | Relationship State | Relationship Projection | Context Builder/UI view |
 | Personality/Growth | Personality Projection | Context Builder/UI view |
 | Extension Module 状态 | 对应 Extension Module | 事件、受限 context contributor |
 | 缓存 | Cache adapter | 不得成为 canonical source |
 | Outbox/投影任务 | 与其 canonical event owner 相同的 durable store | status/receipt |
 
-同一个 canonical 字段不得由主应用 JSONB、Memory PostgreSQL 和独立服务同时拥有写权限。部署模式改变时，必须先完成迁移、对账和切换证据。
+`application_session_id` 是产品事实，`memory_session_id` 是 Memory 事实，binding 是不可变的集成关系；它们不是可以互相覆盖的同一字段。同一个 canonical 字段不得由主应用 JSONB、Memory PostgreSQL 和独立服务同时拥有写权限。部署模式改变时，必须先完成迁移、对账和切换证据。
 
-### 13.4 Extension Module 契约
+### 13.4 Extension Module 契约（目标契约，Foundation Slice 不实现）
 
 每个上层模块必须声明：
 
@@ -534,61 +535,71 @@ Memory 是连续性的基础，但不拥有聊天回复、游戏世界或全部�
 - 把自己的 localStorage 或 JSONB 副本当作 canonical state；
 - 要求 Core 为其引入未验证的全局总线、调度器或数据库。
 
+当前仓库没有可执行的 module registry、能力发现、版本协商或生命周期隔离；本节不得被引用为“已经可插拔”的实现证据。第一个真实 Extension Module 接入前，必须增加最小注册/授权/回放/导出/删除 fixture。
+
 ### 13.5 第一阶段部署决定
 
-Core v0 采用“模块化单体 + PostgreSQL”：
+“模块化单体 + PostgreSQL”是目标部署边界，不是当前基线已经实现的事实。Foundation Slice 必须先冻结一个唯一运行模式：
 
-- 主应用和 Memory Module 先共享同一进程边界内的稳定 MemoryPort；
-- Memory 的 canonical persistence 使用一个明确的 PostgreSQL repository；
-- 独立 Memory HTTP 服务暂不作为主应用事实源，只用于契约和外部调用验收；
-- 只有当 in-process 与 HTTP contract parity、迁移、故障恢复和容量证据完成后，才允许切换到独立服务。
+1. domain 代码只依赖 `MemoryPort`，不直接访问 `MemoryModule.state`、JSONB 聚合或独立服务 repository；
+2. 测试可使用 in-process fake，但真实 acceptance 必须使用 PostgreSQL adapter，并验证 TLS、Auth 和 tenant/user 隔离；
+3. 主应用不同时把嵌入式 Memory 状态和独立 Memory 服务当作可写 canonical source；
+4. 独立 Memory HTTP 服务先作为 contract/parity fixture，只有完成 in-process/HTTP parity、迁移、对账、故障恢复和容量证据后才允许切换；
+5. 切换前冻结回滚点：停止新写入、完成 binding/event 对账、保留旧路径只读或可恢复、验证 receipt 等价，再放量；未知外部结果进入 pending/unknown，不自动标记成功。
 
-同一部署不得同时把内嵌 Memory 状态和独立 Memory 服务当作可写 canonical source。
+第一阶段不把默认 JSON store 宣称为生产存储；它只能作为 legacy fixture 或开发测试替身。
 
-### 13.6 失败与恢复语义
+### 13.6 Foundation Slice 失败与恢复语义
 
-| 阶段 | 允许的结果 | 禁止的结果 |
+| 阶段 | Foundation Slice 允许的结果 | 禁止的结果 |
 | --- | --- | --- |
-| 事件接收 | accepted、accepted_no_store、rejected | 未持久化却声称 accepted |
+| Turn admission | `admitted`、`rejected`、`failed` | 未持久化却声称 admitted |
 | Memory 读取 | available、degraded、not_found、uncertain | 用模型猜测填充缺失记忆 |
-| Assistant commit | committed、failed、superseded | 消息未保存却返回 completed |
-| Projection/outbox | pending、processing、applied、retrying、dead_letter | 异常只写日志并返回成功 |
-| Forget/delete | canonical 隐藏或删除后，派生物进入 pending/repair | 旧索引、缓存或投影重新暴露内容 |
+| Generation | `generation_succeeded`、`failed` | provider 未返回却声称生成成功 |
+| Assistant commit | `committed`、`commit_pending`、`failed`、`superseded` | 消息未保存却返回 completed |
+| Durable receipt | `pending`、`processing`、`completed`、`failed`、`dead_letter` | 异常只写日志并返回成功 |
 
-Memory 读取暂时不可用时，正常聊天可以降级继续；显式记忆写入、forget/delete 和导出不得伪造成功。所有跨存储流程必须具备幂等键、持久化状态、重试、重启恢复和 repair/reconciliation。
+Foundation Slice 的最小状态机为：
 
-### 13.7 Core v0 第一条垂直切片
+```text
+admitted → context_ready → generation_succeeded → commit_pending → committed
+    └──────────────→ failed                         └────────────→ superseded
+```
 
-第一条实现只证明以下链路：
+重启时只能根据 durable admission/commit record 继续或安全重读；不能根据进程内 Map、SSE 数组或随机 message ID 推断成功。`provider_unknown`、`cancel_requested`、retry/regenerate 和完整 projection recovery 是后续 hardening slice 的状态，不得在 Foundation Slice 中伪装为已实现。
+
+跨域 forget/delete/export 不是 Foundation Slice 的成功条件；在其专门门禁通过前，仍不得接入真实用户数据。
+
+### 13.7 Core v0 Foundation Slice 第一条垂直切片
+
+第一条实现只证明以下四个转换和它们的 durable 关联：
 
 ~~~
 user message
-  → Interaction Collector
-  → Memory raw event
-  → Context Builder
-  → Mock Model Gateway
-  → assistant event
-  → Companion commit
-  → durable projection receipt
+  → turn admission + MemoryPort raw event receipt
+  → bounded Context Builder
+  → Mock Model result
+  → assistant commit receipt
 ~~~
 
-不在该切片中引入游戏、Electron、独立 Memory HTTP 调用或完整 Personality/LifeState。切片完成条件：
+切片不引入游戏、Electron、独立 Memory HTTP 运行依赖、真实 provider streaming、projection worker 或完整 Personality/LifeState。切片完成条件：
 
-1. 同一消息重复提交不会产生第二个 canonical event；
-2. Memory 读取失败时聊天返回明确 degraded 状态；
-3. assistant commit 失败时不会留下“成功消息”；
-4. projection worker 重启后可以继续处理 pending receipt；
-5. forget/delete 后本次消息不能从 Memory ContextBundle 重新出现。
+1. 同一 `idempotency_key` 的重复提交返回同一 admission receipt，不产生第二条 user message/raw event；
+2. `application_session_id ↔ memory_session_id` binding、message/event/source revision 可在重启后读取；
+3. Memory 读取失败时返回明确 `degraded`，不猜测记忆；
+4. assistant commit 失败时不会留下“成功消息”，`commit_pending` 可安全重试；
+5. legacy path 与 target path 对同一场景的外部结果、durable records 和 receipts 可比较；
+6. Core v0 不以跨域 forget/delete、真实 provider SLO 或“可插拔模块”作为本切片已完成的声明。
 
-### 13.8 计划审查门禁
+### 13.8 Closure review 门禁
 
-本节补充后，必须进行一次独立的对抗性审查。审查至少回答：
+独立审查已经确认原始输入 `6923833` 为 `blocked`。本轮修订必须消费 AR-001 至 AR-010，并针对修改后的 revision 进行一次 closure review。closure review 至少验证：
 
-- Core v0 是否仍然过宽；
-- Memory Foundation 与 Companion Core 是否存在重复 owner；
-- 独立服务是否被错误地提前承诺；
-- Extension Module 是否可以在不修改 Memory 内部的情况下接入；
-- restart、rollback、unknown external outcome 是否有明确边界；
-- 每一个“可恢复、可扩展、可上线”判断是否有对应证据。
+- Foundation Slice 是否真的收缩为 admission/context/mock/commit 四转换；
+- 应用 session、Memory session、message、raw event 和 source revision 是否各有 owner 与稳定 mapping；
+- MemoryPort、PostgreSQL 目标边界和独立服务延后策略是否不再冒充当前实现；
+- durable turn 状态、commit failure、restart 和 unknown outcome 的未实现部分是否明确后置；
+- 删除传播、Extension host 和状态枚举是否都有 owner、触发条件和证据，而非空泛承诺；
+- 第 12 节是否只描述 `7e86878` 的实际代码。
 
-在这轮审查的 blocking finding 未消费前，不进入 Core v0 实现。
+在 closure review 的 blocking finding 未消费前，不进入 Core v0 实现。
