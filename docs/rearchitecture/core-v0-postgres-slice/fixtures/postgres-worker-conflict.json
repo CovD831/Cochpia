@@ -1,0 +1,18 @@
+{
+  "fixture": "postgres-worker-conflict",
+  "subject": {"tenantId": "tenant-fixture", "subjectUserId": "user-fixture"},
+  "workers": ["worker-a", "worker-b"],
+  "request": {
+    "sessionId": "session-fixture",
+    "message": "同一条跨进程消息",
+    "channel": "默认",
+    "idempotencyKey": "fixture-postgres-key-01"
+  },
+  "expected": {
+    "winnerCount": 1,
+    "loserError": "CORE_STORAGE_CONFLICT",
+    "replayUsesOriginalKey": true,
+    "changedFingerprintError": "IDEMPOTENCY_KEY_CONFLICT",
+    "externalMemorySuccessCoreCasLoss": "pending"
+  }
+}

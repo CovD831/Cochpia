@@ -7,6 +7,7 @@ work/
 cochpia-preview.html
 client/cochpia-app-preview.html
 Knowledge_Base/
+.rearchitecture-runs/
 
 # Local QA/browser state and user-provided private uploads
 .visual-qa-browser/

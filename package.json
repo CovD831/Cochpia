@@ -13,6 +13,8 @@
     "start:memory-module": "node services/memory-module/index.js",
     "test:core-v0": "node --test server/core-v0.test.js server/core-v0-foundation.test.js server/core-v0-ingress.test.js",
     "acceptance:core-v0": "CORE_V0_ACCEPTANCE_MODULE=./scripts/core-v0-runtime-acceptance.js node scripts/core-v0-foundation-acceptance.js",
+    "test:core-v0-postgres": "node --test server/core-v0-postgres.test.js",
+    "acceptance:core-v0-postgres": "node scripts/core-v0-postgres-acceptance.js",
     "test:memory-postgres": "node scripts/memory-module-postgres-smoke.js",
     "test:memory-postgres-acceptance": "node scripts/memory-module-postgres-acceptance.js",
     "benchmark:memory-postgres": "node scripts/memory-module-postgres-benchmark.js",

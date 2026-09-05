@@ -1,0 +1,35 @@
+{
+  "package_id": "R-003-postgres-memoryport",
+  "size": "implementation",
+  "baseline_revision": "410f770",
+  "current_revision": "410f770",
+  "documents": {
+    "scope": "00-scope.md",
+    "positioning": "01-positioning.md",
+    "l1": "02-l1-target.md",
+    "mapping": "03-current-to-target-map.md",
+    "l2": [
+      "04-l2-contracts.md"
+    ],
+    "adr": [
+      "05-adr.md"
+    ],
+    "handoff": "06-handoff.md",
+    "l3": "07-l3-task-contract.md",
+    "fixtures": "fixtures/README.md",
+    "acceptance": "acceptance.md",
+    "rollback": "rollback.md",
+    "review_report": "review-report.json",
+    "review_ledger": "review-ledger.json"
+  },
+  "review": {
+    "status": "consumed",
+    "reviewer": "01a070cf-a280-7b32-8395-ebbdb8dae623"
+  },
+  "next_task": {
+    "id": "R-003-VERIFY-AND-PROMOTE",
+    "owner": "Codex + release owner"
+  },
+  "advancement_trigger": "The SQL-shaped store, MemoryPort adapter and lifecycle/repair fixtures pass the package acceptance matrix; live PostgreSQL evidence remains a separate promotion gate.",
+  "stop_rule": "Stop before traffic cutover if a unique constraint cannot preserve the original turn/binding/commit identity, a CAS conflict can be mistaken for success, or disabling the gate can admit a new turn after the close point."
+}

@@ -1,0 +1,12 @@
+{
+  "fixture": "drain-timeout",
+  "gateId": "core-v0",
+  "turnId": "turn-fixture-drain-01",
+  "expected": {
+    "leaseStatusBeforeClose": "active",
+    "closeStatus": "timed_out",
+    "postCloseAdmission": "CORE_ADMISSION_CLOSED",
+    "activeIdentifiersRecorded": true,
+    "externalWorkCancelled": false
+  }
+}

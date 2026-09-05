@@ -1,0 +1,73 @@
+[
+  {
+    "finding_id": "AR-001",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "06-handoff.md", "anchor": "Implementation evidence is now present"},
+    "owner": "Core v0 implementation owner",
+    "evidence": "server/core-v0-postgres.test.js",
+    "resolution_review": "third-party",
+    "status": "closed",
+    "trigger": "the shaped store, fixtures and acceptance command are present and pass"
+  },
+  {
+    "finding_id": "AR-002",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "07-l3-task-contract.md", "anchor": "Immutable fingerprint and conflict protocol"},
+    "owner": "Core persistence owner",
+    "evidence": "server/core-v0-postgres.test.js",
+    "status": "closed",
+    "trigger": "worker replay and changed-fingerprint tests pass"
+  },
+  {
+    "finding_id": "AR-003",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "04-l2-contracts.md", "anchor": "Cross-process fence"},
+    "owner": "Core lifecycle owner",
+    "evidence": "server/core-v0-postgres.test.js",
+    "status": "closed",
+    "trigger": "close-race fixture proves no post-close lease"
+  },
+  {
+    "finding_id": "AR-004",
+    "severity": "blocking",
+    "decision": "accepted",
+    "consumer": {"path": "07-l3-task-contract.md", "anchor": "Deterministic repair identity and transitions"},
+    "owner": "Core operations owner",
+    "evidence": "server/core-v0-postgres.test.js",
+    "status": "closed",
+    "trigger": "repair identity, idempotent recording and bounded transitions pass"
+  },
+  {
+    "finding_id": "AR-005",
+    "severity": "non-blocking",
+    "decision": "accepted",
+    "consumer": {"path": "04-l2-contracts.md", "anchor": "Live Auth/TLS and context-spoofing promotion gate"},
+    "owner": "Security and release owner",
+    "evidence": "acceptance.md",
+    "status": "open",
+    "trigger": "a real required-Auth/TLS PostgreSQL run and negative context-spoofing test pass"
+  },
+  {
+    "finding_id": "AR-006",
+    "severity": "non-blocking",
+    "decision": "accepted",
+    "consumer": {"path": "03-current-to-target-map.md", "anchor": "Compatibility fence before promotion"},
+    "owner": "Migration owner",
+    "evidence": "06-handoff.md",
+    "status": "open",
+    "trigger": "the cutover rehearsal names and fences every mutable writer"
+  },
+  {
+    "finding_id": "AR-007",
+    "severity": "non-blocking",
+    "decision": "accepted",
+    "consumer": {"path": "acceptance.md", "anchor": "Complexity traceability"},
+    "owner": "Architecture package owner",
+    "evidence": "acceptance.md",
+    "status": "open",
+    "trigger": "each retained table and interface is covered by a passing acceptance row or explicitly deferred"
+  }
+]

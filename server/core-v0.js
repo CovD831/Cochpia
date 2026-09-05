@@ -465,6 +465,9 @@ export function createCoreV0TurnService({
     try {
       await runtimeStore.persist();
     } catch (error) {
+      if (error?.code === 'CORE_STORAGE_CONFLICT') {
+        throw new CoreV0Error('STORAGE_WRITE_FAILED', 'Core v0 durable state changed during this operation', { status: 503, retryable: true, unknown: true, cause: error });
+      }
       throw asCoreError(error, 'STORAGE_WRITE_FAILED', 'Core v0 durable state could not be saved', { status: 503, unknown: true });
     }
   };
