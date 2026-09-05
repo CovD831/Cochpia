@@ -1,9 +1,9 @@
 # Cochpia 陪伴核心基座建设计划
 
-> 状态：Draft v0.5（closure review 已完成；实现前置证据门禁仍 blocked）
+> 状态：Draft v0.6（R-002 Core v0 Foundation Slice 已在本地模块化单体中实现并通过验收；PostgreSQL-shaped hardening 待做）
 > 目标：先建立可持续、可验证、可治理的聊天式情感陪伴核心，再将游戏、任务、日历和其他交互形态作为上层模块接入。
 
-> 本文是目标架构与建设路线，不承担实时 changelog 职责。当前实现证据和未关闭门禁统一维护在 [`memory-module-evaluation-report.md`](./memory-module-evaluation-report.md)、[`memory-module-alpha-gate.md`](./memory-module-alpha-gate.md) 和 [R-001 design package](./rearchitecture/core-v0-design/00-scope.md)；生成的本地验收 JSON 不作为仓库内 Markdown 链接引用。
+> 本文是目标架构与建设路线，不承担实时 changelog 职责。当前实现证据和未关闭门禁统一维护在 [`memory-module-evaluation-report.md`](./memory-module-evaluation-report.md)、[`memory-module-alpha-gate.md`](./memory-module-alpha-gate.md)、[R-001 design package](./rearchitecture/core-v0-design/00-scope.md) 和 [R-002 Foundation Slice](./rearchitecture/core-v0-foundation-slice/06-handoff.md)；生成的本地验收 JSON 不作为仓库内 Markdown 链接引用。
 
 ## 0. 结论与建设原则
 
@@ -284,7 +284,7 @@ state.current.updated
 - 先以 Memory Module raw event 能力支撑聊天基础切片；不要在没有 ownership、顺序和恢复证据前抽出跨领域 Event Log 或 projection worker。
 - 增加重复提交、消息/事件关联、Memory degraded、assistant commit 失败和重启后 pending admission 测试。
 
-完成标准：聊天通过 Collector/admission 提交可追溯的 raw event；`application_session_id`、`memory_session_id`、`application_message_id`、`event_id` 和 source revision 可关联；Memory Module 作为第一消费者处理。迁移期间若仍需同步写入，必须有单一 owner、幂等键和 reconciliation 证据，不能无条件双写。
+完成标准：聊天通过 Collector/admission 提交可追溯的 raw event；`application_session_id`、`memory_session_id`、`application_message_id`、`event_id` 和 source revision 可关联；Memory Module 作为第一消费者处理。R-002 已在本地模块化单体中证明这一 Foundation Slice；迁移期间若仍需同步写入，必须有单一 owner、幂等键和 reconciliation 证据，不能无条件双写。
 
 ### Phase 2：陪伴运行时与 Context Builder
 
@@ -399,7 +399,7 @@ state.current.updated
 3. 把聊天 user turn 迁移到 admission + raw event receipt，建立 message/event/source revision 关联。
 4. 抽出 `ContextBuilder`、Mock Model Gateway 和 `Commit Coordinator`，只实现四转换基础切片。
 5. 用 legacy/target fixture 验证重复提交、degraded retrieval、commit failure 和 restart recovery。
-6. 再决定是否进入真实 PostgreSQL/Auth、projection worker、删除传播和真实 provider hardening。
+6. 在 Foundation Slice 证据基础上进入真实 PostgreSQL/Auth、跨进程并发、projection worker、删除传播和真实 provider hardening；R-003 先处理 PostgreSQL-shaped MemoryPort/Companion Store 和恢复边界。
 7. 接入关系状态和人格成长投影。
 8. 最后将共生人生改造成第二个交互源。
 
@@ -442,7 +442,7 @@ state.current.updated
 | 删除/导出 | 基线代码未证明 Companion message、raw event、派生 Memory 和缓存之间有完整传播图 | 作为独立 follow-up gate，使用 deletion operation、tombstone/epoch 和传播 receipt | propagation/revival/export acceptance |
 | Extension modules | 音乐、Agent、LifeState 等能力仍由应用入口硬编码装配；没有可执行 module host | 首个真实扩展前再冻结 registry、capability、lifecycle 和 recovery contract | minimal extension fixture |
 
-因此，当前正确表述是“已有 Memory domain 能力和聊天基线，Core v0 目标边界尚未实现；未达到生产就绪”，而不是“核心实现已完成”。
+因此，当前正确表述是“Core v0 Foundation Slice 已在本地模块化单体中实现并通过 A-01～A-12，但 PostgreSQL、多进程回滚和生产就绪仍未完成”，而不是“整个核心基座已经完成”。
 
 ## 13. Core v0 实施补充（2026-09-04）
 
@@ -591,7 +591,7 @@ user message
 5. legacy path 与 target path 对同一场景的外部结果、durable records 和 receipts 可比较；
 6. Core v0 不以跨域 forget/delete、真实 provider SLO 或“可插拔模块”作为本切片已完成的声明。
 
-### 13.8 Closure review 门禁
+### 13.8 Closure review 门禁（历史前置记录）
 
 独立审查已经确认原始输入 `6923833` 为 `blocked`。本轮修订必须消费 AR-001 至 AR-010，并针对修改后的 revision 进行一次 closure review。closure review 至少验证：
 
@@ -602,4 +602,10 @@ user message
 - 删除传播、Extension host 和状态枚举是否都有 owner、触发条件和证据，而非空泛承诺；
 - 第 12 节是否只描述 `7e86878` 的实际代码。
 
-closure review 已完成但结论仍为 `blocked`：在 CR-001 至 CR-003 有实际 L3、fixture、negative/failure acceptance 证据并被再次审查关闭前，不进入 Core v0 实现。
+closure review 当时结论为 `blocked`。R-002 随后在独立 implementation package 中提供了 L3、fixture、negative/failure acceptance 和本地运行证据；R-001 的历史 manifest 状态保留不改写，当前限制与下一步由 R-002/R-003 记录。
+
+### 13.9 当前实施状态（2026-09-05）
+
+- R-002 `Core v0 Foundation Slice` 已在 `codex/core-v0-foundation` 实现：`POST /api/chat/turns` 经过 MemoryPort admission、bounded Context Builder、Mock Model Gateway 和 assistant commit；A-01～A-12 通过。
+- R-002 只证明当前进程内的模块化单体路径；默认 JSON store、真实 PostgreSQL、多进程唯一约束、race-free drain、crash recording、operator repair、UI 迁移和旧 PR 替换仍未完成。
+- 下一增量为 R-003：先把 Core operational records 与 MemoryPort 连接到 PostgreSQL-shaped durable boundary，再用同一 acceptance matrix 验证跨进程并发、唯一性和恢复，不在此阶段关闭旧 PR。
