@@ -10,6 +10,8 @@ Comment only for this Foundation Slice. No blocking correctness or security find
 
 The implementation establishes the target route and its failure semantics. It does not claim production readiness for PostgreSQL, horizontal scaling, an independent Memory service, or the full rollback drain protocol.
 
+The reviewed implementation checkpoint is commit `4ff2803` on branch `codex/core-v0-foundation`. The package's `current_revision` remains the historical preflight review input by convention; the checkpoint is recorded here so the runtime evidence is traceable.
+
 ## State and effects
 
 | Trigger | State/effect | Recovery | Evidence |

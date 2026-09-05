@@ -31,6 +31,8 @@ The target path produces comparable external results and durable receipts for th
 
 The user explicitly authorized implementation after the preflight gate. Core v0 is now implemented as a feature-flagged, non-streaming target route in the modular monolith. The route uses the in-process Memory Module through `MemoryPort`, keeps `/api/chat/stream` as the legacy comparison path, and does not migrate the UI.
 
+The implementation checkpoint is commit `4ff2803` on branch `codex/core-v0-foundation`.
+
 The runtime acceptance adapter passes A-01 through A-12. The implementation also scopes failure rollback to the affected session, permits reconciliation while new admissions are disabled, and blocks secret-like content before durable admission. The implementation review is recorded in [`08-implementation-review.md`](08-implementation-review.md). The result is local modular-monolith evidence only; it is not evidence for PostgreSQL horizontal scaling or the independent Memory service.
 
 ## Next task
