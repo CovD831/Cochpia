@@ -70,5 +70,9 @@ export function mergeState(base, incoming) {
     merged.memoryModule = currentModule;
   }
 
+  // Core v0 admissions, bindings, and commit receipts are service-owned
+  // operational facts. They are intentionally not imported from a user
+  // payload, otherwise an import could manufacture a completed turn.
+
   return merged;
 }

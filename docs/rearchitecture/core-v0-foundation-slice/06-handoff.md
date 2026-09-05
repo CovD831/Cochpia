@@ -1,10 +1,10 @@
 # R-002 implementation handoff
 
-## Preflight status
+## Preflight status (historical)
 
-The preflight review and closure reviews are complete. The contract and harness fixes are recorded in the package; runtime evidence is still pending. The package-level provenance and acceptance gates must pass mechanically, while R-001 remains blocked until its closure findings have evidence-backed resolution.
+The preflight review and closure reviews completed before runtime work. At that point runtime evidence was intentionally pending; the current implementation result below supersedes that pending state. The package-level provenance and acceptance gates remain recorded mechanically, while R-001 remains blocked until its closure findings have evidence-backed resolution.
 
-## Code-entry gate
+## Code-entry gate (historical)
 
 Runtime code may start only after:
 
@@ -15,9 +15,9 @@ Runtime code may start only after:
 - ingress, duplicate-submit, degraded-retrieval, commit-failure and restart acceptance commands are named;
 - the user has not requested an exception to the R-001 blocked gate.
 
-The fixture/schema tests currently pass; `scripts/core-v0-foundation-acceptance.js` deliberately reports runtime rows as `pending` when no target adapter is supplied. That is an honest preflight result, not implementation evidence.
+The fixture/schema tests passed during preflight; `scripts/core-v0-foundation-acceptance.js` deliberately reported runtime rows as `pending` when no target adapter was supplied. That was an honest preflight result, not implementation evidence.
 
-## Next task
+## Next task from preflight (superseded)
 
 `R-002-PREFLIGHT-REVIEW-CONSUME`: consume the first review findings, run the closure review, and only after it passes consider the target application service. Do not migrate the UI or close old PRs in the same increment.
 
@@ -26,3 +26,13 @@ The final closure review found two package-level defects: provenance was not ali
 ## Definition of done for the increment
 
 The target path produces comparable external results and durable receipts for the target fixture, exact replay is idempotent, conflicting replay is rejected, degraded Memory is explicit, commit failure cannot appear as success, and a restart can re-read pending records. Anything else remains deferred.
+
+## Runtime implementation result — September 5, 2026
+
+The user explicitly authorized implementation after the preflight gate. Core v0 is now implemented as a feature-flagged, non-streaming target route in the modular monolith. The route uses the in-process Memory Module through `MemoryPort`, keeps `/api/chat/stream` as the legacy comparison path, and does not migrate the UI.
+
+The runtime acceptance adapter passes A-01 through A-12. The implementation also scopes failure rollback to the affected session, permits reconciliation while new admissions are disabled, and blocks secret-like content before durable admission. The implementation review is recorded in [`08-implementation-review.md`](08-implementation-review.md). The result is local modular-monolith evidence only; it is not evidence for PostgreSQL horizontal scaling or the independent Memory service.
+
+## Next task
+
+`R-003-POSTGRES-MEMORYPORT`: add the PostgreSQL-shaped durable adapter and prove the same receipts, ownership boundaries, and recovery behavior before changing client traffic.

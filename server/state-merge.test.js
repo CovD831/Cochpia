@@ -38,6 +38,35 @@ test('mergeState imports workspace preferences only when missing', () => {
   assert.equal(existing.workspacePreferences.theme.themeId, 'sakura');
 });
 
+test('mergeState does not import Core v0 operational receipts from an untrusted payload', () => {
+  const base = {
+    sessions: [],
+    messages: {},
+    coreV0: {
+      schemaVersion: 1,
+      sequence: 2,
+      memorySessionBindings: [{ bindingId: 'binding-a', applicationSessionId: 's1' }],
+      turnAdmissions: [{ turnId: 'turn-a', idempotencyKey: 'key-a' }],
+      assistantCommits: [{ commitId: 'assistant:message-a', status: 'completed' }]
+    }
+  };
+  const incoming = {
+    coreV0: {
+      schemaVersion: 1,
+      sequence: 9,
+      memorySessionBindings: [{ bindingId: 'binding-a', applicationSessionId: 'changed' }, { bindingId: 'binding-b', applicationSessionId: 's2' }],
+      turnAdmissions: [{ turnId: 'turn-a', idempotencyKey: 'changed' }, { turnId: 'turn-b', idempotencyKey: 'key-b' }],
+      assistantCommits: [{ commitId: 'assistant:message-a', status: 'changed' }, { commitId: 'assistant:message-b', status: 'pending' }]
+    }
+  };
+  const merged = mergeState(base, incoming);
+  assert.equal(merged.coreV0.sequence, 2);
+  assert.deepEqual(merged.coreV0.memorySessionBindings.map(item => item.bindingId), ['binding-a']);
+  assert.deepEqual(merged.coreV0.turnAdmissions.map(item => item.turnId), ['turn-a']);
+  assert.deepEqual(merged.coreV0.assistantCommits.map(item => item.commitId), ['assistant:message-a']);
+  assert.equal(merged.coreV0.turnAdmissions[0].idempotencyKey, 'key-a');
+});
+
 test('mergeState rejects invalid payloads', () => {
   assert.throws(() => mergeState({}, null), /Invalid import state/);
   assert.throws(() => mergeState(null, {}), /Invalid base state/);

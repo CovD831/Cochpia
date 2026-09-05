@@ -27,6 +27,8 @@ import { mergeState } from './state-merge.js';
 import { shouldRemember } from './auto-memory.js';
 import { ensurePsychologyTraits, listAtmospherePresets, resolveAtmosphere } from './psychology.js';
 import { sanitizeWorkspacePreferences } from './workspace-preferences.js';
+import { createInProcessMemoryPort, createCoreV0MockModelGateway, createCoreV0TurnService, coreV0ErrorResponse } from './core-v0.js';
+import { createMemoryServiceBoundary } from './memory-service-boundary.js';
 
 const app = express();
 const observability = createObservability({ rateLimitMax: Number(process.env.API_RATE_LIMIT_MAX || 120) });
@@ -78,7 +80,7 @@ const state = new Proxy(baseState, {
 });
 const memoryRuntime = createMemoryModuleRuntime({
   getState: () => requestContext.getStore()?.state || baseState,
-  persistState: currentState => saveState(currentState),
+  persistState: () => saveState(state),
   getUser: () => requestContext.getStore()?.user || { id: 'local-user' }
 });
 const agents = createAgentService(state, () => saveState(state));
@@ -132,12 +134,23 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '1mb' }));
 app.use(observability.middleware);
+app.use('/v1', createMemoryServiceBoundary());
 app.use(async (req, res, next) => {
   const isApi = req.path.startsWith('/api/') || req.path.startsWith('/v1/') || req.path === '/mcp';
   const isPublic = req.path === '/api/health' || req.path === '/api/ready' || req.path === '/api/version' || req.path === '/api/metrics' || req.path === '/api/models';
-  if (!isApi || isPublic || authMode() === 'off') {
-    if (authMode() === 'off' && isApi) return requestContext.run({ user: { id: 'local-user', local: true }, state: baseState }, next);
-    return next();
+  if (!isApi || isPublic) return next();
+  if (req.memoryServiceIdentity) {
+    if (authMode() === 'required' && !req.memoryServiceIdentity.subjectUserId) {
+      return next(Object.assign(new Error('Memory service subject identity is required'), { code: 'MEMORY_SERVICE_SUBJECT_REQUIRED', status: 400 }));
+    }
+    const user = { id: req.memoryServiceIdentity.subjectUserId || 'local-user', local: authMode() === 'off', service: true };
+    try {
+      const userState = await loadUserState(user.id, baseState);
+      return requestContext.run({ user, state: userState }, next);
+    } catch (error) { return next(error); }
+  }
+  if (authMode() === 'off') {
+    return requestContext.run({ user: { id: 'local-user', local: true }, state: baseState }, next);
   }
   try {
     const user = await authenticateRequest(req);
@@ -156,6 +169,17 @@ const send = (res, event, data, run) => {
   return true;
 };
 const fail = (res, status, code, message) => res.status(status).json({ error: { code, message } });
+const coreEventFields = new Set([
+  'message', 'turnId', 'turn_id', 'eventId', 'event_id', 'sourceRevision', 'source_revision',
+  'memorySessionId', 'memory_session_id', 'applicationMessageId', 'application_message_id',
+  'assistantMessageId', 'assistant_message_id', 'bindingKey', 'binding_key'
+]);
+const rejectCoreChatBypass = body => {
+  const input = body && typeof body === 'object' ? body : {};
+  const field = Object.keys(input).find(key => coreEventFields.has(key));
+  if (field) return `Core chat field ${field} is not accepted by the Memory governance route`;
+  return null;
+};
 const getSession = id => state.sessions.find(session => session.id === id);
 const getMessage = (sessionId, messageId) => state.messages[sessionId]?.find(message => message.id === messageId);
 const touchSession = session => { if (session) session.updatedAt = new Date().toISOString(); };
@@ -163,6 +187,27 @@ const runtimeKey = sessionId => `${requestContext.getStore()?.user?.id || 'local
 const currentUserId = () => requestContext.getStore()?.user?.id || 'local-user';
 const chatMemoryForRequest = req => memoryRuntime.chatForRequest(req);
 const compatibilityMemoryForRequest = req => memoryRuntime.compatibilityForRequest(req);
+const coreV0Enabled = () => /^(1|true|yes)$/i.test(String(process.env.CORE_V0_ENABLED || 'false'));
+const coreV0ContextForRequest = req => ({
+  ...memoryRuntime.contextFromRequest(req, { chat: true }),
+  requestId: req.requestId || null,
+  traceId: req.traceId || null,
+  producer: 'companion-core',
+  correlationId: req.get('x-correlation-id') || req.traceId || req.requestId || randomUUID()
+});
+const coreV0ServiceForRequest = req => {
+  const context = coreV0ContextForRequest(req);
+  const requestState = requestContext.getStore()?.state || baseState;
+  const memoryModule = memoryRuntime.moduleForRequest(req);
+  return createCoreV0TurnService({
+    state: requestState,
+    context,
+    persist: () => saveState(state),
+    memoryPort: createInProcessMemoryPort({ memoryModule, context }),
+    modelGateway: createCoreV0MockModelGateway({ provider: createModelProvider('mock') }),
+    enabled: coreV0Enabled()
+  });
+};
 const finishRun = run => {
   if (run.finished) return;
   run.finished = true;
@@ -170,6 +215,22 @@ const finishRun = run => {
   if (run.heartbeat) clearInterval(run.heartbeat);
   setTimeout(() => { if (streamRuns.get(run.id) === run) streamRuns.delete(run.id); }, streamRetentionMs).unref?.();
 };
+
+app.post('/api/chat/turns', async (req, res) => {
+  if (!coreV0Enabled()) {
+    res.set('Retry-After', '1');
+    return res.status(503).json({ error: { code: 'CORE_V0_DISABLED', message: 'Core v0 is disabled', retryable: true, unknown: false } });
+  }
+  try {
+    const service = coreV0ServiceForRequest(req);
+    const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
+    return res.status(result.status === 'pending' ? 202 : 200).json(result);
+  } catch (error) {
+    const response = coreV0ErrorResponse(error);
+    if (response.body.error.retryable) res.set('Retry-After', '1');
+    return res.status(response.status).json(response.body);
+  }
+});
 const attachStreamResponse = (run, res, afterId = '') => {
   run.response = res;
   run.connected = true;
@@ -338,7 +399,11 @@ app.get('/api/memories', async (req, res) => {
   const result = queryCollection(memories, { search: req.query.search, limit: req.query.limit, offset: req.query.offset, text: item => `${item.summary} ${item.type} ${item.source}` });
   return res.json(result);
 });
-app.post('/api/memories', async (req, res) => { try { res.status(201).json(await compatibilityMemoryForRequest(req).hold(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_MEMORY', error.message); } });
+app.post('/api/memories', async (req, res) => {
+  const bypass = rejectCoreChatBypass(req.body);
+  if (bypass) return fail(res, 400, 'MEMORY_CHAT_BYPASS_FORBIDDEN', bypass);
+  try { res.status(201).json(await compatibilityMemoryForRequest(req).hold(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_MEMORY', error.message); }
+});
 app.get('/api/memories/export', async (req, res) => {
   const memories = await compatibilityMemoryForRequest(req).exportMemories();
   res.set('Content-Disposition', 'attachment; filename="cochpia-memories.json"');
@@ -358,6 +423,7 @@ app.get('/api/export', async (req, res) => {
       evidence: state.evidence,
       personalityHistory: state.personalityHistory,
       personalityAudit: state.personalityAudit,
+      coreV0: state.coreV0 || null,
       agents: state.agents,
       profile: state.profile,
       workspacePreferences: state.workspacePreferences || null
@@ -398,7 +464,11 @@ app.post('/api/memories/batch', async (req, res) => {
 });
 app.post('/api/memories/:id/revoke', async (req, res) => { const item = await compatibilityMemoryForRequest(req).revoke(req.params.id); item ? res.json(item) : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); });
 app.get('/api/memories/:id', async (req, res) => { const item = await compatibilityMemoryForRequest(req).get(req.params.id); item ? res.json(item) : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); });
-app.patch('/api/memories/:id', async (req, res) => { try { const item = await compatibilityMemoryForRequest(req).update(req.params.id, req.body || {}); item ? res.json(item) : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); } catch (error) { fail(res, 400, 'INVALID_MEMORY', error.message); } });
+app.patch('/api/memories/:id', async (req, res) => {
+  const bypass = rejectCoreChatBypass(req.body);
+  if (bypass) return fail(res, 400, 'MEMORY_CHAT_BYPASS_FORBIDDEN', bypass);
+  try { const item = await compatibilityMemoryForRequest(req).update(req.params.id, req.body || {}); item ? res.json(item) : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); } catch (error) { fail(res, 400, 'INVALID_MEMORY', error.message); }
+});
 app.delete('/api/memories/:id', async (req, res) => { const removed = await compatibilityMemoryForRequest(req).remove(req.params.id); removed ? res.status(204).end() : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); });
 app.get('/api/memory/overview', async (req, res) => {
   try {
@@ -929,4 +999,9 @@ app.use((error, req, res, next) => {
 const clientDist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 app.use(express.static(clientDist));
 app.use((_, res) => res.sendFile(path.join(clientDist, 'index.html')));
-app.listen(port, () => console.log(`Cochpia server listening on http://localhost:${port}`));
+
+export { app };
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  app.listen(port, () => console.log(`Cochpia server listening on http://localhost:${port}`));
+}

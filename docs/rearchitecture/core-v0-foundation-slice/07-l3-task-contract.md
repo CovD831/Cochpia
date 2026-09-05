@@ -113,9 +113,10 @@ Degraded retrieval is allowed but explicit. Admission or commit pending returns 
 - The request principal comes from verified Auth/service context.
 - The server resolves tenant, user, agent, relationship and session ownership.
 - Message content is bounded to 8,000 characters and normalized before idempotency comparison.
+- Secret-like message content is rejected before the turn admission is persisted. A Memory `accepted_no_store` receipt is never treated as successful Core admission or forwarded to the model.
 - Memory context is policy-filtered and budgeted before entering the model.
 - The model receives no repository handle, mutable state object or unfiltered request body.
 
 ## Recovery
 
-On process restart, the target service scans `admission_pending`, `pending` and `commit_pending` records, calls the binding/raw-event/commit receipt queries, and resumes only with the persisted IDs and original idempotency key. It does not create a new event or assistant message based on an in-process run map. `reconcileTurn` is the repair entry point and records the outcome of each lookup.
+On process restart, the target service scans `admission_pending`, `pending` and `commit_pending` records, calls the binding/raw-event/commit receipt queries, and resumes only with the persisted IDs and original idempotency key. It does not create a new event or assistant message based on an in-process run map. `reconcileTurn` is the repair entry point, remains available while new admissions are disabled, and records the outcome of each lookup.

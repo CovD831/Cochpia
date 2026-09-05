@@ -19,6 +19,7 @@
     "fixtures": "fixtures/README.md",
     "acceptance": "acceptance.md",
     "rollback": "rollback.md",
+    "implementation_review": "08-implementation-review.md",
     "review_report": "review-report.json",
     "review_ledger": "review-ledger.json"
   },
@@ -27,9 +28,9 @@
     "reviewer": "01a06da4-c5d4-7e00-8951-f32c6cc29187"
   },
   "next_task": {
-    "id": "R-002-PREFLIGHT-REVIEW",
+    "id": "R-003-POSTGRES-MEMORYPORT",
     "owner": "Codex + CovD"
   },
-  "advancement_trigger": "An independent review confirms the L3 mapping, ingress enforcement, fixture oracles and rollback boundary; then runtime implementation may begin only under the R-001 gate.",
+  "advancement_trigger": "Run the Core v0 acceptance matrix against a PostgreSQL-shaped MemoryPort and close the rollback drain evidence before migrating the UI or replacing legacy PRs.",
   "stop_rule": "Stop before code if the binding has no unique durable identity, public Memory writes can bypass admission, or unknown external outcomes cannot be replayed safely."
 }

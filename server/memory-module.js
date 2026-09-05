@@ -151,7 +151,7 @@ function detectS2(content) {
 function sanitizeMetadata(metadata) {
   if (metadata == null) return {};
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new MemoryModuleError('INVALID_METADATA', 'metadata must be an object');
-  const allowed = new Set(['language', 'channel', 'source_label', 'client_revision', 'turn_id', 'sequence_no']);
+  const allowed = new Set(['language', 'channel', 'source_label', 'client_revision', 'turn_id', 'sequence_no', 'producer', 'correlation_id']);
   if (Object.keys(metadata).some(key => !allowed.has(key))) throw new MemoryModuleError('INVALID_METADATA', 'metadata contains unsupported fields');
   return Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, normalizeText(value, 200)]));
 }
@@ -182,7 +182,17 @@ function contextOf(context = {}) {
   assertEnum(actorType, new Set(['user', 'agent', 'system']), 'INVALID_ACTOR_TYPE', 'actor_type');
   const actorId = normalizeId(context.actorId ?? (actorType === 'user' ? subjectUserId : context.callerAgentId ?? context.caller_agent_id), 'actor_id');
   const callerAgentId = context.callerAgentId ?? context.caller_agent_id ?? (actorType === 'agent' ? actorId : null);
-  return { tenantId, subjectUserId, actorType, actorId, callerAgentId: callerAgentId ? normalizeId(callerAgentId, 'caller_agent_id') : null, sessionId: context.sessionId ?? context.session_id ?? null, requestId: context.requestId ?? context.request_id ?? null };
+  return {
+    tenantId,
+    subjectUserId,
+    actorType,
+    actorId,
+    callerAgentId: callerAgentId ? normalizeId(callerAgentId, 'caller_agent_id') : null,
+    producer: context.producer ?? context.producer_id ?? null,
+    correlationId: context.correlationId ?? context.correlation_id ?? null,
+    sessionId: context.sessionId ?? context.session_id ?? null,
+    requestId: context.requestId ?? context.request_id ?? null
+  };
 }
 
 function scopeOf(input, context, { requireExpiresAt = false } = {}) {

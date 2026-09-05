@@ -18,6 +18,8 @@ The stable L2 definitions are inherited from [`R-001 L2`](../core-v0-design/04-l
 
 **Failure:** retrieval may be `available`, `degraded`, `not_found` or `uncertain`; append/binding returns `pending` or `failed` when durable admission is not known. A missing response is not treated as `not_found` unless the adapter's read-after-write lookup completed.
 
+An `accepted_no_store` result is not a successful Core admission when the turn content cannot safely enter the model; the adapter must expose it as a typed non-retryable failure.
+
 ## Companion Durable Store
 
 **Owner:** Companion Runtime.

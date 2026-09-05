@@ -68,15 +68,19 @@ export function createMemoryModuleRuntime({
 
   const contextFromRequest = (req, { chat = false } = {}) => {
     const user = getUser(req) || { id: 'local-user' };
+    const serviceIdentity = req.memoryServiceIdentity || null;
     const allowDevelopmentAgentHeaders = process.env.NODE_ENV !== 'production' && process.env.MEMORY_ALLOW_UNTRUSTED_AGENT_HEADERS === 'true';
-    const actorType = allowDevelopmentAgentHeaders ? (req.get('x-memory-actor-type') || 'user') : 'user';
-    const callerAgentId = allowDevelopmentAgentHeaders ? (req.get('x-caller-agent-id') || req.get('x-agent-id') || 'cochpia') : 'cochpia';
+    const subjectUserId = serviceIdentity?.subjectUserId || user.id;
+    const actorType = serviceIdentity ? 'agent' : (allowDevelopmentAgentHeaders ? (req.get('x-memory-actor-type') || 'user') : 'user');
+    const callerAgentId = serviceIdentity?.serviceId || (allowDevelopmentAgentHeaders ? (req.get('x-caller-agent-id') || req.get('x-agent-id') || 'cochpia') : 'cochpia');
     return {
-      tenantId,
-      subjectUserId: user.id,
+      tenantId: serviceIdentity?.tenantId || tenantId,
+      subjectUserId,
       actorType,
-      actorId: actorType === 'user' ? user.id : callerAgentId,
+      actorId: actorType === 'user' ? subjectUserId : callerAgentId,
       callerAgentId,
+      producer: serviceIdentity?.producer || null,
+      correlationId: serviceIdentity?.correlationId || null,
       sessionId: chat ? null : req.body?.session_id || req.query?.session_id || null
     };
   };

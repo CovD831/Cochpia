@@ -1,6 +1,10 @@
 # R-002 acceptance matrix
 
-All rows must have a named command and a pass/fail artifact before runtime code is merged. The current package records the required oracle; it does not claim these rows have passed.
+## Runtime result — September 5, 2026
+
+`npm run acceptance:core-v0` runs the target route against the local modular-monolith runtime and combines it with fault-injection cases for degraded retrieval, pending admission, commit failure and restart reconciliation. A-01 through A-12 passed on September 5, 2026. This command does not claim PostgreSQL or multi-process evidence.
+
+Each row has a named command and a pass/fail artifact in the ignored temporary acceptance output. The result is local runtime evidence only.
 
 | ID | Fixture | Check | Pass condition | Failure meaning |
 | --- | --- | --- | --- | --- |
@@ -19,19 +23,23 @@ All rows must have a named command and a pass/fail artifact before runtime code 
 
 ## Verification commands
 
-The implementation package must add and then run commands equivalent to:
+The implementation package runs:
 
 ```text
-node --test server/core-v0-foundation.test.js server/core-v0-ingress.test.js
-node scripts/core-v0-foundation-acceptance.js
+npm run test:core-v0
+npm run acceptance:core-v0
 python3 /Users/abab/.codex/skills/rearchitecture-development-workflow/scripts/check_package.py docs/rearchitecture/core-v0-foundation-slice
 ```
 
-The acceptance script must emit a JSON artifact under an ignored temporary path and report each row as pass/fail/pending without including message content or credentials. Until the target runtime module is supplied, it must exit non-zero with `pending` rows; fixture/schema validation passing is not runtime evidence.
+The acceptance script emits a JSON artifact under an ignored temporary path and reports each row as pass/fail/pending without including message content or credentials. A run with no target adapter remains a preflight-only run and exits non-zero with `pending` rows; the configured runtime adapter is the evidence used here.
 
-## Preflight execution status
+## Preflight execution status (historical)
 
-The package-level fixture and ingress-shape tests are executable now and are expected to pass. The runtime rows are intentionally `pending` until the target application service, MemoryPort adapter and route guards exist. This distinction is part of the gate; a passing schema harness must not close the runtime findings.
+The package-level fixture and ingress-shape tests were executable before the target application service, MemoryPort adapter and route guards existed. The runtime rows were intentionally `pending` during that stage; a passing schema harness alone did not close the runtime findings.
+
+## Runtime status
+
+The configured adapter now exercises the target route and the fault-injection cases. All A-01 through A-12 pass. Secret-like message rejection and session-scoped rollback are covered by `server/core-v0.test.js`; they are safety checks in addition to the twelve-row acceptance matrix.
 
 ## Acceptance adapter result validation
 

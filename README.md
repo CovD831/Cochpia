@@ -17,6 +17,10 @@ npm run dev
 - Model catalog: http://localhost:8787/api/models
 - MCP endpoint: POST http://localhost:8787/mcp
 
+Core v0 的目标聊天入口为 `POST /api/chat/turns`，需要 `Idempotency-Key`，并由 `CORE_V0_ENABLED=true` 显式开启。它先完成 Memory admission，再构建有界上下文、调用 Mock Model，最后提交 assistant message；旧的 `/api/chat/stream` 暂时保留用于兼容和对照。命中密钥等不应进入模型的内容策略时，请求会在创建持久化 turn 前被拒绝。
+
+主应用直达 `/v1` 的写入是 internal-only：本地验收可使用显式 `MEMORY_SERVICE_TOKEN`，生产环境必须配置 `MEMORY_SERVICE_JWT_SECRET`、`MEMORY_SERVICE_ISSUER` 和 `MEMORY_SERVICE_AUDIENCE`，并携带 `producer`、correlation ID 和 `Idempotency-Key`。浏览器不应调用这条边界。
+
 ## Model configuration
 
 默认使用 `MODEL_PROVIDER=mock`，不会产生云端费用。服务端通过 `GET /api/models` 提供供应商、协议、推荐模型、生产场景注释和 `ready` 状态；前端设置面板可查看目录、测试真实连接并按会话保存模型选择。
@@ -52,6 +56,8 @@ MODEL_TIMEOUT_MS=30000
 ```powershell
 npm test
 npm run build
+npm run test:core-v0
+npm run acceptance:core-v0
 ```
 
 Memory Module 验证入口：

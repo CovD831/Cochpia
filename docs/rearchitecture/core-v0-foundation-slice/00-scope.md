@@ -1,4 +1,4 @@
-# R-002 Core v0 Foundation Slice implementation preflight
+# R-002 Core v0 Foundation Slice implementation
 
 ## Frozen design input
 
@@ -20,7 +20,7 @@ Freeze the smallest implementable Memory-first chat slice and its evidence gates
 turn admission → bounded context → mock result → assistant commit
 ```
 
-This package is the implementation preflight. It defines the L3 contract, durable records, fixtures, acceptance matrix and rollback boundary before runtime code is changed.
+This package is the implementation record for the first real Core v0 vertical slice. It defines the L3 contract, durable records, fixtures, acceptance matrix and rollback boundary, and records the local runtime evidence without claiming PostgreSQL or multi-process readiness.
 
 ## In scope
 
@@ -40,4 +40,4 @@ This package is the implementation preflight. It defines the L3 contract, durabl
 - games, LifeState, tasks, calendar, music, Electron or extension registry;
 - closing GitHub PRs or making production-readiness claims.
 
-Runtime code is not authorized by this preflight until its own review gate is satisfied and the R-001 blocking findings have evidence-backed closure.
+The user explicitly authorized implementation on September 5, 2026. Runtime evidence and remaining limitations are recorded in [`06-handoff.md`](06-handoff.md) and [`08-implementation-review.md`](08-implementation-review.md). Secret-like message content is rejected before a durable turn is created, and a Memory `accepted_no_store` result cannot be promoted to a successful model turn.
