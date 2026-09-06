@@ -2,7 +2,7 @@
   "package_id": "R-004-core-v0-chat-turns-postgres",
   "size": "implementation",
   "baseline_revision": "1800ff8",
-  "current_revision": "1800ff8+working-tree-r004-docs",
+  "current_revision": "4f0f4ac",
   "documents": {
     "scope": "00-scope.md",
     "positioning": "01-positioning.md",
@@ -18,8 +18,8 @@
     "review_report": "review-report.json",
     "review_ledger": "review-ledger.json"
   },
-  "review": {"status": "pending", "reviewer": "01a07589-df5f-7000-b11d-a2fb4605cc8b"},
-  "next_task": {"id": "R-004-REPAIR-AND-IMPLEMENT", "owner": "Codex + CovD"},
+  "review": {"status": "closed", "reviewer": "workbuddy-closure", "input_reviewer": "01a07589-df5f-7000-b11d-a2fb4605cc8b"},
+  "next_task": {"id": "R-004-PROMOTION-PREPARE", "owner": "CovD"},
   "advancement_trigger": "The PostgreSQL production adapter, target chat route, hydrated message read view, legacy/target fixtures, package acceptance and rollback evidence pass; production Auth/TLS and traffic promotion remain separate gates.",
   "stop_rule": "Stop before enabling the target route if it creates a second pool, reads Core messages from JSON state, accepts mock generation in production, or cannot distinguish schema-not-ready, degraded Memory and unknown write outcomes."
 }

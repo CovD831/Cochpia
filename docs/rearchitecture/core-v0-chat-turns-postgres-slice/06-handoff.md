@@ -2,19 +2,30 @@
 
 ## Current state
 
-Implementation is authorized by the user's ongoing Core v0 instruction. The
-slice is frozen around the target chat endpoint, shared PostgreSQL pool,
-canonical Memory repository and Core-backed message read view. The independent
-review identified seven high-confidence risks and they are recorded as repair
-work before this package can close.
+R-004-REPAIR-AND-IMPLEMENT is complete. The target chat route constructs the
+PostgreSQL production adapter from the shared application pool, schema
+readiness inspects tables and required columns for both owners, the session
+message view is a bounded session-scoped Core query merged with legacy rows,
+request context fails closed on tenant, subject, actor or correlation
+identity gaps, and all Core v0 routes share one error shape. The closure
+adversarial review verified all seven input findings repaired and recorded
+five advisories (R4-CR-001..005) with no blocking findings.
+
+## Evidence
+
+- npm test: 291 checks green
+- npm run test:core-v0-production: readiness structure, context tightening,
+  bounded view, commit-time monotonicity
+- npm run acceptance:core-v0-chat-turns: A-01 through A-12 pass
+- scripts/check-core-v0-provenance.js: ok
+- Commits: 1d8053a (baseline), e348b0a, e352f84, 561c968, 4f0f4ac
 
 ## Next task
 
-R-004-REPAIR-AND-IMPLEMENT: repair the first-write Memory CAS race, add
-transactional hydration, move assistant receipt lookup to Core ownership,
-expose the shared pool, add schema readiness and migration policy, then wire
-the target route and read view. Run package tests and acceptance followed by
-one closure adversarial review.
+R-004-PROMOTION-PREPARE: gather the Auth/TLS and context-spoofing evidence,
+keep R-003 live PostgreSQL evidence valid, and prepare the atomic writer
+cutover and rollback plan. The rollback rehearsal and legacy stream path
+remain available (A-12).
 
 ## Promotion trigger
 
