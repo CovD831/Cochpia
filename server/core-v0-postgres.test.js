@@ -7,7 +7,8 @@ import {
   createCoreV0AdmissionGate,
   createCoreV0RepairRecorder,
   createPostgresCoreV0Store,
-  createPostgresMemoryPort
+  createPostgresMemoryPort,
+  normalizeCoreV0RawEventReceipt
 } from './core-v0-postgres.js';
 import { createCoreV0TurnService } from './core-v0.js';
 import { createMemoryModuleState } from './memory-module.js';
@@ -80,6 +81,10 @@ test('R-003 schema freezes relational identities, fences and content-free repair
     'core_v0_admission_gates',
     'close_epoch',
     'core_v0_repair_attempts',
+    'external_receipt_id',
+    'core_commit_id',
+    'ADD COLUMN IF NOT EXISTS external_receipt_id',
+    'ADD COLUMN IF NOT EXISTS core_commit_id',
     'core_v0_crash_records'
   ]) assert.match(schema, new RegExp(fragment.replace(/[()]/g, '\\$&')));
   assert.doesNotMatch(schema, /prompt|database_url|content_body/i);
@@ -207,6 +212,181 @@ test('PostgreSQL-shaped MemoryPort retries CAS with the original binding identit
   assert.equal(unknown.unknown, true);
 });
 
+test('PostgreSQL-shaped MemoryPort accepts the canonical raw-event receipt', async () => {
+  const repository = {
+    async load() {
+      const state = createMemoryModuleState();
+      const session = {
+        id: 'memory-1',
+        tenantId: context.tenantId,
+        userId: context.subjectUserId,
+        callerAgentId: context.callerAgentId,
+        status: 'active',
+        startedAt: '2026-09-05T00:00:00.000Z',
+        closedAt: null,
+        expiresAt: '2099-09-05T00:00:00.000Z',
+        profileSnapshotId: 'profile-1',
+        grantVersion: 0,
+        privacyEpoch: 0,
+        resourceRevision: 1
+      };
+      state.sessions.push(session);
+      state.profileSnapshots.push({ id: session.profileSnapshotId, tenantId: context.tenantId, userId: context.subjectUserId, sessionId: session.id, grantVersion: 0, privacyEpoch: 0, createdAt: session.startedAt, resourceRevision: 1 });
+      return state;
+    },
+    async save() {}
+  };
+  const port = createPostgresMemoryPort({ repository, context, retryAttempts: 0 });
+  const event = { eventId: 'event:unverified', sourceRevision: '1', content: 'message' };
+  const result = await port.appendRawEvent({ memorySessionId: 'memory-1', event });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.authoritative, true);
+  assert.equal(result.receipt.status, 'completed');
+  assert.equal(result.receipt.authoritative, true);
+  assert.equal(result.receipt.result, 'accepted_stored');
+  assert.equal(result.receipt.eventId, event.eventId);
+  assert.equal(result.receipt.sourceRevision, event.sourceRevision);
+  assert.match(result.receipt.rawEventId, /^.+$/);
+});
+
+test('Core-owned PostgreSQL store exposes assistant commit receipts after a fresh reload', async () => {
+  const pool = createCoreV0PostgresFixture();
+  const first = await createPostgresCoreV0Store({ pool, context, baseState: baseState() });
+  first.core.turnAdmissions.push(makeTurn({
+    commitId: 'assistant:commit-1',
+    assistantMessageId: 'assistant-1',
+    status: 'committed'
+  }));
+  first.core.assistantCommits.push({
+    commitId: 'assistant:commit-1',
+    turnId: 'turn:fixture',
+    tenantId: context.tenantId,
+    subjectUserId: context.subjectUserId,
+    applicationSessionId: 'session-1',
+    assistantMessageId: 'assistant-1',
+    status: 'completed',
+    content: 'response',
+    receiptId: 'receipt:commit-1',
+    createdAt: '2026-09-05T00:00:00.000Z',
+    completedAt: '2026-09-05T00:00:01.000Z'
+  });
+  first.core.sequence = 1;
+  await first.persist();
+  const fresh = await createPostgresCoreV0Store({ pool, context, baseState: baseState() });
+  assert.deepEqual(fresh.getAssistantCommitReceipt('assistant:commit-1'), {
+    status: 'completed',
+    commitId: 'assistant:commit-1',
+    receiptId: 'receipt:commit-1',
+    assistantMessageId: 'assistant-1'
+  });
+  assert.deepEqual(fresh.getAssistantCommitReceipt('assistant:missing'), {
+    status: 'not_found',
+    authoritative: true,
+    commitId: 'assistant:missing'
+  });
+});
+
+test('PostgreSQL MemoryPort does not own Core assistant commit receipts', async () => {
+  const repository = {
+    async load() {
+      const state = createMemoryModuleState();
+      state.coreV0 = { assistantCommits: [{ commitId: 'assistant:commit-1', status: 'completed', receiptId: 'receipt:commit-1', assistantMessageId: 'assistant-1' }] };
+      return state;
+    },
+    async save() {}
+  };
+  const port = createPostgresMemoryPort({ repository, context, retryAttempts: 0 });
+  assert.equal(Object.hasOwn(port, 'getAssistantCommitReceipt'), false);
+  assert.equal(Object.hasOwn(port, 'reconcileAssistantCommit'), false);
+});
+
+test('PostgreSQL-shaped MemoryPort does not promote an unverified idempotency record', async () => {
+  const repository = {
+    async load() {
+      const state = createMemoryModuleState();
+      const session = {
+        id: 'memory-1',
+        tenantId: context.tenantId,
+        userId: context.subjectUserId,
+        callerAgentId: context.callerAgentId,
+        status: 'active',
+        startedAt: '2026-09-05T00:00:00.000Z',
+        closedAt: null,
+        expiresAt: '2099-09-05T00:00:00.000Z',
+        profileSnapshotId: 'profile-1',
+        grantVersion: 0,
+        privacyEpoch: 0,
+        resourceRevision: 1
+      };
+      state.sessions.push(session);
+      state.rawEvents.push({
+        id: 'raw-existing',
+        eventId: 'event:duplicate',
+        sourceRevision: '1',
+        tenantId: context.tenantId,
+        userId: context.subjectUserId,
+        sessionId: session.id,
+        content: 'message',
+        contentType: 'plain_text',
+        eventRole: 'user'
+      });
+      return state;
+    },
+    async save() {}
+  };
+  const port = createPostgresMemoryPort({ repository, context, retryAttempts: 0 });
+  const result = await port.appendRawEvent({ memorySessionId: 'memory-1', event: { eventId: 'event:duplicate', sourceRevision: '1', content: 'message' } });
+  assert.equal(result.status, 'pending');
+  assert.equal(result.code, 'MEMORY_RAW_EVENT_RECEIPT_UNVERIFIED');
+  assert.equal(result.unknown, true);
+});
+
+test('raw-event receipt normalization rejects untrusted result and identity variants', () => {
+  const event = { eventId: 'event:conflict', sourceRevision: '1' };
+  const base = {
+    authoritative: true,
+    status: 'completed',
+    result: 'accepted_stored',
+    receipt: {
+      authoritative: true,
+      status: 'completed',
+      eventId: event.eventId,
+      sourceRevision: event.sourceRevision,
+      rawEventId: 'raw-conflict',
+      result: 'accepted_stored'
+    }
+  };
+
+  assert.deepEqual(normalizeCoreV0RawEventReceipt(base, event), base.receipt);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, authoritative: undefined }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, authoritative: false }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, authoritative: false } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, status: undefined }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, result: undefined }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, status: [] } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: undefined }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, status: undefined } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, status: 'COMPLETED' } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, result: undefined } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, result: 'accepted_no_store' }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, result: 'accepted_no_store' } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, result: ['accepted_stored'] }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, result: ['accepted_stored'] } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, status: 'failed' }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, status: 'pending' }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, status: undefined }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, rawEventId: null } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, rawEventId: ['raw-conflict'] } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, rawEventId: 'raw-top', receipt: { ...base.receipt, rawEventId: 'raw-nested' } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, eventId: 'event:top', receipt: { ...base.receipt, eventId: 'event:nested' } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, sourceRevision: '2' }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, sourceRevision: '1', receipt: { ...base.receipt, sourceRevision: '2' } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, event_id: event.eventId, eventId: 'event:other' }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, event_id: event.eventId, eventId: 'event:other' } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, eventId: 'event:other' } }, event), null);
+  assert.equal(normalizeCoreV0RawEventReceipt({ ...base, receipt: { ...base.receipt, sourceRevision: '2' } }, event), null);
+});
+
 test('durable admission gate closes the shared epoch, times out active work and rejects later admissions', async () => {
   const pool = createCoreV0PostgresFixture();
   const recorder = createCoreV0RepairRecorder({ pool, operatorId: 'operator-a', now: () => '2026-09-05T00:00:00.000Z' });
@@ -228,16 +408,108 @@ test('durable admission gate closes the shared epoch, times out active work and 
 test('repair recorder identity is stable, append-only and transition-bounded', async () => {
   const pool = createCoreV0PostgresFixture();
   const recorder = createCoreV0RepairRecorder({ pool, operatorId: 'operator-a', now: () => '2026-09-05T00:00:00.000Z' });
+  await assert.rejects(
+    () => recorder.record({ turnId: 'turn-0', operation: 'reconcile', adapter: 'memory-port', status: 'completed' }),
+    error => error.code === 'REPAIR_COMPLETION_PROOF_REQUIRED'
+  );
   const first = await recorder.record({ turnId: 'turn-1', operation: 'reconcile', adapter: 'memory-port', attempt: 1, closeEpoch: 3 });
   const duplicate = await recorder.record({ turnId: 'turn-1', operation: 'reconcile', adapter: 'memory-port', attempt: 1, closeEpoch: 3 });
   assert.equal(first.repairAttemptId, duplicate.repairAttemptId);
   assert.equal(duplicate.duplicate, true);
   await recorder.transition({ repairAttemptId: first.repairAttemptId, status: 'processing' });
-  await recorder.transition({ repairAttemptId: first.repairAttemptId, status: 'completed', externalReceiptStatus: 'completed' });
+  await assert.rejects(
+    () => recorder.transition({ repairAttemptId: first.repairAttemptId, status: 'completed', externalReceiptStatus: 'completed' }),
+    error => error.code === 'REPAIR_COMPLETION_PROOF_REQUIRED'
+  );
+  const reconciled = await recorder.reconcile({
+    repairAttemptId: first.repairAttemptId,
+    receiptLookup: async () => ({ authoritative: true, status: 'completed', receiptId: 'receipt:turn-1', turnId: 'turn-1' }),
+    coreCommitLookup: async () => ({ authoritative: true, status: 'completed', commitId: 'commit:turn-1', turnId: 'turn-1' })
+  });
+  assert.equal(reconciled.status, 'completed');
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].external_receipt_id, 'receipt:turn-1');
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].core_commit_id, 'commit:turn-1');
   await assert.rejects(() => recorder.transition({ repairAttemptId: first.repairAttemptId, status: 'processing' }), error => error.code === 'REPAIR_TRANSITION_INVALID');
   const crash = await recorder.recordCrash({ processId: 'worker-a', turnId: 'turn-1', operation: 'append', errorCode: 'ECONNRESET' });
   const crashDuplicate = await recorder.recordCrash({ processId: 'worker-a', turnId: 'turn-1', operation: 'append', errorCode: 'ECONNRESET' });
   assert.equal(crash.crashRecordId, crashDuplicate.crashRecordId);
   assert.equal(pool.database.tables.core_v0_repair_attempts.length, 1);
   assert.equal(pool.database.tables.core_v0_crash_records.length, 1);
+});
+
+test('repair reconciliation keeps incomplete or mismatched evidence pending', async () => {
+  const pool = createCoreV0PostgresFixture();
+  const recorder = createCoreV0RepairRecorder({ pool, operatorId: 'operator-a', now: () => '2026-09-05T00:00:00.000Z' });
+  const first = await recorder.record({ turnId: 'turn-pending', operation: 'reconcile', adapter: 'memory-port', closeEpoch: 3 });
+  const pendingReceipt = await recorder.reconcile({
+    repairAttemptId: first.repairAttemptId,
+    receiptLookup: async () => ({ authoritative: false, status: 'pending', receiptId: 'receipt:pending', turnId: 'turn-pending' }),
+    coreCommitLookup: async () => ({ authoritative: true, status: 'completed', commitId: 'commit:should-not-be-used', turnId: 'turn-pending' })
+  });
+  assert.equal(pendingReceipt.status, 'pending');
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].status, 'pending');
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].external_receipt_status, 'pending');
+
+  let coreLookupCalled = false;
+  const missingReceiptTurnId = await recorder.reconcile({
+    repairAttemptId: first.repairAttemptId,
+    receiptLookup: async () => ({ authoritative: true, status: 'completed', receiptId: 'receipt:missing-turn' }),
+    coreCommitLookup: async () => {
+      coreLookupCalled = true;
+      return { authoritative: true, status: 'completed', commitId: 'commit:missing-turn', turnId: 'turn-pending' };
+    }
+  });
+  assert.equal(missingReceiptTurnId.status, 'pending');
+  assert.equal(coreLookupCalled, false);
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].error_code, 'REPAIR_RECEIPT_PENDING');
+
+  const mismatch = await recorder.reconcile({
+    repairAttemptId: first.repairAttemptId,
+    receiptLookup: async () => ({ authoritative: true, status: 'completed', receiptId: 'receipt:pending', turnId: 'turn-pending' }),
+    coreCommitLookup: async () => ({ authoritative: true, status: 'completed', commitId: 'commit:wrong-turn', turnId: 'another-turn' })
+  });
+  assert.equal(mismatch.status, 'pending');
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].error_code, 'REPAIR_CORE_COMMIT_PENDING');
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].status, 'pending');
+});
+
+test('repair and crash metadata reject prompt-like, URL-like and oversized identities', async () => {
+  const pool = createCoreV0PostgresFixture();
+  const recorder = createCoreV0RepairRecorder({ pool, operatorId: 'operator-a' });
+  await assert.rejects(
+    () => recorder.record({ turnId: 'turn-1', operation: 'reconcile', adapter: 'memory-port', errorCode: 'please-ignore-this' }),
+    error => error.code === 'REPAIR_METADATA_INVALID' && error.status === 400
+  );
+  await assert.rejects(
+    () => recorder.record({ turnId: 'postgresql://db.internal/secret', operation: 'reconcile', adapter: 'memory-port' }),
+    error => error.code === 'REPAIR_METADATA_INVALID' && error.status === 400
+  );
+  await assert.rejects(
+    () => recorder.record({ turnId: 'x'.repeat(201), operation: 'reconcile', adapter: 'memory-port' }),
+    error => error.code === 'REPAIR_METADATA_INVALID' && error.status === 400
+  );
+  const accepted = await recorder.record({ turnId: 'turn:opaque-1', operation: 'reconcile', adapter: 'memory-port', errorCode: 'ECONNRESET' });
+  assert.equal(accepted.status, 'recorded');
+  assert.equal(pool.database.tables.core_v0_repair_attempts[0].turn_id, 'turn:opaque-1');
+});
+
+test('repair metadata remains content-free at the persistence boundary', async () => {
+  const pool = createCoreV0PostgresFixture();
+  const recorder = createCoreV0RepairRecorder({ pool, operatorId: 'operator-a' });
+  await recorder.record({
+    turnId: 'turn:content-free',
+    operation: 'reconcile',
+    adapter: 'memory-port',
+    errorCode: 'MEMORY_RECEIPT_PENDING'
+  });
+  const serializedQueries = JSON.stringify(pool.database.queries);
+  assert.doesNotMatch(serializedQueries, /用户|prompt|database_url|postgresql:\/\//i);
+  assert.equal(Object.prototype.hasOwnProperty.call(pool.database.tables.core_v0_repair_attempts[0], 'message'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(pool.database.tables.core_v0_repair_attempts[0], 'content'), false);
+});
+
+test('admission gate requires durable repair recording before construction', () => {
+  const pool = createCoreV0PostgresFixture();
+  assert.throws(() => createCoreV0AdmissionGate({ pool }), /requires a durable repair recorder/);
+  assert.throws(() => createCoreV0AdmissionGate({ pool, crashRecorder: { record: async () => ({ status: 'recorded', repairAttemptId: 'fake' }) } }), /requires a durable repair recorder/);
 });

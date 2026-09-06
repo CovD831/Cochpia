@@ -1,0 +1,28 @@
+{
+  "fixture": "live-postgres-acceptance",
+  "mode": "live-postgresql-isolated-schema",
+  "workers": ["worker-a", "worker-b"],
+  "expected": {
+    "winnerCount": 1,
+    "loserCount": 1,
+    "loserError": "CORE_STORAGE_CONFLICT",
+    "replayUsesWinnerIdentity": true,
+    "changedReplayError": "IDEMPOTENCY_KEY_CONFLICT",
+    "migrationRerun": true,
+    "gateCloseStatus": "timed_out",
+    "postCloseAdmission": "CORE_ADMISSION_CLOSED",
+    "drainStatus": "drained",
+    "repairStatus": "completed",
+    "activeLeasesAfterDrill": 0,
+    "rollbackRoute": "legacy",
+    "contextSpoofing": "verified_context_wins"
+  },
+  "safety": {
+    "requiresOptIn": "CORE_V0_LIVE_ACCEPTANCE=true",
+    "requiresIsolatedEnvironment": "CORE_V0_LIVE_ENV=isolated",
+    "usesGeneratedSchemaPrefix": "core_v0_live_",
+    "dropsSchemaAfterRun": true,
+    "connectionStringInOutput": false,
+    "messageContentInOutput": false
+  }
+}

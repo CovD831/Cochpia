@@ -1,104 +1,32 @@
 {
   "package_id": "R-003-postgres-memoryport",
-  "input_revision": "410f770",
-  "reviewer": "01a070cf-a280-7b32-8395-ebbdb8dae623",
-  "cycle": "initial-adversarial-steelman",
+  "input_revision": "1800ff856b9372b88591854d46047b4a50cdec5a+working-tree",
+  "reviewer": "01a07141-d60c-70b0-b480-b3036ac56ff8",
+  "cycle": "final-closure-review",
   "findings": [
     {
-      "id": "AR-001",
-      "statement": "The implementation package has no implementation evidence: the proposed PostgreSQL Core store, PostgreSQL-shaped MemoryPort, AdmissionGate, repair recorder, R-003 fixture files, and acceptance scripts are absent. Existing passing tests cover R-002 and the existing Memory repository only.",
-      "severity": "blocking",
-      "evidence_refs": [
-        "docs/rearchitecture/core-v0-postgres-slice/07-l3-task-contract.md",
-        "docs/rearchitecture/core-v0-postgres-slice/fixtures/README.md",
-        "package.json",
-        "command: npm run test:core-v0"
-      ],
-      "recommendation": "Add the authorized implementation, executable target/worker/drain fixtures, and package-specific test and acceptance commands before treating this as an implementation-ready increment."
-    },
-    {
-      "id": "AR-002",
-      "statement": "The durable idempotency contract is incomplete for multi-process replay: duplicate-key fingerprint comparison is required, but the listed turn-admission schema does not specify persisted normalized request/fingerprint fields or the exact SQLSTATE-to-domain conflict mapping. Binding and commit conflict payloads are likewise not fully defined. Without those immutable fields, a restart cannot reliably distinguish exact replay from a changed request.",
-      "severity": "blocking",
-      "evidence_refs": [
-        "docs/rearchitecture/core-v0-postgres-slice/04-l2-contracts.md",
-        "docs/rearchitecture/core-v0-postgres-slice/05-adr.md",
-        "docs/rearchitecture/core-v0-postgres-slice/07-l3-task-contract.md",
-        "server/core-v0.js"
-      ],
-      "recommendation": "Freeze the complete row schemas, immutable fingerprint inputs, composite unique indexes, conflict classification, and receipt-returning upsert protocol; test two separate workers including external Memory success followed by Core CAS loss."
-    },
-    {
-      "id": "AR-003",
-      "statement": "The proposed close/drain guarantee is not cross-process safe. Gate state and leases are owned by a lifecycle coordinator, while the current route still checks a process-local environment flag before constructing an in-process service. No durable close epoch, admission fence, or database-backed lease acquisition prevents another process from admitting after close.",
-      "severity": "blocking",
-      "evidence_refs": [
-        "docs/rearchitecture/core-v0-postgres-slice/02-l1-target.md",
-        "docs/rearchitecture/core-v0-postgres-slice/04-l2-contracts.md",
-        "docs/rearchitecture/core-v0-postgres-slice/07-l3-task-contract.md",
-        "server/index.js"
-      ],
-      "recommendation": "Either explicitly scope drain safety to one process, or add a durable close epoch/fencing protocol whose admission transaction atomically verifies the open epoch and records the lease; include a two-process close-race fixture."
-    },
-    {
-      "id": "AR-004",
-      "statement": "Crash and repair semantics are described but not operationally deterministic. Append-only records contain identifiers, status, error code, attempt and operator ID, but no stable repair-attempt identity, close epoch, lease owner, observed external receipt state, or defined transition/retry bounds. Retrying the recorder can therefore duplicate indistinguishable attempts, and a crash between external completion and record creation remains ambiguous.",
-      "severity": "blocking",
-      "evidence_refs": [
-        "docs/rearchitecture/core-v0-postgres-slice/04-l2-contracts.md",
-        "docs/rearchitecture/core-v0-postgres-slice/07-l3-task-contract.md",
-        "docs/rearchitecture/core-v0-postgres-slice/rollback.md"
-      ],
-      "recommendation": "Define durable repair/crash row schemas and state transitions, unique operation/attempt identities, bounded retry policy, reconciliation ownership, and restart scans that can prove pending, completed, or dead-letter without guessing."
-    },
-    {
-      "id": "AR-005",
-      "statement": "Security and privacy requirements are asserted but not enforced by this package's contract or evidence. The existing database helper allows no TLS configuration by default and explicitly supports certificate verification bypass; the package provides no R-003 Auth/TLS acceptance command or negative test proving tenant context cannot be spoofed at the new store boundary.",
+      "id": "R-003-CLOSURE-LIVE-GATE",
+      "statement": "No blocking finding remains in the reviewed SQL-shaped slice. L-01 and L-02 remain pending and are non-blocking residual promotion risks.",
       "severity": "non-blocking",
       "evidence_refs": [
-        "AGENTS.md",
-        "docs/rearchitecture/core-v0-postgres-slice/07-l3-task-contract.md",
+        "scripts/core-v0-postgres-acceptance.js",
         "docs/rearchitecture/core-v0-postgres-slice/acceptance.md",
-        "server/db-ssl.js"
+        "docs/rearchitecture/core-v0-postgres-slice/review-ledger.json",
+        "docs/rearchitecture/core-v0-postgres-slice/.rearchitecture-package.json"
       ],
-      "recommendation": "Make L-01 require AUTH_MODE=required, STORAGE_PROVIDER=postgres, rejectUnauthorized=true with validated CA configuration, content-free logs, and explicit authorization/context-spoofing tests; retain this as a promotion blocker."
-    },
-    {
-      "id": "AR-006",
-      "statement": "Compatibility is conservatively deferred, but the package currently has no executable cutover fence: the target route still persists through the in-process Core state and JSON/JSONB store, while legacy chat and independent Memory writers remain active. This is acceptable only if R-003 acceptance explicitly proves isolation and the later cutover makes old writers read-only or disables them atomically.",
-      "severity": "non-blocking",
-      "evidence_refs": [
-        "docs/rearchitecture/core-v0-postgres-slice/00-scope.md",
-        "docs/rearchitecture/core-v0-postgres-slice/03-current-to-target-map.md",
-        "docs/rearchitecture/core-v0-postgres-slice/06-handoff.md",
-        "server/index.js"
-      ],
-      "recommendation": "Add a compatibility acceptance case and a named cutover/rollback fence identifying which writers are active before, during, and after promotion."
-    },
-    {
-      "id": "AR-007",
-      "statement": "The scope is more conservative than a general event-bus redesign, but it still introduces four new boundaries, a subject-wide replacement store, application-message persistence, and repair/crash machinery for a non-streaming mock turn. The package does not demonstrate that every proposed table and interface is required by P-01 through P-08.",
-      "severity": "non-blocking",
-      "evidence_refs": [
-        "docs/rearchitecture/core-v0-postgres-slice/00-scope.md",
-        "docs/rearchitecture/core-v0-postgres-slice/04-l2-contracts.md",
-        "docs/rearchitecture/core-v0-postgres-slice/07-l3-task-contract.md",
-        "docs/rearchitecture/core-v0-postgres-slice/acceptance.md"
-      ],
-      "recommendation": "Trace each schema/interface element to a specific acceptance row and defer unused fields or boundaries until a real failure mode requires them."
+      "recommendation": "Keep L-01/L-02 pending until real PostgreSQL/Auth/TLS, context-spoofing, two-process and live rollback evidence exists."
     }
   ],
   "steelman": {
-    "strongest_support": "The package has a strong ownership split: Companion Runtime owns Core operational facts, Memory Foundation owns Memory facts, and the Core adapter stores only opaque Memory identifiers and receipts. Its explicit pending/unknown semantics, original-identity replay rule, no-generic-bus decision, deferred traffic cutover, and content-free repair records are valuable and appropriately conservative.",
-    "strongest_opposition": "The package is currently a well-framed contract rather than an implementation slice. The local gate is not a global multi-process fence, repair semantics are not sufficiently durable to support crash claims, and the required fixtures and acceptance commands are absent, so the stated implementation and advancement gates cannot yet be evidenced.",
+    "strongest_support": "Repair completion is confined to reconcile with top-level authoritative receipt validation, completed status, non-empty identity, exact original turn matching and authoritative completed Core-commit proof. Direct completion is rejected, AdmissionGate requires a factory-created durable recorder and verifies timeout persistence identity, rollback rehearsal compares exact fixture sequence and expected values, and documentation explicitly scopes evidence to SQL-shaped policy state.",
+    "strongest_opposition": "The reviewed evidence does not observe deployed PostgreSQL locking, required Auth/TLS, cross-process behavior or production writer rollback; those remain outside the closed SQL-shaped package.",
     "decision_refs": [
-      "docs/rearchitecture/core-v0-postgres-slice/00-scope.md",
-      "docs/rearchitecture/core-v0-postgres-slice/02-l1-target.md",
-      "docs/rearchitecture/core-v0-postgres-slice/04-l2-contracts.md",
-      "docs/rearchitecture/core-v0-postgres-slice/05-adr.md",
-      "docs/rearchitecture/core-v0-postgres-slice/07-l3-task-contract.md",
+      "server/core-v0-postgres.js",
+      "server/core-v0-postgres.test.js",
+      "server/core-v0-schema.sql",
+      "scripts/core-v0-postgres-rollback-rehearsal.js",
       "docs/rearchitecture/core-v0-postgres-slice/rollback.md"
     ]
   },
-  "overall": "blocked"
+  "overall": "pass"
 }

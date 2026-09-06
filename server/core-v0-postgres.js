@@ -191,6 +191,7 @@ export async function ensureCoreV0PostgresSchema(pool, { sql } = {}) {
 async function loadCoreRows(pool, context) {
   const client = await pool.connect();
   try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
     const values = [context.tenantId, context.subjectUserId];
     const subject = await client.query('SELECT sequence FROM core_v0_subjects WHERE tenant_id=$1 AND subject_user_id=$2', values);
     const turns = await client.query('SELECT * FROM core_v0_turn_admissions WHERE tenant_id=$1 AND subject_user_id=$2 ORDER BY sequence_no, created_at', values);
@@ -198,7 +199,7 @@ async function loadCoreRows(pool, context) {
     const commits = await client.query('SELECT * FROM core_v0_assistant_commits WHERE tenant_id=$1 AND subject_user_id=$2 ORDER BY created_at', values);
     const messages = await client.query('SELECT * FROM core_v0_messages WHERE tenant_id=$1 AND subject_user_id=$2 ORDER BY created_at', values);
     const mappedTurns = turns.rows.map(mapTurn);
-    return {
+    const result = {
       persistenceSequence: Number(subject.rows[0]?.sequence || 0),
       operationSequence: Math.max(0, ...mappedTurns.map(item => Number(item.sequenceNo) || 0)),
       turns: mappedTurns,
@@ -206,6 +207,11 @@ async function loadCoreRows(pool, context) {
       commits: commits.rows.map(mapCommit),
       messages: messages.rows.map(mapMessage)
     };
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
   } finally {
     client.release();
   }
@@ -358,6 +364,74 @@ function memoryMutationError(error, fallbackCode) {
   return error;
 }
 
+const isReceiptRecord = value => value !== null
+  && typeof value === 'object'
+  && !Array.isArray(value);
+
+const isOpaqueReceiptIdentity = value => typeof value === 'string'
+  && value.length > 0
+  && value.length <= 200
+  && /^[A-Za-z0-9_.:@+-]+$/.test(value);
+
+function readReceiptIdentity(record, canonicalKey, aliasKey) {
+  const supplied = [canonicalKey, aliasKey]
+    .filter(key => Object.hasOwn(record, key))
+    .map(key => record[key]);
+  if (supplied.some(value => !isOpaqueReceiptIdentity(value))) return { invalid: true };
+  if (new Set(supplied).size > 1) return { invalid: true };
+  return { value: supplied[0] || null, supplied: supplied.length > 0 };
+}
+
+export function normalizeCoreV0RawEventReceipt(result, event) {
+  if (!isReceiptRecord(result) || !isReceiptRecord(event)
+    || !isOpaqueReceiptIdentity(event.eventId)
+    || !isOpaqueReceiptIdentity(event.sourceRevision)) return null;
+
+  if (!Object.hasOwn(result, 'receipt') || !isReceiptRecord(result.receipt)) return null;
+  const receipt = result.receipt;
+
+  if (typeof result.status !== 'string' || result.status !== 'completed'
+    || typeof result.result !== 'string' || result.result !== 'accepted_stored') return null;
+  if (result.authoritative !== true) return null;
+  if (!Object.hasOwn(receipt, 'result')
+    || typeof receipt.result !== 'string'
+    || receipt.result !== 'accepted_stored'
+    || typeof receipt.status !== 'string'
+    || receipt.status !== 'completed'
+    || receipt.authoritative !== true) return null;
+
+  const topEventId = readReceiptIdentity(result, 'eventId', 'event_id');
+  const topSourceRevision = readReceiptIdentity(result, 'sourceRevision', 'source_revision');
+  const topRawEventId = readReceiptIdentity(result, 'rawEventId', 'raw_event_id');
+  const nestedEventId = readReceiptIdentity(receipt, 'eventId', 'event_id');
+  const nestedSourceRevision = readReceiptIdentity(receipt, 'sourceRevision', 'source_revision');
+  const nestedRawEventId = readReceiptIdentity(receipt, 'rawEventId', 'raw_event_id');
+  if ([topEventId, topSourceRevision, topRawEventId, nestedEventId, nestedSourceRevision, nestedRawEventId]
+    .some(item => item.invalid)) return null;
+
+  const eventId = nestedEventId.value;
+  const sourceRevision = nestedSourceRevision.value;
+  const rawEventId = nestedRawEventId.value;
+  if (!eventId || !sourceRevision || !rawEventId
+    || !nestedEventId.supplied
+    || !nestedSourceRevision.supplied
+    || !nestedRawEventId.supplied
+    || (topEventId.supplied && nestedEventId.value !== topEventId.value)
+    || (topSourceRevision.supplied && nestedSourceRevision.value !== topSourceRevision.value)
+    || (topRawEventId.supplied && nestedRawEventId.value !== topRawEventId.value)
+    || eventId !== event.eventId
+    || sourceRevision !== event.sourceRevision) return null;
+
+  return {
+    authoritative: true,
+    status: 'completed',
+    eventId: event.eventId,
+    sourceRevision: event.sourceRevision,
+    rawEventId,
+    result: 'accepted_stored'
+  };
+}
+
 export function createPostgresMemoryPort({ repository, context: rawContext, retryAttempts = 2, moduleOptions = {} } = {}) {
   const context = requireContext(rawContext);
   if (!repository || typeof repository.load !== 'function' || typeof repository.save !== 'function') throw new TypeError('PostgreSQL MemoryPort requires repository.load and repository.save');
@@ -400,15 +474,21 @@ export function createPostgresMemoryPort({ repository, context: rawContext, retr
     const record = (state.idempotencyRecords || []).find(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId && (item.mutationNamespace || item.namespace || 'event') === 'session.create' && item.key === key);
     const memorySessionId = record?.response?.id || record?.response?.session?.id;
     if (!memorySessionId) return { status: 'not_found', authoritative: true, bindingKey };
-    return { status: 'completed', memorySessionId, receipt: { status: 'completed', memorySessionId } };
+    return { status: 'completed', authoritative: true, memorySessionId, receipt: { status: 'completed', memorySessionId } };
   });
 
   const getRawEventReceipt = ({ eventId, sourceRevision }) => runRead('raw_event_lookup', async () => {
     const state = await repository.load(context);
     const raw = (state.rawEvents || []).find(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId && item.eventId === eventId && String(item.sourceRevision) === String(sourceRevision));
-    if (raw) return { status: 'completed', receipt: { status: 'completed', eventId, sourceRevision, rawEventId: raw.id, result: 'accepted_stored' } };
+    if (raw) return { status: 'completed', authoritative: true, receipt: { authoritative: true, status: 'completed', eventId, sourceRevision, rawEventId: raw.id, result: 'accepted_stored' } };
     const record = (state.idempotencyRecords || []).find(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId && (item.mutationNamespace || item.namespace || 'event') === 'event' && item.key === `${eventId}:${sourceRevision}`);
-    if (record?.result === 'accepted_no_store' || record?.result === 'accepted_stored') return { status: 'completed', receipt: { status: 'completed', eventId, sourceRevision, rawEventId: record.resourceId || null, result: record.result } };
+    if (record?.result === 'accepted_no_store') return { status: 'failed', authoritative: true, code: 'MEMORY_CONTENT_NOT_ADMITTED', receipt: { status: 'not_stored', eventId, sourceRevision, result: record.result } };
+    if (record?.result === 'accepted_stored') {
+      const rawEventId = record.resourceId || null;
+      return rawEventId
+        ? { status: 'completed', authoritative: true, receipt: { authoritative: true, status: 'completed', eventId, sourceRevision, rawEventId, result: record.result } }
+        : { status: 'pending', authoritative: false, unknown: true, code: 'MEMORY_RAW_EVENT_RECEIPT_UNVERIFIED', eventId, sourceRevision };
+    }
     return { status: 'not_found', authoritative: true, eventId, sourceRevision };
   });
 
@@ -437,7 +517,37 @@ export function createPostgresMemoryPort({ repository, context: rawContext, retr
       }));
       if (result?.status === 'pending') return result;
       if (result?.result === 'accepted_no_store') return { status: 'failed', code: 'MEMORY_CONTENT_NOT_ADMITTED', httpStatus: 422, retryable: false, unknown: false, receipt: { status: 'not_stored', eventId: event.eventId, sourceRevision: event.sourceRevision, result: result.result } };
-      return { status: 'completed', receipt: { status: 'completed', eventId: event.eventId, sourceRevision: event.sourceRevision, rawEventId: result?.rawEventId || null, result: result?.result || null } };
+      const receiptInput = isReceiptRecord(result) && !Object.hasOwn(result, 'status')
+        && !Object.hasOwn(result, 'receipt')
+        && !Object.hasOwn(result, 'authoritative')
+        && typeof result.result === 'string'
+        && result.result === 'accepted_stored'
+        && typeof result.eventId === 'string'
+        && typeof result.sourceRevision === 'string'
+        && typeof result.rawEventId === 'string'
+        ? {
+          ...result,
+          authoritative: true,
+          status: 'completed',
+          receipt: {
+            authoritative: true,
+            status: 'completed',
+            result: result.result,
+            eventId: result.eventId,
+            sourceRevision: result.sourceRevision,
+            rawEventId: result.rawEventId
+          }
+        }
+        : result;
+      const normalizedReceipt = normalizeCoreV0RawEventReceipt(receiptInput, event);
+      if (!normalizedReceipt) {
+        return { status: 'pending', code: 'MEMORY_RAW_EVENT_RECEIPT_UNVERIFIED', retryable: true, unknown: true };
+      }
+      return {
+        status: 'completed',
+        authoritative: true,
+        receipt: normalizedReceipt
+      };
     },
 
     getRawEventReceipt,
@@ -461,42 +571,115 @@ function encodeIdentity(value) {
   return String(value ?? 'none').replace(/[^A-Za-z0-9_.:-]/g, '_');
 }
 
+const opaqueIdentityPattern = /^[A-Za-z0-9_.:@+-]+$/;
+const receiptStatuses = new Set(['unknown', 'pending', 'completed', 'failed']);
+
+function validateOpaqueIdentity(value, field, { required = false, max = 200 } = {}) {
+  if (value == null || String(value).trim() === '') {
+    if (required) throw coreError('REPAIR_METADATA_INVALID', `${field} must be a bounded opaque identity`, { status: 400 });
+    return null;
+  }
+  const normalized = String(value).trim();
+  if (normalized.length > max || !opaqueIdentityPattern.test(normalized)) {
+    throw coreError('REPAIR_METADATA_INVALID', `${field} must be a bounded opaque identity`, { status: 400 });
+  }
+  return normalized;
+}
+
+function validateErrorCode(value) {
+  if (value == null || String(value).trim() === '') return null;
+  const normalized = String(value).trim();
+  if (normalized.length > 100 || !/^[A-Z][A-Z0-9_.:-]*$/.test(normalized)) {
+    throw coreError('REPAIR_METADATA_INVALID', 'errorCode must be a bounded machine error code', { status: 400 });
+  }
+  return normalized;
+}
+
+function validateReceiptStatus(value) {
+  if (value == null || String(value).trim() === '') return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (!receiptStatuses.has(normalized)) throw coreError('REPAIR_METADATA_INVALID', 'externalReceiptStatus is invalid', { status: 400 });
+  return normalized;
+}
+
 const transitionMap = {
   pending: new Set(['processing', 'failed', 'dead_letter']),
-  processing: new Set(['completed', 'failed', 'dead_letter']),
+  processing: new Set(['pending', 'completed', 'failed', 'dead_letter']),
   failed: new Set(['processing', 'dead_letter']),
   completed: new Set(),
   dead_letter: new Set()
 };
+const durableRepairRecorders = new WeakSet();
 
 export function createCoreV0RepairRecorder({ pool, operatorId = 'system', now = () => new Date().toISOString() } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('Repair recorder requires a PostgreSQL pool');
-  const safeOperatorId = encodeIdentity(operatorId);
-  const record = async ({ repairAttemptId, gateId = null, tenantId = null, subjectUserId = null, turnId = null, leaseId = null, operation, adapter, status = 'pending', errorCode = null, attempt = 1, closeEpoch = null, leaseOwner = null, externalReceiptStatus = null } = {}) => {
+  const safeOperatorId = validateOpaqueIdentity(operatorId, 'operatorId', { required: true });
+  const completionProof = Symbol('core-v0-repair-completion-proof');
+  const readRepair = async repairAttemptId => {
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT repair_attempt_id,status,turn_id,external_receipt_status,external_receipt_id,core_commit_id FROM core_v0_repair_attempts WHERE repair_attempt_id=$1', [repairAttemptId]);
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  };
+
+  const record = async ({ repairAttemptId, gateId = null, tenantId = null, subjectUserId = null, turnId = null, leaseId = null, operation, adapter, status = 'pending', errorCode = null, attempt = 1, closeEpoch = null, leaseOwner = null, externalReceiptStatus = null, externalReceiptId = null, coreCommitId = null } = {}) => {
     if (!operation || !adapter || !repairStatuses.has(status) || !Number.isInteger(Number(attempt)) || Number(attempt) < 1) throw new TypeError('Repair record requires operation, adapter, valid status and attempt');
-    const identity = turnId || leaseId || gateId || 'none';
-    const id = repairAttemptId || `repair:${encodeIdentity(gateId)}:${encodeIdentity(identity)}:${encodeIdentity(operation)}:${Number(attempt)}:${encodeIdentity(closeEpoch)}`;
+    if (status === 'completed') throw coreError('REPAIR_COMPLETION_PROOF_REQUIRED', 'Completed repair must be created through reconciliation', { status: 409 });
+    const safeGateId = validateOpaqueIdentity(gateId, 'gateId');
+    const safeTenantId = validateOpaqueIdentity(tenantId, 'tenantId');
+    const safeSubjectUserId = validateOpaqueIdentity(subjectUserId, 'subjectUserId');
+    const safeTurnId = validateOpaqueIdentity(turnId, 'turnId');
+    const safeLeaseId = validateOpaqueIdentity(leaseId, 'leaseId');
+    const safeOperation = validateOpaqueIdentity(operation, 'operation', { required: true });
+    const safeAdapter = validateOpaqueIdentity(adapter, 'adapter', { required: true });
+    const safeErrorCode = validateErrorCode(errorCode);
+    const safeLeaseOwner = validateOpaqueIdentity(leaseOwner, 'leaseOwner');
+    const safeExternalReceiptStatus = validateReceiptStatus(externalReceiptStatus);
+    const safeExternalReceiptId = validateOpaqueIdentity(externalReceiptId, 'externalReceiptId');
+    const safeCoreCommitId = validateOpaqueIdentity(coreCommitId, 'coreCommitId');
+    const safeRepairAttemptId = validateOpaqueIdentity(repairAttemptId, 'repairAttemptId');
+    const identity = safeTurnId || safeLeaseId || safeGateId || 'none';
+    const id = safeRepairAttemptId || `repair:${encodeIdentity(safeGateId)}:${encodeIdentity(identity)}:${encodeIdentity(safeOperation)}:${Number(attempt)}:${encodeIdentity(closeEpoch)}`;
     const timestamp = now();
     const client = await pool.connect();
     try {
-      const result = await client.query('INSERT INTO core_v0_repair_attempts (repair_attempt_id,gate_id,tenant_id,subject_user_id,turn_id,lease_id,operation,adapter,status,error_code,attempt,operator_id,close_epoch,lease_owner,external_receipt_status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (repair_attempt_id) DO NOTHING RETURNING repair_attempt_id', [id, gateId, tenantId, subjectUserId, turnId, leaseId, operation, adapter, status, errorCode, Number(attempt), safeOperatorId, closeEpoch, leaseOwner, externalReceiptStatus, timestamp, timestamp]);
+      const result = await client.query('INSERT INTO core_v0_repair_attempts (repair_attempt_id,gate_id,tenant_id,subject_user_id,turn_id,lease_id,operation,adapter,status,error_code,attempt,operator_id,close_epoch,lease_owner,external_receipt_status,external_receipt_id,core_commit_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (repair_attempt_id) DO NOTHING RETURNING repair_attempt_id', [id, safeGateId, safeTenantId, safeSubjectUserId, safeTurnId, safeLeaseId, safeOperation, safeAdapter, status, safeErrorCode, Number(attempt), safeOperatorId, closeEpoch, safeLeaseOwner, safeExternalReceiptStatus, safeExternalReceiptId, safeCoreCommitId, timestamp, timestamp]);
       return { status: 'recorded', repairAttemptId: result.rows[0]?.repair_attempt_id || id, duplicate: result.rows.length === 0 };
     } finally {
       client.release();
     }
   };
 
-  const transition = async ({ repairAttemptId, status, errorCode = null, externalReceiptStatus = null } = {}) => {
+  const transition = async ({ repairAttemptId, status, errorCode = null, externalReceiptStatus = null, externalReceiptId = null, coreCommitId = null, proof = null } = {}) => {
     if (!repairAttemptId || !repairStatuses.has(status)) throw new TypeError('Repair transition requires a valid id and status');
+    const safeRepairAttemptId = validateOpaqueIdentity(repairAttemptId, 'repairAttemptId', { required: true });
+    const safeErrorCode = validateErrorCode(errorCode);
+    const safeExternalReceiptStatus = validateReceiptStatus(externalReceiptStatus);
+    const safeExternalReceiptId = validateOpaqueIdentity(externalReceiptId, 'externalReceiptId');
+    const safeCoreCommitId = validateOpaqueIdentity(coreCommitId, 'coreCommitId');
     const client = await pool.connect();
     let committed = false;
     try {
       await client.query('BEGIN');
-      const current = await client.query('SELECT status FROM core_v0_repair_attempts WHERE repair_attempt_id=$1 FOR UPDATE', [repairAttemptId]);
-      const previous = current.rows[0]?.status;
+      const current = await client.query('SELECT status,external_receipt_status,external_receipt_id,core_commit_id FROM core_v0_repair_attempts WHERE repair_attempt_id=$1 FOR UPDATE', [safeRepairAttemptId]);
+      const row = current.rows[0];
+      const previous = row?.status;
       if (!previous) throw coreError('REPAIR_ATTEMPT_NOT_FOUND', 'Repair attempt not found', { status: 404 });
       if (previous !== status && !transitionMap[previous]?.has(status)) throw coreError('REPAIR_TRANSITION_INVALID', 'Repair status transition is not allowed', { status: 409 });
-      const result = await client.query('UPDATE core_v0_repair_attempts SET status=$2,error_code=$3,external_receipt_status=$4,updated_at=$5 WHERE repair_attempt_id=$1', [repairAttemptId, status, errorCode, externalReceiptStatus, now()]);
+      if (status === 'completed' && (proof !== completionProof || externalReceiptStatus !== 'completed' || !externalReceiptId || !coreCommitId)) {
+        throw coreError('REPAIR_COMPLETION_PROOF_REQUIRED', 'Completed repair requires authoritative receipt and Core commit proof', { status: 409 });
+      }
+      const nextExternalReceiptStatus = safeExternalReceiptStatus ?? row.external_receipt_status ?? null;
+      const nextExternalReceiptId = safeExternalReceiptId ?? row.external_receipt_id ?? null;
+      const nextCoreCommitId = safeCoreCommitId ?? row.core_commit_id ?? null;
+      if (previous === 'completed' && status === 'completed'
+        && (row.external_receipt_id !== nextExternalReceiptId || row.core_commit_id !== nextCoreCommitId)) {
+        throw coreError('REPAIR_COMPLETION_CONFLICT', 'Completed repair proof cannot be replaced by a different identity', { status: 409 });
+      }
+      const result = await client.query('UPDATE core_v0_repair_attempts SET status=$2,error_code=$3,external_receipt_status=$4,external_receipt_id=$5,core_commit_id=$6,updated_at=$7 WHERE repair_attempt_id=$1', [safeRepairAttemptId, status, safeErrorCode, nextExternalReceiptStatus, nextExternalReceiptId, nextCoreCommitId, now()]);
       await client.query('COMMIT');
       committed = true;
       return { status: 'updated', repairAttemptId, previousStatus: previous, updated: result.rowCount !== 0 };
@@ -508,23 +691,87 @@ export function createCoreV0RepairRecorder({ pool, operatorId = 'system', now = 
     }
   };
 
+  const reconcile = async ({ repairAttemptId, receiptLookup, coreCommitLookup } = {}) => {
+    if (!repairAttemptId || typeof receiptLookup !== 'function' || typeof coreCommitLookup !== 'function') {
+      throw new TypeError('Repair reconciliation requires a repair id, receipt lookup and Core commit lookup');
+    }
+    let row = await readRepair(repairAttemptId);
+    if (!row) throw coreError('REPAIR_ATTEMPT_NOT_FOUND', 'Repair attempt not found', { status: 404 });
+    if (row.status === 'completed') {
+      if (row.external_receipt_status !== 'completed' || !row.external_receipt_id || !row.core_commit_id) {
+        throw coreError('REPAIR_COMPLETION_PROOF_MISSING', 'Completed repair is missing authoritative receipt or Core commit proof', { status: 409, unknown: true });
+      }
+      return { status: 'completed', repairAttemptId, externalReceiptId: row.external_receipt_id, coreCommitId: row.core_commit_id, replay: true };
+    }
+    if (row.status === 'dead_letter') return { status: 'dead_letter', repairAttemptId, replay: true };
+    if (row.status !== 'processing') await transition({ repairAttemptId, status: 'processing' });
+    row = await readRepair(repairAttemptId);
+
+    const keepPending = async (errorCode, externalReceiptStatus = null, externalReceiptId = null) => {
+      await transition({ repairAttemptId, status: 'pending', errorCode, externalReceiptStatus, externalReceiptId });
+      return { status: 'pending', repairAttemptId, errorCode, externalReceiptStatus, externalReceiptId };
+    };
+
+    let receipt;
+    try {
+      receipt = await receiptLookup({ repairAttemptId, repair: row });
+    } catch {
+      return keepPending('REPAIR_RECEIPT_LOOKUP_FAILED', 'unknown');
+    }
+    const receiptPayload = receipt?.receipt || receipt;
+    const receiptStatus = String(receipt?.status || receiptPayload?.status || '').toLowerCase();
+    const externalReceiptId = receipt?.receiptId || receiptPayload?.receiptId || receiptPayload?.rawEventId || receipt?.rawEventId || null;
+    const receiptTurnId = receipt?.turnId || receiptPayload?.turnId || null;
+    if (receipt?.authoritative !== true || receiptStatus !== 'completed' || !externalReceiptId || !row.turn_id || !receiptTurnId || receiptTurnId !== row.turn_id) {
+      return keepPending(receiptStatus === 'failed' ? 'REPAIR_RECEIPT_FAILED' : 'REPAIR_RECEIPT_PENDING', receiptStatus || 'unknown', externalReceiptId);
+    }
+
+    let commit;
+    try {
+      commit = await coreCommitLookup({ repairAttemptId, repair: row, receipt });
+    } catch {
+      return keepPending('REPAIR_CORE_COMMIT_LOOKUP_FAILED', 'completed', externalReceiptId);
+    }
+    const coreCommitId = commit?.commitId || commit?.id || null;
+    const commitTurnId = commit?.turnId || commit?.turn_id || null;
+    const commitStatus = String(commit?.status || '').toLowerCase();
+    if (commit?.authoritative !== true || commitStatus !== 'completed' || !coreCommitId || commitTurnId !== row.turn_id) {
+      return keepPending('REPAIR_CORE_COMMIT_PENDING', 'completed', externalReceiptId);
+    }
+
+    await transition({ repairAttemptId, status: 'completed', externalReceiptStatus: 'completed', externalReceiptId, coreCommitId, proof: completionProof });
+    return { status: 'completed', repairAttemptId, externalReceiptId, coreCommitId };
+  };
+
   const recordCrash = async ({ crashRecordId, gateId = null, tenantId = null, subjectUserId = null, turnId = null, leaseId = null, processId = 'unknown-process', operation, status = 'observed', errorCode = null, closeEpoch = null } = {}) => {
     if (!operation || !crashStatuses.has(status)) throw new TypeError('Crash record requires operation and valid status');
-    const id = crashRecordId || `crash:${encodeIdentity(processId)}:${encodeIdentity(turnId)}:${encodeIdentity(operation)}`;
+    const safeCrashRecordId = validateOpaqueIdentity(crashRecordId, 'crashRecordId');
+    const safeGateId = validateOpaqueIdentity(gateId, 'gateId');
+    const safeTenantId = validateOpaqueIdentity(tenantId, 'tenantId');
+    const safeSubjectUserId = validateOpaqueIdentity(subjectUserId, 'subjectUserId');
+    const safeTurnId = validateOpaqueIdentity(turnId, 'turnId');
+    const safeLeaseId = validateOpaqueIdentity(leaseId, 'leaseId');
+    const safeProcessId = validateOpaqueIdentity(processId, 'processId', { required: true });
+    const safeOperation = validateOpaqueIdentity(operation, 'operation', { required: true });
+    const safeErrorCode = validateErrorCode(errorCode);
+    const id = safeCrashRecordId || `crash:${encodeIdentity(safeProcessId)}:${encodeIdentity(safeTurnId)}:${encodeIdentity(safeOperation)}`;
     const client = await pool.connect();
     try {
-      const result = await client.query('INSERT INTO core_v0_crash_records (crash_record_id,gate_id,tenant_id,subject_user_id,turn_id,lease_id,process_id,operation,status,error_code,operator_id,close_epoch,observed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (crash_record_id) DO NOTHING RETURNING crash_record_id', [id, gateId, tenantId, subjectUserId, turnId, leaseId, processId, operation, status, errorCode, safeOperatorId, closeEpoch, now()]);
+      const result = await client.query('INSERT INTO core_v0_crash_records (crash_record_id,gate_id,tenant_id,subject_user_id,turn_id,lease_id,process_id,operation,status,error_code,operator_id,close_epoch,observed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (crash_record_id) DO NOTHING RETURNING crash_record_id', [id, safeGateId, safeTenantId, safeSubjectUserId, safeTurnId, safeLeaseId, safeProcessId, safeOperation, status, safeErrorCode, safeOperatorId, closeEpoch, now()]);
       return { status: 'recorded', crashRecordId: result.rows[0]?.crash_record_id || id, duplicate: result.rows.length === 0 };
     } finally {
       client.release();
     }
   };
 
-  return { record, transition, recordCrash, operatorId: safeOperatorId };
+  const recorder = Object.freeze({ record, transition, reconcile, recordCrash, operatorId: safeOperatorId });
+  durableRepairRecorders.add(recorder);
+  return recorder;
 }
 
 export function createCoreV0AdmissionGate({ pool, gateId = CORE_V0_GATE_ID, enabled = true, drainTimeoutMs = 5000, crashRecorder = null, operatorId = 'system', pollIntervalMs = 10, now = () => new Date().toISOString() } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('Admission gate requires a PostgreSQL pool');
+  if (!durableRepairRecorders.has(crashRecorder) || typeof crashRecorder.record !== 'function') throw new TypeError('Admission gate requires a durable repair recorder');
   const gate = String(gateId || CORE_V0_GATE_ID);
   const configuredTimeout = Math.max(0, Math.min(60_000, Number(drainTimeoutMs) || 0));
   const delayMs = Math.max(1, Math.min(100, Number(pollIntervalMs) || 10));
@@ -623,7 +870,8 @@ export function createCoreV0AdmissionGate({ pool, gateId = CORE_V0_GATE_ID, enab
         if (crashRecorder?.record) {
           try {
             for (const lease of current.activeLeases) {
-              await crashRecorder.record({ gateId: gate, tenantId: lease.tenantId, subjectUserId: lease.subjectUserId, turnId: lease.turnId, leaseId: lease.leaseId, operation: 'drain_timeout', adapter: 'admission-gate', status: 'pending', attempt: 1, closeEpoch: closed.closeEpoch, leaseOwner: lease.leaseOwner, externalReceiptStatus: 'unknown' });
+              const recorded = await crashRecorder.record({ gateId: gate, tenantId: lease.tenantId, subjectUserId: lease.subjectUserId, turnId: lease.turnId, leaseId: lease.leaseId, operation: 'drain_timeout', adapter: 'admission-gate', status: 'pending', attempt: 1, closeEpoch: closed.closeEpoch, leaseOwner: lease.leaseOwner, externalReceiptStatus: 'unknown' });
+              if (recorded?.status !== 'recorded' || !recorded.repairAttemptId) throw new Error('repair recorder did not return a durable identity');
             }
           } catch (error) {
             throw coreError('CORE_REPAIR_RECORD_FAILED', 'Admission drain timeout could not be recorded', { status: 503, retryable: true, unknown: true, cause: error });

@@ -149,9 +149,17 @@ CREATE TABLE IF NOT EXISTS core_v0_repair_attempts (
   close_epoch bigint,
   lease_owner text,
   external_receipt_status text,
+  external_receipt_id text,
+  core_commit_id text,
   created_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL
 );
+
+ALTER TABLE core_v0_repair_attempts
+  ADD COLUMN IF NOT EXISTS external_receipt_id text;
+
+ALTER TABLE core_v0_repair_attempts
+  ADD COLUMN IF NOT EXISTS core_commit_id text;
 
 CREATE TABLE IF NOT EXISTS core_v0_crash_records (
   crash_record_id text PRIMARY KEY,

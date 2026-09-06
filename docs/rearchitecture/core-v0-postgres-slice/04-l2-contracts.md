@@ -36,11 +36,11 @@
 
 **Owner:** Companion Runtime operations.
 
-**Responsibility:** append content-free, subject-bound records for reconciliation attempts, drain timeouts and process crashes; records are append-only and operator-scoped.
+**Responsibility:** append content-free, subject-bound records for reconciliation attempts, drain timeouts and process crashes; records are append-only, operator-scoped and may retain opaque receipt/commit proof IDs without retaining content.
 
-**Deterministic identity/state:** `repair_attempt_id` is stable for `(turn, operation, attempt, close_epoch)` and `crash_record_id` is stable for the observed process/turn operation. Duplicate recorder calls are idempotent inserts. States are `pending → processing → completed|failed|dead_letter`; an exhausted attempt is never silently promoted to completed.
+**Deterministic identity/state:** `repair_attempt_id` is stable for `(turn, operation, attempt, close_epoch)` and `crash_record_id` is stable for the observed process/turn operation. Duplicate recorder calls are idempotent inserts. States are `pending → processing → pending|completed|failed|dead_letter`; an exhausted attempt is never silently promoted to completed. Direct `record`/`transition` calls cannot create a completed repair: only `reconcile` may complete it after an authoritative receipt lookup and an authoritative completed Core commit lookup that both match the original turn identity. Receipt and Core commit identities are persisted with the completion evidence.
 
-**Failure:** inability to record an operator safety fact blocks a claimed successful repair and is surfaced as an operational failure.
+**Failure:** inability to record an operator safety fact blocks a claimed successful repair and is surfaced as an operational failure. The AdmissionGate must be constructed with the durable recorder instance produced by this boundary; a no-op or unbound recorder is rejected, and every timeout record must return a repair identity before the gate reports `timed_out`.
 
 All four boundaries use commands, bounded views or receipts; no generic event bus is introduced by this increment.
 

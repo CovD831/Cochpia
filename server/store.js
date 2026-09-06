@@ -126,6 +126,14 @@ async function getPostgresPool() {
   return pool;
 }
 
+// The application store owns the only PostgreSQL pool. Core and Memory
+// adapters consume this accessor so request-path wiring cannot silently create
+// a second pool with different TLS or lifecycle settings.
+export async function getApplicationPostgresPool() {
+  if (storageProvider !== 'postgres') throw new StorageError('POSTGRES_STORAGE_REQUIRED', 'PostgreSQL storage is required for this adapter');
+  return getPostgresPool();
+}
+
 async function loadPostgresState() {
   return withRetry(async () => {
     const database = await getPostgresPool();

@@ -1,0 +1,40 @@
+{
+  "fixture": "rollback-drain-rehearsal",
+  "mode": "sql-shaped-fixture",
+  "sequence": [
+    "legacy_writer_active",
+    "target_writer_standby",
+    "admit_target_lease",
+    "close_gate_before_switch",
+    "bounded_drain_timeout",
+    "record_pending_repair",
+    "reject_post_close_admission",
+    "release_in_flight_lease",
+    "reconcile_original_identity",
+    "rollback_to_legacy"
+  ],
+  "initialWriterState": {
+    "route": "legacy",
+    "legacyWriter": {
+      "status": "active",
+      "writable": true
+    },
+    "targetWriter": {
+      "status": "standby",
+      "writable": false
+    },
+    "targetTrafficSwitched": false,
+    "cutoverPhase": "pre_cutover"
+  },
+  "expected": {
+    "targetTrafficSwitched": false,
+    "legacyWriterRemainsMutable": true,
+    "targetWriterRemainsStandby": true,
+    "closeBeforeSwitch": true,
+    "postCloseAdmission": "CORE_ADMISSION_CLOSED",
+    "repairEndsWithAuthoritativeReceipt": true,
+    "activeLeasesAfterRehearsal": 0,
+    "ambiguousExternalOutcome": false,
+    "routeAfterRollback": "legacy"
+  }
+}

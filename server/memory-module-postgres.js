@@ -1,5 +1,12 @@
 import { parsePgvectorVector, toPgvectorLiteral } from './memory-module-pgvector.js';
 import { buildPostgresIndexCandidateQuery, mapPostgresIndexCandidate } from './memory-module-postgres-retrieval.js';
+import { readFile } from 'node:fs/promises';
+
+export async function ensureMemoryModulePostgresSchema(pool, { sql } = {}) {
+  if (!pool || typeof pool.query !== 'function') throw new TypeError('A PostgreSQL query executor is required');
+  const schema = sql || await readFile(new URL('./memory-module-schema.sql', import.meta.url), 'utf8');
+  await pool.query(schema);
+}
 
 const userKey = context => `${context.tenantId}:${context.subjectUserId}`;
 
@@ -311,54 +318,43 @@ export function createMemoryModulePostgresRepository(pool, { pgvector = false, c
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('A pg Pool is required');
   const usePgvector = pgvector === true;
 
+  const readMemoryMetadata = async (client, context) => {
+    const [sequence, redaction, grants, accessConfirmations, mentionCooldowns] = await Promise.all([
+      client.query('SELECT commit_seq FROM memory_commit_sequences WHERE tenant_id=$1 AND user_id=$2', [context.tenantId, context.subjectUserId]),
+      client.query('SELECT privacy_epoch FROM redaction_epochs WHERE tenant_id=$1 AND user_id=$2', [context.tenantId, context.subjectUserId]),
+      client.query('SELECT COALESCE(MAX(grant_version), 0) AS grant_version FROM scope_grants WHERE tenant_id=$1 AND subject_user_id=$2', [context.tenantId, context.subjectUserId]),
+      client.query('SELECT * FROM access_confirmations WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at', [context.tenantId, context.subjectUserId]),
+      client.query('SELECT * FROM memory_mention_cooldowns WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at', [context.tenantId, context.subjectUserId])
+    ]);
+    const commitSeq = Number(sequence.rows[0]?.commit_seq || 0);
+    return {
+      sequence: commitSeq,
+      persistenceBaseSequence: commitSeq,
+      grantVersion: Number(grants.rows[0]?.grant_version || 0),
+      policyVersion: 'memory-policy-v1',
+      redactionEpochs: { [userKey(context)]: Number(redaction.rows[0]?.privacy_epoch || 0) },
+      accessConfirmations: accessConfirmations.rows.map(mapAccessConfirmation),
+      mentionCooldowns: mentionCooldowns.rows.map(mapMentionCooldown)
+    };
+  };
+
   return {
     async loadReadMetadata(context) {
       const client = await pool.connect();
       try {
-        const [sequence, redaction, grants, accessConfirmations, mentionCooldowns] = await Promise.all([
-          client.query('SELECT commit_seq FROM memory_commit_sequences WHERE tenant_id=$1 AND user_id=$2', [context.tenantId, context.subjectUserId]),
-          client.query('SELECT privacy_epoch FROM redaction_epochs WHERE tenant_id=$1 AND user_id=$2', [context.tenantId, context.subjectUserId]),
-          client.query('SELECT COALESCE(MAX(grant_version), 0) AS grant_version FROM scope_grants WHERE tenant_id=$1 AND subject_user_id=$2', [context.tenantId, context.subjectUserId]),
-          client.query('SELECT * FROM access_confirmations WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at', [context.tenantId, context.subjectUserId]),
-          client.query('SELECT * FROM memory_mention_cooldowns WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at', [context.tenantId, context.subjectUserId])
-        ]);
-        const commitSeq = Number(sequence.rows[0]?.commit_seq || 0);
-        return {
-          sequence: commitSeq,
-          persistenceBaseSequence: commitSeq,
-          grantVersion: Number(grants.rows[0]?.grant_version || 0),
-          policyVersion: 'memory-policy-v1',
-          redactionEpochs: { [userKey(context)]: Number(redaction.rows[0]?.privacy_epoch || 0) },
-          accessConfirmations: accessConfirmations.rows.map(mapAccessConfirmation),
-          mentionCooldowns: mentionCooldowns.rows.map(mapMentionCooldown)
-        };
+        await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+        const result = await readMemoryMetadata(client, context);
+        await client.query('COMMIT');
+        return result;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
       } finally {
         client.release();
       }
     },
 
     async loadContextBundleState(context, { purpose = 'answer_user_query', query = '' } = {}) {
-      const metadata = await this.loadReadMetadata(context);
-      const readVersion = [
-        metadata.sequence,
-        metadata.grantVersion,
-        metadata.redactionEpochs[userKey(context)] || 0
-      ].join(':');
-      if (cache?.getContextBundle) {
-        const cached = await cache.getContextBundle(context, { purpose, query, readVersion });
-        if (cached) {
-          return {
-            ...cached,
-            accessConfirmations: metadata.accessConfirmations,
-            mentionCooldowns: metadata.mentionCooldowns,
-            sequence: metadata.sequence,
-            persistenceBaseSequence: metadata.persistenceBaseSequence,
-            grantVersion: metadata.grantVersion,
-            redactionEpochs: metadata.redactionEpochs,
-            policyVersion: metadata.policyVersion
-          };
-        }
-      }
       const client = await pool.connect();
       const state = {
         rawEvents: [],
@@ -378,25 +374,55 @@ export function createMemoryModulePostgresRepository(pool, { pgvector = false, c
         currentStateSources: [],
         profileProjectionSources: [],
         confirmations: [],
-        accessConfirmations: metadata.accessConfirmations,
-        mentionCooldowns: metadata.mentionCooldowns,
+        accessConfirmations: [],
+        mentionCooldowns: [],
         pins: [],
         scopeGrants: [],
         deletionOperations: [],
         tombstones: [],
-        redactionEpochs: metadata.redactionEpochs,
+        redactionEpochs: {},
         auditEvents: [],
         idempotencyRecords: [],
-        sequence: metadata.sequence,
-        persistenceBaseSequence: metadata.persistenceBaseSequence,
-        grantVersion: metadata.grantVersion,
-        policyVersion: metadata.policyVersion
+        sequence: 0,
+        persistenceBaseSequence: 0,
+        grantVersion: 0,
+        policyVersion: 'memory-policy-v1'
       };
       const queryRows = async (sql, values) => (await client.query(sql, values)).rows;
       const rowsForIds = async (table, column, ids) => ids.length
         ? queryRows(`SELECT * FROM ${table} WHERE tenant_id=$1 AND ${column} = ANY($2::text[])`, [context.tenantId, ids])
         : [];
       try {
+        await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+        const metadata = await readMemoryMetadata(client, context);
+        const readVersion = [
+          metadata.sequence,
+          metadata.grantVersion,
+          metadata.redactionEpochs[userKey(context)] || 0
+        ].join(':');
+        if (cache?.getContextBundle) {
+          const cached = await cache.getContextBundle(context, { purpose, query, readVersion });
+          if (cached) {
+            await client.query('COMMIT');
+            return {
+              ...cached,
+              accessConfirmations: metadata.accessConfirmations,
+              mentionCooldowns: metadata.mentionCooldowns,
+              sequence: metadata.sequence,
+              persistenceBaseSequence: metadata.persistenceBaseSequence,
+              grantVersion: metadata.grantVersion,
+              redactionEpochs: metadata.redactionEpochs,
+              policyVersion: metadata.policyVersion
+            };
+          }
+        }
+        state.accessConfirmations = metadata.accessConfirmations;
+        state.mentionCooldowns = metadata.mentionCooldowns;
+        state.redactionEpochs = metadata.redactionEpochs;
+        state.sequence = metadata.sequence;
+        state.persistenceBaseSequence = metadata.persistenceBaseSequence;
+        state.grantVersion = metadata.grantVersion;
+        state.policyVersion = metadata.policyVersion;
         const activeSessionRows = context.sessionId
           ? await queryRows(`
               SELECT * FROM memory_sessions
@@ -498,15 +524,24 @@ export function createMemoryModulePostgresRepository(pool, { pgvector = false, c
         state.scopeGrants = grantRows.map(mapGrant);
         const tombstoneRows = await queryRows('SELECT * FROM memory_tombstones WHERE tenant_id=$1 AND user_id=$2', [context.tenantId, context.subjectUserId]);
         state.tombstones = tombstoneRows.map(mapTombstone);
+        await client.query('COMMIT');
         if (cache?.setContextBundle) {
-          await cache.setContextBundle(context, {
-            purpose,
-            query,
-            readVersion,
-            state: { ...state, accessConfirmations: [], mentionCooldowns: [] }
-          });
+          try {
+            await cache.setContextBundle(context, {
+              purpose,
+              query,
+              readVersion,
+              state: { ...state, accessConfirmations: [], mentionCooldowns: [] }
+            });
+          } catch {
+            // Cache state is a rebuildable projection and cannot invalidate a
+            // committed canonical read.
+          }
         }
         return state;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
       } finally {
         client.release();
       }
@@ -569,6 +604,7 @@ export function createMemoryModulePostgresRepository(pool, { pgvector = false, c
     async load(context) {
       const client = await pool.connect();
       try {
+        await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
         const [sessions, snapshots, projections, indexDocuments, episodes, rawEvents, assertions, versions, currentStates, grants, confirmations, accessConfirmations, mentionCooldowns, pins, deletions, tombstones, redaction, audits, idempotency, sequence] = await Promise.all([
           client.query('SELECT * FROM memory_sessions WHERE tenant_id=$1 AND user_id=$2 ORDER BY started_at', [context.tenantId, context.subjectUserId]),
           client.query('SELECT * FROM profile_snapshots WHERE tenant_id=$1 AND user_id=$2 ORDER BY created_at', [context.tenantId, context.subjectUserId]),
@@ -615,7 +651,7 @@ export function createMemoryModulePostgresRepository(pool, { pgvector = false, c
           `, [context.tenantId, context.subjectUserId])
         ]);
         const maxSequence = Math.max(0, ...rawEvents.rows.map(row => Number(row.commit_seq)), ...outbox.rows.map(row => Number(row.commit_seq)));
-        return {
+        const state = {
           rawEvents: rawEvents.rows.map(mapRawEvent),
           outboxEvents: outbox.rows.map(mapOutbox),
           sessions: sessions.rows.map(mapSession),
@@ -647,6 +683,11 @@ export function createMemoryModulePostgresRepository(pool, { pgvector = false, c
           grantVersion: Math.max(0, ...grants.rows.map(row => Number(row.grant_version))),
           policyVersion: 'memory-policy-v1'
         };
+        await client.query('COMMIT');
+        return state;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
       } finally {
         client.release();
       }
@@ -659,6 +700,7 @@ export function createMemoryModulePostgresRepository(pool, { pgvector = false, c
       try {
         await client.query('BEGIN');
         await client.query('SET CONSTRAINTS memory_assertions_current_version_fk DEFERRED');
+        await client.query('INSERT INTO memory_commit_sequences (tenant_id,user_id,commit_seq,updated_at) VALUES ($1,$2,0,now()) ON CONFLICT (tenant_id,user_id) DO NOTHING', [context.tenantId, context.subjectUserId]);
         const currentSequence = await client.query('SELECT commit_seq FROM memory_commit_sequences WHERE tenant_id=$1 AND user_id=$2 FOR UPDATE', [context.tenantId, context.subjectUserId]);
         const databaseSequence = Number(currentSequence.rows[0]?.commit_seq || 0);
         const baseSequence = Number(state.persistenceBaseSequence ?? 0);

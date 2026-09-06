@@ -14,3 +14,7 @@ No new global bus or second Memory authority is introduced. The package adds onl
 ## Compatibility fence before promotion
 
 Before any route switch, the target store, admission gate and legacy writer policy must be changed as one deployment decision. R-003 leaves the old route and JSON/JSONB state writer executable; its acceptance command records this as deferred rather than counting the new adapter's isolated success as a cutover.
+
+The rerunnable local fence rehearsal is `scripts/core-v0-postgres-rollback-rehearsal.js` with fixture `fixtures/rollback-drain-rehearsal.json`. It closes the target admission gate before a switch, records timed-out work, reconciles the same repair identity through authoritative receipt/Core-commit lookups, and exercises an explicit policy state that leaves the legacy writer active. This establishes local ordering and policy semantics only; the deployed writer fence remains a promotion gate.
+
+The explicit live evidence path is `scripts/core-v0-postgres-live-acceptance.js` with `fixtures/live-postgres-acceptance.json` and `scripts/core-v0-postgres-live-worker.js`. It is isolated by a generated PostgreSQL schema and two real worker processes; it proves database-backed CAS and lifecycle ordering without making the new adapter the application traffic writer.

@@ -30,7 +30,7 @@ The external Memory path uses the original `core-v0:binding:<bindingKey>` or `ev
 
 ## Deterministic repair identity and transitions
 
-Repair identity is stable for the original turn, operation, attempt and close epoch. Recorder calls are idempotent inserts. The only allowed repair statuses are `pending`, `processing`, `completed`, `failed` and `dead_letter`; `dead_letter` requires explicit operator action. Crash records capture process/lease/turn identifiers and error code only. A recorder failure is an operational failure, never evidence of completed repair.
+Repair identity is stable for the original turn, operation, attempt and close epoch. Recorder calls are idempotent inserts. The allowed repair statuses are `pending`, `processing`, `completed`, `failed` and `dead_letter`; `processing → pending` is used when evidence is incomplete, and `dead_letter` requires explicit operator action. Direct completion is rejected; `reconcile` must call an authoritative receipt lookup and an authoritative Core commit lookup, verify the original turn identity, and persist both receipt and commit IDs before completing. Crash records capture process/lease/turn identifiers and error code only. A recorder failure is an operational failure, never evidence of completed repair.
 
 ## Candidate interfaces
 
@@ -52,6 +52,8 @@ createCoreV0AdmissionGate({ enabled, drainTimeoutMs, crashRecorder })
 
 createCoreV0RepairRecorder({ store, operatorId })
   record({ turnId, operation, adapter, status, errorCode? })
+  reconcile({ repairAttemptId, receiptLookup, coreCommitLookup })
+    → pending | completed(authoritative receipt + Core commit)
 ```
 
 The existing Core turn service consumes the store shape; the target route is not switched in this increment.
@@ -67,8 +69,14 @@ The existing Core turn service consumes the store shape; the target route is not
 
 ## Authorization and privacy
 
-Only verified server context supplies tenant/user IDs. Repair records contain no message body, prompt, token, or database URL. The PostgreSQL pool must use the repository's existing TLS configuration and parameterized SQL.
+Only verified server context supplies tenant/user IDs. Repair records contain no message body, prompt, token, or database URL. The PostgreSQL pool must use the repository's existing TLS configuration and parameterized SQL. The AdmissionGate accepts only the factory-bound durable repair recorder and checks the returned repair identity, so timeout work cannot be reported without an operator record.
 
 ## Definition of done
 
-The package SQL/fixture tests pass; the shaped acceptance adapter reports the R-002 scenario and lifecycle rows as passed; compatibility remains explicitly deferred; live Auth/TLS and two-process PostgreSQL rows remain `pending` when no `DATABASE_URL` exists rather than being claimed as passed. No traffic cutover occurs.
+The package SQL/fixture tests pass; the shaped acceptance adapter reports the R-002 scenario and lifecycle rows as passed; the explicit live harness uses only a generated isolated schema and can produce real two-process PostgreSQL evidence; compatibility remains explicitly deferred; live Auth/TLS remains `pending` until required configuration, active verified TLS and context-spoofing evidence exist. No traffic cutover occurs.
+
+## Live harness contract
+
+`npm run acceptance:core-v0-postgres-live` is the named bounded experiment for the live promotion gate. It is allowed to run only when `CORE_V0_LIVE_ACCEPTANCE=true`, `CORE_V0_LIVE_ENV=isolated` and `DATABASE_URL` are explicitly supplied. The parent creates a generated `core_v0_live_*` schema, applies `server/core-v0-schema.sql` twice, starts `scripts/core-v0-postgres-live-worker.js` as two separate Node processes, and removes only that generated schema after all workers stop. A missing opt-in is `pending`; a configured but unreachable database is a failure.
+
+The live acceptance artifact must contain no connection string, credential, prompt or message body. L-02 is complete only when the two workers produce exactly one saved CAS snapshot, the other worker receives `CORE_STORAGE_CONFLICT`, the original key replays the saved turn identity, a changed fingerprint returns `IDEMPOTENCY_KEY_CONFLICT`, the PostgreSQL-backed MemoryPort writes the session/raw event and its receipt lookup completes, and close/drain plus repair reconciliation complete. P-10 is the local synthetic rollback rehearsal; the live harness does not prove deployment rollback or leave a production legacy writer active. The live receipt callback must query the authoritative PostgreSQL-backed MemoryPort repository, not a copied Core receipt. L-01 is complete only when the production Auth/storage/TLS/context route evidence passes together; helper context tests are supporting evidence only.

@@ -104,7 +104,9 @@ function selectRows(tables, sql, values) {
 
 function execute(tables, sql, values) {
   if (!sql || sql.startsWith('--') || sql.includes('CREATE TABLE') || sql.includes('CREATE UNIQUE INDEX')) return { rows: [] };
-  if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [] };
+  if (/^BEGIN(?:\s+ISOLATION\s+LEVEL\s+[A-Z\s]+)?$/i.test(sql)
+    || sql === 'COMMIT'
+    || sql === 'ROLLBACK') return { rows: [] };
   if (/^SELECT /i.test(sql)) return selectRows(tables, sql, values);
 
   const insert = tableFromInsert(sql);
@@ -153,7 +155,9 @@ function execute(tables, sql, values) {
     row.status = values[1];
     row.error_code = values[2];
     row.external_receipt_status = values[3];
-    row.updated_at = values[4];
+    row.external_receipt_id = values[4];
+    row.core_commit_id = values[5];
+    row.updated_at = values[6];
     return { rows: [], rowCount: 1 };
   }
   throw new Error(`Unsupported fixture SQL: ${sql}`);
@@ -168,7 +172,7 @@ class FixtureClient {
   async query(rawSql, values = []) {
     const sql = normalize(rawSql);
     this.database.queries.push({ sql, values: clone(values) });
-    if (sql === 'BEGIN') {
+    if (/^BEGIN(?:\s+ISOLATION\s+LEVEL\s+[A-Z\s]+)?$/i.test(sql)) {
       await this.database.transactionTail;
       let release;
       const done = new Promise(resolve => { release = resolve; });

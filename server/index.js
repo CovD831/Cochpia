@@ -27,7 +27,8 @@ import { mergeState } from './state-merge.js';
 import { shouldRemember } from './auto-memory.js';
 import { ensurePsychologyTraits, listAtmospherePresets, resolveAtmosphere } from './psychology.js';
 import { sanitizeWorkspacePreferences } from './workspace-preferences.js';
-import { createInProcessMemoryPort, createCoreV0MockModelGateway, createCoreV0TurnService, coreV0ErrorResponse } from './core-v0.js';
+import { CoreV0Error, coreV0ErrorResponse } from './core-v0.js';
+import { createCoreV0LocalAdapter, createCoreV0ProductionAdapter, createCoreV0ProductionMessageView } from './core-v0-production.js';
 import { createMemoryServiceBoundary } from './memory-service-boundary.js';
 
 const app = express();
@@ -195,18 +196,28 @@ const coreV0ContextForRequest = req => ({
   producer: 'companion-core',
   correlationId: req.get('x-correlation-id') || req.traceId || req.requestId || randomUUID()
 });
-const coreV0ServiceForRequest = req => {
+const coreV0ServiceForRequest = async req => {
   const context = coreV0ContextForRequest(req);
   const requestState = requestContext.getStore()?.state || baseState;
-  const memoryModule = memoryRuntime.moduleForRequest(req);
-  return createCoreV0TurnService({
+  if (storageProvider === 'postgres') {
+    const session = requestState.sessions?.find(item => item.id === req.body?.sessionId);
+    const adapter = await createCoreV0ProductionAdapter({
+      context,
+      baseState: requestState,
+      modelProvider: session?.modelProvider || process.env.MODEL_PROVIDER || 'mock',
+      modelName: session?.modelName || ''
+    });
+    return adapter.service;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new CoreV0Error('CORE_V0_PRODUCTION_STORAGE_REQUIRED', 'PostgreSQL storage is required for Core v0 in production', { status: 503, retryable: false });
+  }
+  return createCoreV0LocalAdapter({
     state: requestState,
     context,
-    persist: () => saveState(state),
-    memoryPort: createInProcessMemoryPort({ memoryModule, context }),
-    modelGateway: createCoreV0MockModelGateway({ provider: createModelProvider('mock') }),
-    enabled: coreV0Enabled()
-  });
+    memoryModule: memoryRuntime.moduleForRequest(req),
+    modelProvider: 'mock'
+  }).service;
 };
 const finishRun = run => {
   if (run.finished) return;
@@ -222,7 +233,7 @@ app.post('/api/chat/turns', async (req, res) => {
     return res.status(503).json({ error: { code: 'CORE_V0_DISABLED', message: 'Core v0 is disabled', retryable: true, unknown: false } });
   }
   try {
-    const service = coreV0ServiceForRequest(req);
+    const service = await coreV0ServiceForRequest(req);
     const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
     return res.status(result.status === 'pending' ? 202 : 200).json(result);
   } catch (error) {
@@ -335,17 +346,45 @@ app.patch('/api/sessions/:id/atmosphere', async (req, res) => {
   touchSession(session); await saveState(state);
   res.json({ atmosphere: session.atmosphere });
 });
-app.get('/api/sessions/:id/messages', (req, res) => {
+app.get('/api/sessions/:id/messages', async (req, res) => {
   if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   const channel = req.query.channel ? String(req.query.channel) : '';
-  const allMessages = state.messages[req.params.id] || [];
+  let allMessages;
+  if (storageProvider === 'postgres') {
+    try {
+      const view = await createCoreV0ProductionMessageView({
+        context: coreV0ContextForRequest(req),
+        baseState: requestContext.getStore()?.state || baseState
+      });
+      allMessages = await view.listMessages(req.params.id, { channel });
+    } catch (error) {
+      const response = coreV0ErrorResponse(error);
+      if (response.body.error.retryable) res.set('Retry-After', '1');
+      return res.status(response.status).json(response.body);
+    }
+  } else {
+    allMessages = state.messages[req.params.id] || [];
+  }
   const scoped = channel ? allMessages.filter(message => (message.channel || '默认') === channel) : allMessages;
   if (req.query.paginated !== 'true' && !req.query.search) return res.json(scoped);
   const result = queryCollection(scoped, { search: req.query.search, limit: req.query.limit, offset: req.query.offset, text: message => message.content });
   res.json(req.query.paginated === 'true' ? result : result.items);
 });
-app.get('/api/sessions/:id/channels', (req, res) => {
+app.get('/api/sessions/:id/channels', async (req, res) => {
   if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
+  if (storageProvider === 'postgres') {
+    try {
+      const view = await createCoreV0ProductionMessageView({
+        context: coreV0ContextForRequest(req),
+        baseState: requestContext.getStore()?.state || baseState
+      });
+      return res.json(await view.listChannels(req.params.id));
+    } catch (error) {
+      const response = coreV0ErrorResponse(error);
+      if (response.body.error.retryable) res.set('Retry-After', '1');
+      return res.status(response.status).json(response.body);
+    }
+  }
   const counts = new Map();
   for (const message of state.messages[req.params.id] || []) {
     const name = message.channel || '默认';
@@ -355,6 +394,15 @@ app.get('/api/sessions/:id/channels', (req, res) => {
 });
 app.patch('/api/sessions/:id/messages/:messageId', async (req, res) => {
   if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
+  if (storageProvider === 'postgres') {
+    const view = await createCoreV0ProductionMessageView({
+      context: coreV0ContextForRequest(req),
+      baseState: requestContext.getStore()?.state || baseState
+    });
+    const messages = await view.listMessages(req.params.id);
+    const message = messages.find(item => item.id === req.params.messageId);
+    if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be edited in this slice');
+  }
   const message = getMessage(req.params.id, req.params.messageId);
   if (!message) return fail(res, 404, 'MESSAGE_NOT_FOUND', 'Message not found');
   const content = String(req.body?.content || '').trim();
@@ -363,6 +411,14 @@ app.patch('/api/sessions/:id/messages/:messageId', async (req, res) => {
 });
 app.delete('/api/sessions/:id/messages/:messageId', async (req, res) => {
   if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
+  if (storageProvider === 'postgres') {
+    const view = await createCoreV0ProductionMessageView({
+      context: coreV0ContextForRequest(req),
+      baseState: requestContext.getStore()?.state || baseState
+    });
+    const message = (await view.listMessages(req.params.id)).find(item => item.id === req.params.messageId);
+    if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be deleted in this slice');
+  }
   const messages = state.messages[req.params.id] || [];
   const index = messages.findIndex(message => message.id === req.params.messageId);
   if (index === -1) return fail(res, 404, 'MESSAGE_NOT_FOUND', 'Message not found');
