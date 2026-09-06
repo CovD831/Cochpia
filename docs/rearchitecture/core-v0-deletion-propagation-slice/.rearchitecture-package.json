@@ -1,0 +1,20 @@
+{
+  "package_id": "R-006-deletion-propagation",
+  "size": "implementation",
+  "baseline_revision": "931a808",
+  "current_revision": "931a808+working-tree-r006-docs",
+  "documents": {
+    "scope": "00-scope.md",
+    "l2": ["04-l2-contracts.md"],
+    "adr": ["05-adr.md"],
+    "handoff": "06-handoff.md",
+    "l3": "07-l3-task-contract.md",
+    "acceptance": "acceptance.md",
+    "review_report": "review-report.json",
+    "review_ledger": "review-ledger.json"
+  },
+  "review": {"status": "review-consumed", "reviewer": "workbuddy-input-review", "blocking_open": 0},
+  "next_task": {"id": "R-006-IMPLEMENT", "owner": "WorkBuddy"},
+  "advancement_trigger": "Core message deletion, fan-out through the existing forget mechanism, no-resurrection checks and the proof E5 reversal pass.",
+  "stop_rule": "Stop if deletion physically erases canonical raw events, deletes turn admissions, or lets a Memory-side failure surface as a lost message without an audit trail."
+}

@@ -1,0 +1,12 @@
+{
+  "package_id": "R-006-deletion-propagation",
+  "input_revision": "931a808+working-tree-r006-docs",
+  "reviewer": "workbuddy-input-review",
+  "cycle": "input-adversarial-steelman-drafted-inline",
+  "findings": [
+    {"id": "R6-AR-1", "statement": "Draft ordering deleted the Core message before the Memory forget, leaving a resurrection window on partial failure.", "severity": "major", "evidence_refs": ["04-l2-contracts.md"], "recommendation": "Forget first, delete second; Core failure after forget returns retryable."},
+    {"id": "R6-AR-2", "statement": "The drain's tombstone skip was assumed, not specified as a check.", "severity": "major", "evidence_refs": ["acceptance.md"], "recommendation": "Add C-04 to the acceptance matrix."}
+  ],
+  "steelman": "The strongest objection is that forget-without-physical-erase leaves raw event rows queryable by direct DB access, so 'forget' is a retrieval contract, not an erasure contract. That is accepted here deliberately: physical erasure is a separate redaction pass with its own compliance surface. The second objection - that a turn admission surviving its message makes replay return a committed result whose content is gone - is real; the response carries no content after deletion and the replay path returns metadata only.",
+  "overall": "Two major findings consumed inline before freezing; no blocking findings. Implementation authorized."
+}

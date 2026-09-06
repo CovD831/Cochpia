@@ -1,0 +1,4 @@
+[
+  {"finding_id": "R6-AR-1", "severity": "major", "decision": "consumed", "consumer": {"path": "05-adr.md", "anchor": "ADR-006-02"}, "owner": "WorkBuddy", "evidence": "forget-before-delete ordering fixed in the L2 contract", "status": "closed"},
+  {"finding_id": "R6-AR-2", "severity": "major", "decision": "consumed", "consumer": {"path": "acceptance.md", "anchor": "C-04"}, "owner": "WorkBuddy", "evidence": "tombstone guard is an explicit acceptance check", "status": "closed"}
+]
