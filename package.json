@@ -28,7 +28,9 @@
     "benchmark:memory": "node scripts/memory-module-benchmark.js",
     "evaluate:memory": "node scripts/memory-module-evaluate.js",
     "evaluate:memory-synthetic": "node scripts/memory-module-synthetic-evaluation.js",
-    "migrate:postgres": "node server/migrate-json-to-postgres.js"
+    "migrate:postgres": "node server/migrate-json-to-postgres.js",
+    "test:core-v0-memory-pipeline": "node --test server/core-v0-memory-pipeline.test.js",
+    "proof:memory-loop": "node scripts/memory-loop-proof.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",

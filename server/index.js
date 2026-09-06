@@ -229,17 +229,26 @@ const coreV0ServiceForRequest = async req => {
       modelProvider: session?.modelProvider || process.env.MODEL_PROVIDER || 'mock',
       modelName: session?.modelName || ''
     });
-    return adapter.service;
+    return { service: adapter.service, drainExtraction: adapter.drainExtraction };
   }
   if (process.env.NODE_ENV === 'production') {
     throw new CoreV0Error('CORE_V0_PRODUCTION_STORAGE_REQUIRED', 'PostgreSQL storage is required for Core v0 in production', { status: 503, retryable: false });
   }
-  return createCoreV0LocalAdapter({
-    state: requestState,
-    context,
-    memoryModule: memoryRuntime.moduleForRequest(req),
-    modelProvider: 'mock'
-  }).service;
+  return {
+    service: createCoreV0LocalAdapter({
+      state: requestState,
+      context,
+      memoryModule: memoryRuntime.moduleForRequest(req),
+      modelProvider: 'mock'
+    }).service,
+    drainExtraction: null
+  };
+};
+const coreV0DrainExtraction = async drain => {
+  // The drain never fails the turn: any error surfaces as a skipped drain and
+  // is retried by the next turn.
+  if (!drain) return;
+  try { await drain(); } catch { /* retried by the next drain */ }
 };
 const finishRun = run => {
   if (run.finished) return;
@@ -254,7 +263,8 @@ app.post('/api/chat/turns', async (req, res) => {
     return respondCoreV0Error(res, new CoreV0Error('CORE_V0_DISABLED', 'Core v0 is disabled', { status: 503, retryable: true }));
   }
   try {
-    const service = await coreV0ServiceForRequest(req);
+    const { service, drainExtraction } = await coreV0ServiceForRequest(req);
+    await coreV0DrainExtraction(drainExtraction);
     const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
     return res.status(result.status === 'pending' ? 202 : 200).json(result);
   } catch (error) {

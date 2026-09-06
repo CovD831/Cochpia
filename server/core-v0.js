@@ -226,6 +226,8 @@ export function createCoreV0Store({ state, persist = async () => {} } = {}) {
       applicationMessageId: turn.applicationMessageId,
       assistantMessageId: commit.assistantMessageId,
       memoryStatus: turn.memoryStatus || 'available',
+      recalledCount: Number(turn.recalledCount ?? 0),
+      memoryAnswerability: turn.memoryAnswerability ?? null,
       receiptId: commit.receiptId
     };
     return message;
@@ -492,6 +494,8 @@ export function createCoreV0TurnService({
       applicationMessageId: turn.applicationMessageId,
       assistantMessageId: turn.assistantMessageId,
       memoryStatus: turn.memoryStatus || 'available',
+      recalledCount: Number(turn.recalledCount ?? 0),
+      memoryAnswerability: turn.memoryAnswerability ?? null,
       receiptId: runtimeStore.findCommit(turn.commitId)?.receiptId || null
     }),
     replay
@@ -958,6 +962,8 @@ export function createCoreV0TurnService({
     if (eventResult.status === 'pending') return pendingResult(turn, 'pending');
 
     const memoryView = await retrieve(turn);
+    turn.recalledCount = Array.isArray(memoryView.recalled) ? memoryView.recalled.length : 0;
+    turn.memoryAnswerability = memoryView.bundle?.answerability || memoryView.answerability || null;
     turn.updatedAt = now();
     await persistOrThrow();
 

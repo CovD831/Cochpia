@@ -11,6 +11,7 @@ import {
   loadCoreV0SessionMessages
 } from './core-v0-postgres.js';
 import { createMemoryModulePostgresRepository } from './memory-module-postgres.js';
+import { createMemoryExtractionDrain, createModelExtractor } from './memory-extraction.js';
 
 let schemaPreparationCache = new WeakMap();
 
@@ -271,6 +272,7 @@ export async function createCoreV0ProductionAdapter({
   modelProvider = null,
   modelName = null,
   retryAttempts = 2,
+  extractor = null,
   moduleOptions = {},
   schemaOptions = {}
 } = {}) {
@@ -292,7 +294,19 @@ export async function createCoreV0ProductionAdapter({
   const modelGateway = createModelGateway(model);
   const store = await createPostgresCoreV0Store({ pool, context, baseState: state });
   const repository = createMemoryModulePostgresRepository(pool, { pgvector: isTruthy(process.env.MEMORY_PGVECTOR_ENABLED) });
-  const memoryPort = createPostgresMemoryPort({ repository, context, retryAttempts, moduleOptions });
+
+  // R-005 memory pipeline: one flag gates projection and extraction together,
+  // and the flag reaches the Module as a construction option, never via the
+  // environment inside routes.
+  const memoryPipelineEnabled = isTruthy(process.env.CORE_V0_MEMORY_PIPELINE_ENABLED);
+  const effectiveModuleOptions = { ...moduleOptions, projectionEnabled: memoryPipelineEnabled };
+  const memoryPort = createPostgresMemoryPort({ repository, context, retryAttempts, moduleOptions: effectiveModuleOptions });
+  // Extraction injection point: an explicit extractor wins; production falls
+  // back to the model-backed extractor and skips silently on mock providers.
+  const effectiveExtractor = extractor || (provider === 'mock' ? null : createModelExtractor(model));
+  const drainExtraction = memoryPipelineEnabled
+    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, context, moduleOptions: effectiveModuleOptions })
+    : null;
   const service = createCoreV0TurnService({
     state: store.state,
     store,
@@ -310,6 +324,8 @@ export async function createCoreV0ProductionAdapter({
     store,
     repository,
     memoryPort,
+    memoryPipelineEnabled,
+    drainExtraction,
     model: modelInfo(model),
     modelGateway,
     service

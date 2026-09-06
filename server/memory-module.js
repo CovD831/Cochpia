@@ -915,6 +915,29 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return { status, memory: serializeAssertion(state, assertion, { includeGovernance: true }), confirmation: confirmation ? clone(confirmation) : null, consistencyToken: tokenFor(state, context) };
   };
 
+  // Snapshot projection: every activation route shares this implementation.
+  const projectionEnabled = options.projectionEnabled === true;
+  // An active user/relationship-scope assertion becomes visible to retrieval
+  // only through its session profile snapshot, so promotion and user
+  // confirmation both project here, inside the promoting mutation.
+  const projectActiveAssertion = (context, assertion) => {
+    if (!projectionEnabled) return 0;
+    if (assertion.scopeType === 'session') return 0;
+    const versionId = assertion.currentVersionId || null;
+    let projected = 0;
+    for (const session of state.sessions) {
+      if (session.tenantId !== context.tenantId || session.userId !== context.subjectUserId) continue;
+      if (session.status !== 'active' || !session.profileSnapshotId) continue;
+      if (session.expiresAt && new Date(session.expiresAt).getTime() <= Date.now()) continue;
+      const duplicate = state.profileSnapshotItems.some(item => item.snapshotId === session.profileSnapshotId && item.assertionId === assertion.id);
+      if (duplicate) continue;
+      state.profileSnapshotItems.push({ snapshotId: session.profileSnapshotId, tenantId: context.tenantId, userId: context.subjectUserId, assertionId: assertion.id, versionId, scopeType: assertion.scopeType, createdAt: nowIso() });
+      projected += 1;
+    }
+    if (projected > 0) audit(state, context, 'memory_projected', { memoryId: assertion.id, sessions: projected });
+    return projected;
+  };
+
   const promoteCandidate = async (rawContext, id, input = {}) => {
     const context = contextOf(rawContext);
     assertUserGovernanceActor(context);
@@ -927,6 +950,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     bumpSequence();
     state.outboxEvents.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, consumerName: 'memory-derived', type: 'assertion.active', aggregateId: assertion.id, schemaVersion: 1, commitSeq: state.sequence, status: 'pending', createdAt: nowIso() });
     audit(state, context, 'candidate_promoted', { memoryId: assertion.id, policyVersion: state.policyVersion });
+    projectActiveAssertion(context, assertion);
     await persist();
     return { status: 'active', memory: serializeAssertion(state, assertion, { includeGovernance: true }), consistencyToken: tokenFor(state, context) };
   };
@@ -1921,6 +1945,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       bumpSequence();
     }
     audit(state, context, `memory_${decision}d`, { memoryId: assertion.id, confirmationId: confirmation.id });
+    projectActiveAssertion(context, assertion);
     await persist();
     return { confirmation: clone(confirmation), memory: serializeAssertion(state, assertion, { includeGovernance: true }), consistencyToken: tokenFor(state, context) };
   };
