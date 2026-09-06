@@ -13,6 +13,7 @@ import {
 import { createMemoryModulePostgresRepository } from './memory-module-postgres.js';
 import { createMemoryModule } from './memory-module.js';
 import { createMemoryExtractionDrain, createModelExtractor, createModelAuditor } from './memory-extraction.js';
+import { createOllamaEmbeddingGateway } from './memory-embedding.js';
 
 let schemaPreparationCache = new WeakMap();
 
@@ -301,7 +302,23 @@ export async function createCoreV0ProductionAdapter({
   // and the flag reaches the Module as a construction option, never via the
   // environment inside routes.
   const memoryPipelineEnabled = isTruthy(process.env.CORE_V0_MEMORY_PIPELINE_ENABLED);
-  const effectiveModuleOptions = { ...moduleOptions, projectionEnabled: memoryPipelineEnabled };
+  // R-007c semantic retrieval: hybrid retrieval plus an embedding gateway,
+  // gated by their own env switches and skipped on mock providers.
+  const hybridRetrieval = isTruthy(process.env.MEMORY_HYBRID_RETRIEVAL) && provider !== 'mock';
+  const embeddingModel = process.env.MEMORY_EMBEDDING_MODEL || 'bge-m3';
+  const embeddingGateway = hybridRetrieval
+    ? createOllamaEmbeddingGateway({
+      url: process.env.MEMORY_EMBEDDING_URL || 'http://127.0.0.1:11434/api/embeddings',
+      model: embeddingModel
+    })
+    : null;
+  const effectiveModuleOptions = {
+    ...moduleOptions,
+    projectionEnabled: memoryPipelineEnabled,
+    featureFlags: { hybridRetrieval: Boolean(hybridRetrieval && embeddingGateway) },
+    embeddingGateway,
+    embeddingTimeoutMs: Number(process.env.MEMORY_MODULE_EMBEDDING_TIMEOUT_MS) || 2000
+  };
   const memoryPort = createPostgresMemoryPort({ repository, context, retryAttempts, moduleOptions: effectiveModuleOptions });
   // Extraction injection point: an explicit extractor wins; production falls
   // back to the model-backed extractor and skips silently on mock providers.
@@ -311,7 +328,7 @@ export async function createCoreV0ProductionAdapter({
   const effectiveAuditor = auditor || (provider === 'mock' ? null : createModelAuditor(model));
   const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 2000;
   const drainExtraction = memoryPipelineEnabled
-    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs })
+    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, embeddingGateway, embeddingModel, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs })
     : null;
   const service = createCoreV0TurnService({
     state: store.state,

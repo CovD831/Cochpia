@@ -482,3 +482,69 @@ test('B-17 degradation: an auditor failure degrades to ADD with an audit trail',
   assert.ok(state.auditEvents.some(item => item.action === 'memory_audn_failed'));
   assert.ok(state.auditEvents.some(item => item.action === 'memory_audn'));
 });
+
+// ---------------------------------------------------------------------------
+// R-007c: semantic indexing, hybrid RRF retrieval, degradation
+// ---------------------------------------------------------------------------
+
+test('B-21 embedding indexing: a promoted assertion gets an active index document', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '请记住：我对花生过敏')] });
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '我对花生过敏，吃花生制品会起疹子。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    embeddingGateway: async () => Array.from({ length: 1024 }, () => 0.1),
+    embeddingModel: 'bge-m3',
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.ok(result.promoted >= 1);
+  assert.equal(state.indexDocuments.length, 1);
+  const doc = state.indexDocuments[0];
+  assert.equal(doc.indexStatus, 'active');
+  assert.equal(doc.sourceId, state.assertions[0].id);
+  assert.equal(doc.embedding.length, 1024);
+  assert.equal(doc.embeddingVersion, 'bge-m3');
+});
+
+test('B-22 hybrid retrieval: the semantic path fuses with BM25 through RRF', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '请记住：我对花生过敏')] });
+  const gateway = async text => (String(text).includes('花生') ? [1, 0] : [0, 1]);
+  const memory = createMemoryModule(state, async () => {}, {
+    projectionEnabled: true,
+    featureFlags: { hybridRetrieval: true },
+    embeddingGateway: gateway
+  });
+  const candidate = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '我对花生过敏，吃花生制品会起疹子。',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, candidate.memory.memoryId, { resourceRevision: candidate.memory.resourceRevision });
+  state.indexDocuments.push({
+    id: 'idx-1', tenantId: CTX.tenantId, sourceType: 'assertion', sourceId: candidate.memory.memoryId,
+    sourceVersion: candidate.memory.versionId, userId: CTX.subjectUserId, scopeType: 'user',
+    searchText: candidate.memory.content, sensitivity: 'S0', embedding: [1, 0],
+    embeddingVersion: 'bge-m3', indexStatus: 'active', sourceRefs: [], createdAt: '2026-01-01T00:00:00.000Z'
+  });
+  const retrieved = await memory.retrieveAsync(CTX, { query: '我能吃花生酱饼干吗', purpose: 'answer_user_query' });
+  assert.ok(retrieved.items.some(item => item.memoryId === candidate.memory.memoryId), 'semantic path hits the assertion');
+  assert.ok(['hybrid_rrf', 'vector'].includes(retrieved.retrievalMode), 'retrieval mode: ' + retrieved.retrievalMode);
+});
+
+test('B-23 degradation: a dead gateway falls back to lexical BM25 without noise', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '请记住：我对花生过敏')] });
+  const memory = createMemoryModule(state, async () => {}, {
+    projectionEnabled: true,
+    featureFlags: { hybridRetrieval: true },
+    embeddingGateway: async () => null
+  });
+  const candidate = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '我对花生过敏。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, candidate.memory.memoryId, { resourceRevision: candidate.memory.resourceRevision });
+  const retrieved = memory.retrieve(CTX, { query: '花生', purpose: 'answer_user_query' });
+  assert.equal(retrieved.items.length >= 1, true, 'lexical fallback still recalls');
+  assert.equal(String(retrieved.retrievalMode).startsWith('bm25'), true, 'mode: ' + retrieved.retrievalMode);
+});

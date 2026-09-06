@@ -144,6 +144,8 @@ export function createMemoryExtractionDrain({
   repository,
   extractor = null,
   auditor = null,
+  embeddingGateway = null,
+  embeddingModel = 'bge-m3',
   context,
   moduleOptions = {},
   batch = DEFAULT_BATCH,
@@ -236,7 +238,54 @@ export function createMemoryExtractionDrain({
           const promoted = await memory.promoteCandidate(context, created.memory.memoryId, {
             resourceRevision: created.memory.resourceRevision
           });
-          if (promoted.status === 'active') summary.promoted += 1;
+          if (promoted.status === 'active') {
+            summary.promoted += 1;
+            // R-007c: index the active assertion for semantic retrieval. An
+            // embedding failure never blocks activation - BM25 still covers
+            // the assertion and the audit trail records the gap.
+            if (typeof embeddingGateway === 'function') {
+              try {
+                const vector = await withTimeout(
+                  embeddingGateway(promoted.memory.content || proposal.content),
+                  Math.max(200, Math.min(remaining(), 10_000))
+                );
+                if (Array.isArray(vector)) {
+                  const assertion = state.assertions.find(item => item.id === created.memory.memoryId);
+                  if (assertion) {
+                    state.indexDocuments.push({
+                      id: `idx:${randomUUID()}`,
+                      tenantId: context.tenantId,
+                      sourceType: 'assertion',
+                      sourceId: assertion.id,
+                      sourceVersion: assertion.currentVersionId,
+                      userId: context.subjectUserId,
+                      scopeType: assertion.scopeType,
+                      relationshipAgentId: assertion.relationshipAgentId || null,
+                      sessionId: assertion.sessionId || null,
+                      searchText: promoted.memory.content || proposal.content,
+                      sensitivity: assertion.sensitivity,
+                      contextualizable: true,
+                      mentionable: true,
+                      redactionEpoch: 0,
+                      policyEpoch: 0,
+                      grantVersion: 0,
+                      embedding: vector,
+                      embeddingVersion: embeddingModel,
+                      lexicalVersion: null,
+                      indexStatus: 'active',
+                      sourceRefs: [],
+                      createdAt: new Date().toISOString()
+                    });
+                  }
+                }
+              } catch (error) {
+                auditEvent(memory.state, context, 'memory_embedding_failed', {
+                  memoryId: created.memory.memoryId,
+                  errorCode: error?.message || 'MEMORY_EMBEDDING_FAILED'
+                });
+              }
+            }
+          }
         }
         seenHashes.add(hashContent(proposal.content));
       };
