@@ -14,6 +14,7 @@
     "test:core-v0": "node --test server/core-v0.test.js server/core-v0-foundation.test.js server/core-v0-ingress.test.js",
     "acceptance:core-v0": "CORE_V0_ACCEPTANCE_MODULE=./scripts/core-v0-runtime-acceptance.js node scripts/core-v0-foundation-acceptance.js",
     "test:core-v0-postgres": "node --test server/core-v0-postgres.test.js",
+    "test:core-v0-production": "node --test server/core-v0-production.test.js",
     "acceptance:core-v0-postgres": "node scripts/core-v0-postgres-acceptance.js && npm run acceptance:core-v0-postgres-rollback",
     "acceptance:core-v0-postgres-rollback": "node scripts/core-v0-postgres-rollback-rehearsal.js",
     "acceptance:core-v0-postgres-live": "node scripts/core-v0-postgres-live-acceptance.js",

@@ -13,7 +13,9 @@ import {
 } from '../server/core-v0-postgres.js';
 import { createCoreV0PostgresFixture } from '../server/core-v0-postgres-fixture.js';
 import {
+  CORE_V0_PRODUCTION_REQUIRED_COLUMNS,
   CORE_V0_PRODUCTION_TABLES,
+  MEMORY_PRODUCTION_REQUIRED_COLUMNS,
   MEMORY_PRODUCTION_TABLES,
   createCoreV0ProductionAdapter,
   createCoreV0ProductionMessageView,
@@ -21,6 +23,14 @@ import {
   resetCoreV0ProductionSchemaCache
 } from '../server/core-v0-production.js';
 import { createMemoryModule, createMemoryModuleState } from '../server/memory-module.js';
+
+// Readiness now inspects columns as well as tables, so the controlled doubles
+// must answer information_schema.columns too. The required-column manifest is
+// the authoritative shape these doubles present back.
+const REQUIRED_COLUMNS = { ...CORE_V0_PRODUCTION_REQUIRED_COLUMNS, ...MEMORY_PRODUCTION_REQUIRED_COLUMNS };
+const columnRows = (tableNames, isPresent = () => true) => (Array.isArray(tableNames) ? tableNames : [])
+  .filter(isPresent)
+  .flatMap(table_name => (REQUIRED_COLUMNS[table_name] || []).map(column_name => ({ table_name, column_name })));
 
 const repoRoot = resolve(new URL('..', import.meta.url).pathname);
 const fixtureRoot = resolve(repoRoot, 'docs/rearchitecture/core-v0-chat-turns-postgres-slice/fixtures');
@@ -65,6 +75,12 @@ function readyPool({ coreReady = true, memoryReady = true } = {}) {
     const allReady = core ? coreReady : memoryReady;
     return { rows: allReady ? names.map(table_name => ({ table_name })) : [] };
   };
+  const columnReadinessRows = values => {
+    const names = Array.isArray(values?.[0]) ? values[0] : [];
+    const core = names.every(name => CORE_V0_PRODUCTION_TABLES.includes(name));
+    const allReady = core ? coreReady : memoryReady;
+    return { rows: allReady ? columnRows(names) : [] };
+  };
   const pool = {
     database: fixture.database,
     queries,
@@ -77,6 +93,9 @@ function readyPool({ coreReady = true, memoryReady = true } = {}) {
         if (/information_schema\.tables/i.test(normalized)) {
           return readinessRows(values);
         }
+        if (/information_schema\.columns/i.test(normalized)) {
+          return columnReadinessRows(values);
+        }
         if (/pg_advisory_(lock|unlock)/i.test(normalized)) return { rows: [] };
         return query(sql, values);
       };
@@ -87,6 +106,9 @@ function readyPool({ coreReady = true, memoryReady = true } = {}) {
       queries.push({ sql: normalized, values: structuredClone(values) });
       if (/information_schema\.tables/i.test(normalized)) {
         return readinessRows(values);
+      }
+      if (/information_schema\.columns/i.test(normalized)) {
+        return columnReadinessRows(values);
       }
       return fixture.query(sql, values);
     }
@@ -104,6 +126,10 @@ function migrationPool() {
     if (/information_schema\.tables/i.test(sql)) {
       const names = Array.isArray(values?.[0]) ? values[0] : [];
       return { rows: names.filter(name => readyTables.has(name)).map(table_name => ({ table_name })) };
+    }
+    if (/information_schema\.columns/i.test(sql)) {
+      const names = Array.isArray(values?.[0]) ? values[0] : [];
+      return { rows: columnRows(names, name => readyTables.has(name)) };
     }
     if (/pg_advisory_(lock|unlock)/i.test(sql)) return { rows: [] };
     if (/^CREATE CORE SCHEMA$/i.test(sql)) {

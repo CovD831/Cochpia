@@ -49,6 +49,29 @@ export const MEMORY_PRODUCTION_TABLES = Object.freeze([
   'memory_idempotency_records'
 ]);
 
+// Readiness is not satisfied by table existence alone. A table left behind by an
+// older revision can be present while its subject scope or status columns are
+// missing, which would fail later at write time instead of at admission. These
+// columns are the minimum structural contract each owner must expose.
+export const CORE_V0_PRODUCTION_REQUIRED_COLUMNS = Object.freeze({
+  core_v0_subjects: ['tenant_id', 'subject_user_id', 'sequence'],
+  core_v0_turn_admissions: ['tenant_id', 'subject_user_id', 'turn_id', 'application_session_id', 'idempotency_key', 'fingerprint', 'status', 'memory_status'],
+  core_v0_memory_session_bindings: ['tenant_id', 'subject_user_id', 'binding_id', 'binding_key', 'application_session_id', 'status'],
+  core_v0_assistant_commits: ['tenant_id', 'subject_user_id', 'commit_id', 'turn_id', 'status'],
+  core_v0_messages: ['tenant_id', 'subject_user_id', 'application_message_id', 'application_session_id', 'role', 'content', 'channel', 'core_v0'],
+  core_v0_admission_gates: ['gate_id', 'enabled', 'close_epoch'],
+  core_v0_admission_leases: ['gate_id', 'lease_id', 'admission_key', 'status', 'close_epoch'],
+  core_v0_repair_attempts: ['repair_attempt_id', 'operation', 'status', 'external_receipt_id', 'core_commit_id'],
+  core_v0_crash_records: ['crash_record_id', 'operation', 'status']
+});
+
+export const MEMORY_PRODUCTION_REQUIRED_COLUMNS = Object.freeze({
+  memory_sessions: ['id', 'tenant_id', 'user_id', 'status'],
+  raw_events: ['id', 'tenant_id', 'user_id', 'event_id', 'source_revision'],
+  memory_commit_sequences: ['tenant_id', 'user_id', 'commit_seq'],
+  memory_assertions: ['id', 'tenant_id', 'user_id', 'canonical_key', 'status']
+});
+
 const isTruthy = value => /^(1|true|yes)$/i.test(String(value || ''));
 const isProductionEnvironment = () => String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const usesAutoMigration = () => isTruthy(process.env.CORE_V0_AUTO_MIGRATE);
@@ -58,7 +81,8 @@ function productionError(code, message, options = {}) {
     status: options.status || 503,
     retryable: options.retryable ?? true,
     unknown: options.unknown ?? false,
-    cause: options.cause
+    cause: options.cause,
+    details: options.details ?? null
   });
 }
 
@@ -74,6 +98,46 @@ async function missingTables(executor, tableNames) {
   const existing = new Set((result.rows || []).map(row => row.table_name));
   return tableNames.filter(tableName => !existing.has(tableName));
 }
+
+async function missingColumns(executor, requiredColumns) {
+  const tableNames = Object.keys(requiredColumns);
+  if (!tableNames.length) return {};
+  const result = await executor.query(
+    'SELECT table_name, column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=ANY($1::text[])',
+    [tableNames]
+  );
+  const present = new Map();
+  for (const row of result.rows || []) {
+    if (!present.has(row.table_name)) present.set(row.table_name, new Set());
+    present.get(row.table_name).add(row.column_name);
+  }
+  const missing = {};
+  for (const [tableName, columns] of Object.entries(requiredColumns)) {
+    const available = present.get(tableName);
+    const absent = available ? columns.filter(column => !available.has(column)) : columns.slice();
+    if (absent.length) missing[tableName] = absent;
+  }
+  return missing;
+}
+
+const isEmpty = value => (Array.isArray(value) ? value.length === 0 : Object.keys(value || {}).length === 0);
+
+const schemaIsReady = snapshot => isEmpty(snapshot.missingCore)
+  && isEmpty(snapshot.missingMemory)
+  && isEmpty(snapshot.incompleteCore)
+  && isEmpty(snapshot.incompleteMemory);
+
+async function inspectSchema(executor) {
+  const [missingCore, missingMemory, incompleteCore, incompleteMemory] = await Promise.all([
+    missingTables(executor, CORE_V0_PRODUCTION_TABLES),
+    missingTables(executor, MEMORY_PRODUCTION_TABLES),
+    missingColumns(executor, CORE_V0_PRODUCTION_REQUIRED_COLUMNS),
+    missingColumns(executor, MEMORY_PRODUCTION_REQUIRED_COLUMNS)
+  ]);
+  return { missingCore, missingMemory, incompleteCore, incompleteMemory };
+}
+
+const schemaNotReady = (message, snapshot) => productionError('CORE_V0_SCHEMA_NOT_READY', message, { details: snapshot });
 
 async function withMigrationLock(pool, callback) {
   const client = await pool.connect();
@@ -101,21 +165,17 @@ export async function prepareCoreV0ProductionSchema(pool, {
   if (cached) return cached;
 
   cached = (async () => {
-    let missingCore;
-    let missingMemory;
+    let snapshot;
     try {
-      [missingCore, missingMemory] = await Promise.all([
-        missingTables(pool, CORE_V0_PRODUCTION_TABLES),
-        missingTables(pool, MEMORY_PRODUCTION_TABLES)
-      ]);
+      snapshot = await inspectSchema(pool);
     } catch (error) {
       throw productionError('CORE_V0_SCHEMA_CHECK_FAILED', 'Core v0 schema readiness could not be checked', { cause: error });
     }
 
     let migrated = false;
-    if (missingCore.length || missingMemory.length) {
+    if (!schemaIsReady(snapshot)) {
       if (production || !autoMigrate) {
-        throw productionError('CORE_V0_SCHEMA_NOT_READY', 'Core v0 and Memory PostgreSQL schemas are not ready');
+        throw schemaNotReady('Core v0 and Memory PostgreSQL schemas are not ready', snapshot);
       }
       let coreSql = coreSchemaSql;
       let memorySql = memorySchemaSql;
@@ -123,11 +183,10 @@ export async function prepareCoreV0ProductionSchema(pool, {
         coreSql ||= await readSchemaFile('core-v0-schema.sql');
         memorySql ||= await readSchemaFile('memory-module-schema.sql');
         await withMigrationLock(pool, async client => {
-          const lockedMissingCore = await missingTables(client, CORE_V0_PRODUCTION_TABLES);
-          const lockedMissingMemory = await missingTables(client, MEMORY_PRODUCTION_TABLES);
-          if (lockedMissingCore.length) await client.query(coreSql);
-          if (lockedMissingMemory.length) await client.query(memorySql);
-          migrated = lockedMissingCore.length > 0 || lockedMissingMemory.length > 0;
+          const locked = await inspectSchema(client);
+          if (!isEmpty(locked.missingCore) || !isEmpty(locked.incompleteCore)) await client.query(coreSql);
+          if (!isEmpty(locked.missingMemory) || !isEmpty(locked.incompleteMemory)) await client.query(memorySql);
+          migrated = !schemaIsReady(locked);
         });
       } catch (error) {
         throw productionError('CORE_V0_SCHEMA_MIGRATION_FAILED', 'Core v0 and Memory schemas could not be prepared', { cause: error });
@@ -135,17 +194,14 @@ export async function prepareCoreV0ProductionSchema(pool, {
     }
 
     try {
-      [missingCore, missingMemory] = await Promise.all([
-        missingTables(pool, CORE_V0_PRODUCTION_TABLES),
-        missingTables(pool, MEMORY_PRODUCTION_TABLES)
-      ]);
+      snapshot = await inspectSchema(pool);
     } catch (error) {
       throw productionError('CORE_V0_SCHEMA_CHECK_FAILED', 'Core v0 schema readiness could not be verified', { cause: error });
     }
-    if (missingCore.length || missingMemory.length) {
-      throw productionError('CORE_V0_SCHEMA_NOT_READY', 'Core v0 and Memory PostgreSQL schemas are incomplete');
+    if (!schemaIsReady(snapshot)) {
+      throw schemaNotReady('Core v0 and Memory PostgreSQL schemas are incomplete', snapshot);
     }
-    return { coreReady: true, memoryReady: true, migrated, missing: [] };
+    return { coreReady: true, memoryReady: true, migrated, missing: [], incomplete: {} };
   })().catch(error => {
     schemaPreparationCache.delete(pool);
     throw error;
