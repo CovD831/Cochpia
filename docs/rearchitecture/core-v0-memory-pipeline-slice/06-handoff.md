@@ -12,11 +12,13 @@ on the turn result, and a single feature flag.
 
 ## Next task
 
-R-005-REVIEW-AND-IMPLEMENT: run the input adversarial review on this
-package, consume findings into the ledger, then implement the projection
-side effect, the drain, the recall semantics exposure and the automated
-proof. The proof must close E4 and E7 without any manual extraction or
-projection step.
+R-005-CONSUME-REVIEW: the input adversarial review found three blocking
+findings (R5-AR-001 concurrent drain serialization, R5-AR-002 drain time
+budget and circuit breaker, R5-AR-003 extractor injection point required by
+acceptance B-07), two major findings (confirmation-route projection, flag
+plumbing into the Module) and two advisories. Consume all of them into the
+L2/L3 contracts first; implementation starts only when the ledger shows
+every blocking finding consumed.
 
 ## Promotion trigger
 

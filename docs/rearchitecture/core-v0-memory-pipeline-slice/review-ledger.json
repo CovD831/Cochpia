@@ -1,1 +1,9 @@
-[]
+[
+  {"finding_id": "R5-AR-001", "severity": "blocking", "decision": "accepted", "consumer": {"path": "04-l2-contracts.md", "anchor": "Extraction drain — established"}, "owner": "Codex + CovD", "evidence": "server/memory-module-postgres.js save fence is optional and single-event scoped", "status": "open"},
+  {"finding_id": "R5-AR-002", "severity": "blocking", "decision": "accepted", "consumer": {"path": "07-l3-task-contract.md", "anchor": "Drain"}, "owner": "Codex + CovD", "evidence": "no timeout, budget, or backoff defined for the request-path drain", "status": "open"},
+  {"finding_id": "R5-AR-003", "severity": "blocking", "decision": "accepted", "consumer": {"path": "05-adr.md", "anchor": "ADR-005-03"}, "owner": "Codex + CovD", "evidence": "acceptance B-07 contradicts the mock-provider skip semantics", "status": "open"},
+  {"finding_id": "R5-AR-004", "severity": "major", "decision": "accepted", "consumer": {"path": "04-l2-contracts.md", "anchor": "Projection side effect — established"}, "owner": "Codex + CovD", "evidence": "decideConfirmation activates assertions without calling promoteCandidate", "status": "open"},
+  {"finding_id": "R5-AR-005", "severity": "major", "decision": "accepted", "consumer": {"path": "07-l3-task-contract.md", "anchor": "Flag"}, "owner": "Codex + CovD", "evidence": "flag delivery into the Memory Module is unspecified", "status": "open"},
+  {"finding_id": "R5-AR-006", "severity": "advisory", "decision": "accepted", "consumer": {"path": "04-l2-contracts.md", "anchor": "Extractor — established"}, "owner": "Codex + CovD", "evidence": "extractor output schema undefined", "status": "open"},
+  {"finding_id": "R5-AR-007", "severity": "advisory", "decision": "accepted", "consumer": {"path": "04-l2-contracts.md", "anchor": "Extraction drain — established"}, "owner": "Codex + CovD", "evidence": "no audit events for projection or extraction skip/failure", "status": "open"}
+]

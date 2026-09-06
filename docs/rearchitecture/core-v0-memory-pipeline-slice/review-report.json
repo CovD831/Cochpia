@@ -1,9 +1,59 @@
 {
   "package_id": "R-005-memory-extraction-pipeline",
-  "input_revision": "5fa81cf+working-tree-r005-docs",
-  "reviewer": null,
-  "cycle": "pending-input-adversarial-review",
-  "findings": [],
-  "steelman": "",
-  "overall": "Awaiting the input adversarial review before implementation is authorized."
+  "input_revision": "5fa81cf+working-tree-r005-docs (80ea48d)",
+  "reviewer": "workbuddy-input-review",
+  "cycle": "input-adversarial-steelman",
+  "findings": [
+    {
+      "id": "R5-AR-001",
+      "statement": "The drain has no concurrency control. Two concurrent turns for the same subject run two drains; each does a full-state load-mutate-save of the Memory Module, so the second save overwrites the first and silently loses assertions or snapshot_items. The save fence (fenceEventId/fenceWorkerId) exists but is optional, single-event scoped, and the L3 contract never mentions it.",
+      "severity": "blocking",
+      "evidence_refs": ["07-l3-task-contract.md", "server/memory-module-postgres.js"],
+      "recommendation": "Define per-subject serialization for the drain: a PostgreSQL advisory lock scoped to (tenant, subject) around each drained event, plus the save fence, plus a concurrent-drain test in the acceptance matrix."
+    },
+    {
+      "id": "R5-AR-002",
+      "statement": "The drain runs synchronously on the request path with no time budget. With a real model, batch 3 extraction calls can add seconds of latency to every turn, and a persistently failing model turns every turn into a retry storm that bloats repair records. The contract says failures do not grow the batch but defines no timeout, budget, or backoff.",
+      "severity": "blocking",
+      "evidence_refs": ["07-l3-task-contract.md", "05-adr.md"],
+      "recommendation": "Add a hard drain time budget (default 2s, per-event extractor timeout), a consecutive-failure circuit breaker that pauses the drain for a cooled-down window, and a repair-record retention cap."
+    },
+    {
+      "id": "R5-AR-003",
+      "statement": "B-07 is unsatisfiable as written. The proof runs on the mock provider, and ADR-005-03 says a mock provider means the extractor skips, so no assertion is created and E4/E7 can never close. The contract defines no injection point for the deterministic extractor double into the production adapter.",
+      "severity": "blocking",
+      "evidence_refs": ["acceptance.md", "05-adr.md"],
+      "recommendation": "Define an explicit extractor injection point (adapter and Memory Module construction parameter) and require the automated proof and acceptance doubles to inject the deterministic extractor; the mock-provider skip stays a production-only behavior covered by its own check."
+    },
+    {
+      "id": "R5-AR-004",
+      "statement": "Projection is specified only on promoteCandidate, but the confirmation decision path (decideConfirmation) is a separate activation route that does not call promote. An S2 fact confirmed by the user would become active without snapshot projection and stay invisible to retrieval, breaking B-05.",
+      "severity": "major",
+      "evidence_refs": ["04-l2-contracts.md", "server/memory-module.js"],
+      "recommendation": "State in the L2 contract that every activation route (drain auto-promotion and user confirmation decision) shares one projection implementation, and add an acceptance check for the confirmation route."
+    },
+    {
+      "id": "R5-AR-005",
+      "statement": "The flag lives in deployment configuration while projection lives inside the Memory Module, but the contract does not say how the flag reaches the Module. An implementation could hack it at the route layer and miss the confirmation path, breaking B-09 parity.",
+      "severity": "major",
+      "evidence_refs": ["04-l2-contracts.md", "07-l3-task-contract.md"],
+      "recommendation": "Require the flag to be passed as a Module option (projectionEnabled) at construction, so both activation routes and every caller honor it in one place."
+    },
+    {
+      "id": "R5-AR-006",
+      "statement": "The extractor output schema and malformed-output handling are undefined. A model returning prose instead of structured candidates, or more candidates than the budget, has no defined fate.",
+      "severity": "advisory",
+      "evidence_refs": ["04-l2-contracts.md"],
+      "recommendation": "Fix a JSON candidate schema with a hard per-event candidate cap; parse failures count as extraction failures and follow the repair path."
+    },
+    {
+      "id": "R5-AR-007",
+      "statement": "Neither projection nor drain emits audit events, while every other Memory mutation does; snapshot_item writes and extraction skips would be invisible to the governance audit trail.",
+      "severity": "advisory",
+      "evidence_refs": ["04-l2-contracts.md"],
+      "recommendation": "Require audit events for projection (per subject, not per row) and for extraction skip/failure, consistent with the existing audit conventions."
+    }
+  ],
+  "steelman": "The strongest case against this slice is that both breaks it wires are inside a Module whose full-state save was never designed for concurrent mutation, so wiring a drain into the request path multiplies concurrent saves before any quality question is answered. The findings accept that premise and contain it: serialization plus a time budget bound the risk without new processes, and the confirmation-route finding keeps the S2 governance story coherent. What remains defensible is the slice size: one flag, no schema change, no new process, and deletion propagation deliberately moved out.",
+  "overall": "Three blocking findings (concurrency control, drain time budget, proof extractor injection) must be consumed into the L2/L3 contracts before implementation; two major findings tighten contract wording on the confirmation route and flag plumbing; two advisories record schema and audit gaps. Implementation is authorized only after the ledger shows every blocking finding consumed."
 }
