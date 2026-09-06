@@ -196,9 +196,19 @@ const coreV0ContextForRequest = req => ({
   producer: 'companion-core',
   correlationId: req.get('x-correlation-id') || req.traceId || req.requestId || randomUUID()
 });
+// Core v0 construction must never fall back to the process-wide state: the
+// middleware scopes state per authenticated user, and a missing store means
+// the route escaped that scope rather than being entitled to global state.
+const requireRequestState = () => {
+  const requestState = requestContext.getStore()?.state;
+  if (!requestState) {
+    throw new CoreV0Error('CORE_V0_CONTEXT_REQUIRED', 'Core v0 routes require request-scoped application state', { status: 500, retryable: false });
+  }
+  return requestState;
+};
 const coreV0ServiceForRequest = async req => {
   const context = coreV0ContextForRequest(req);
-  const requestState = requestContext.getStore()?.state || baseState;
+  const requestState = requireRequestState();
   if (storageProvider === 'postgres') {
     const session = requestState.sessions?.find(item => item.id === req.body?.sessionId);
     const adapter = await createCoreV0ProductionAdapter({
@@ -354,7 +364,7 @@ app.get('/api/sessions/:id/messages', async (req, res) => {
     try {
       const view = await createCoreV0ProductionMessageView({
         context: coreV0ContextForRequest(req),
-        baseState: requestContext.getStore()?.state || baseState
+        baseState: requireRequestState()
       });
       allMessages = await view.listMessages(req.params.id, { channel });
     } catch (error) {
@@ -376,7 +386,7 @@ app.get('/api/sessions/:id/channels', async (req, res) => {
     try {
       const view = await createCoreV0ProductionMessageView({
         context: coreV0ContextForRequest(req),
-        baseState: requestContext.getStore()?.state || baseState
+        baseState: requireRequestState()
       });
       return res.json(await view.listChannels(req.params.id));
     } catch (error) {
@@ -397,7 +407,7 @@ app.patch('/api/sessions/:id/messages/:messageId', async (req, res) => {
   if (storageProvider === 'postgres') {
     const view = await createCoreV0ProductionMessageView({
       context: coreV0ContextForRequest(req),
-      baseState: requestContext.getStore()?.state || baseState
+      baseState: requireRequestState()
     });
     const messages = await view.listMessages(req.params.id);
     const message = messages.find(item => item.id === req.params.messageId);
@@ -414,7 +424,7 @@ app.delete('/api/sessions/:id/messages/:messageId', async (req, res) => {
   if (storageProvider === 'postgres') {
     const view = await createCoreV0ProductionMessageView({
       context: coreV0ContextForRequest(req),
-      baseState: requestContext.getStore()?.state || baseState
+      baseState: requireRequestState()
     });
     const message = (await view.listMessages(req.params.id)).find(item => item.id === req.params.messageId);
     if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be deleted in this slice');

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { getApplicationPostgresPool, loadState } from './store.js';
+import { getApplicationPostgresPool } from './store.js';
 import { createModelProvider, resolveModelSelection } from './model-provider.js';
 import { CoreV0Error, createCoreV0TurnService, createInProcessMemoryPort } from './core-v0.js';
 import {
@@ -217,13 +217,30 @@ export async function prepareCoreV0ProductionSchema(pool, {
   return cached;
 }
 
+// Request context is the only trusted identity source for the production
+// path. Tenant, subject, actor and correlation must all come from the
+// authenticated request; a partially filled context must fail closed here
+// rather than reach Core or Memory with a borrowed identity.
 function requireRequestContext(rawContext) {
   const tenantId = String(rawContext?.tenantId || '').trim();
   const subjectUserId = String(rawContext?.subjectUserId || '').trim();
-  if (!tenantId || !subjectUserId) {
-    throw productionError('CORE_V0_CONTEXT_REQUIRED', 'Core v0 request context requires tenant and subject identity', { status: 400, retryable: false });
+  const actorType = String(rawContext?.actorType || '').trim();
+  const actorId = String(rawContext?.actorId || '').trim();
+  const correlationId = String(rawContext?.correlationId || '').trim();
+  if (!tenantId || !subjectUserId || !actorType || !actorId || !correlationId) {
+    throw productionError('CORE_V0_CONTEXT_REQUIRED', 'Core v0 request context requires tenant, subject, actor, and correlation identity', { status: 400, retryable: false });
   }
-  return { ...rawContext, tenantId, subjectUserId };
+  return { ...rawContext, tenantId, subjectUserId, actorType, actorId, correlationId };
+}
+
+// Construction reads legacy compatibility rows from App Runtime state, so the
+// state must be the request-scoped one. Falling back to a global load here
+// would silently attach another subject's session metadata to this request.
+function requireRequestScopedState(baseState) {
+  if (!baseState || typeof baseState !== 'object' || Array.isArray(baseState)) {
+    throw new TypeError('Core v0 production construction requires request-scoped application state');
+  }
+  return baseState;
 }
 
 function assertProductionModel(provider, selection) {
@@ -260,7 +277,7 @@ export async function createCoreV0ProductionAdapter({
   const context = requireRequestContext(rawContext);
   const pool = providedPool || await getPool();
   const schema = await prepareCoreV0ProductionSchema(pool, schemaOptions);
-  const state = baseState || await loadState();
+  const state = requireRequestScopedState(baseState);
   const provider = String(modelProvider || process.env.MODEL_PROVIDER || 'mock').trim() || 'mock';
   const selection = resolveModelSelection(provider, modelName || '');
   if (!selection.ok) {
@@ -317,7 +334,7 @@ export async function createCoreV0ProductionMessageView({
   const context = requireRequestContext(rawContext);
   const pool = providedPool || await getPool();
   const schema = await prepareCoreV0ProductionSchema(pool, schemaOptions);
-  const state = baseState || await loadState();
+  const state = requireRequestScopedState(baseState);
 
   // Legacy messages still live in App Runtime state and stay visible for
   // read parity. Core-owned rows are read through the bounded query and are
@@ -359,7 +376,7 @@ export async function createCoreV0ProductionMessageView({
       .sort((left, right) => left.name.localeCompare(right.name));
   };
 
-  return { pool, schema, state, listMessages, listChannels };
+  return { pool, schema, context, state, listMessages, listChannels };
 }
 
 export function createCoreV0LocalAdapter({

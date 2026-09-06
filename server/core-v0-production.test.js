@@ -11,6 +11,7 @@ import {
   CORE_V0_PRODUCTION_TABLES,
   MEMORY_PRODUCTION_REQUIRED_COLUMNS,
   MEMORY_PRODUCTION_TABLES,
+  createCoreV0ProductionAdapter,
   createCoreV0ProductionMessageView,
   prepareCoreV0ProductionSchema,
   resetCoreV0ProductionSchemaCache
@@ -199,7 +200,14 @@ test('a failed preparation is not cached and can be retried', async () => {
 // Session-scoped bounded message view
 // ---------------------------------------------------------------------------
 
-const VIEW_CONTEXT = { tenantId: 'tenant-view', subjectUserId: 'user-view' };
+const VIEW_CONTEXT = {
+  tenantId: 'tenant-view',
+  subjectUserId: 'user-view',
+  actorType: 'user',
+  actorId: 'user-view',
+  callerAgentId: 'cochpia',
+  correlationId: 'view'
+};
 const INSERT_MESSAGE = 'INSERT INTO core_v0_messages (tenant_id,subject_user_id,application_message_id,application_session_id,role,content,channel,created_at,visible_at,core_v0) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)';
 
 // The relational double does not model information_schema, so readiness probes
@@ -350,4 +358,53 @@ test('assistant commit time stays strictly after the user message time', async (
     String(assistant.createdAt) > String(user.createdAt),
     `assistant (${assistant.createdAt}) must be strictly after user (${user.createdAt})`
   );
+});
+
+// ---------------------------------------------------------------------------
+// Request context and base state tightening
+// ---------------------------------------------------------------------------
+
+const adapterOptions = overrides => ({
+  pool: fakePool(),
+  context: VIEW_CONTEXT,
+  baseState: { messages: {} },
+  modelProvider: 'mock',
+  schemaOptions: readinessOnly,
+  ...overrides
+});
+
+test('construction requires request-scoped application state instead of global state', async () => {
+  resetCoreV0ProductionSchemaCache();
+  await assert.rejects(
+    () => createCoreV0ProductionAdapter({ pool: fakePool(), context: VIEW_CONTEXT, modelProvider: 'mock', schemaOptions: readinessOnly }),
+    error => error instanceof TypeError
+  );
+  await assert.rejects(
+    () => createCoreV0ProductionMessageView({ pool: fakePool(), context: VIEW_CONTEXT, schemaOptions: readinessOnly }),
+    error => error instanceof TypeError
+  );
+});
+
+test('request context must carry actor and correlation identity, not only tenant and subject', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const partial = { tenantId: VIEW_CONTEXT.tenantId, subjectUserId: VIEW_CONTEXT.subjectUserId };
+  await assert.rejects(
+    () => createCoreV0ProductionAdapter({ ...adapterOptions({ context: partial, baseState: undefined }) }),
+    error => error.code === 'CORE_V0_CONTEXT_REQUIRED' && error.status === 400 && error.retryable === false
+  );
+  const missingCorrelation = { ...VIEW_CONTEXT, correlationId: '   ' };
+  await assert.rejects(
+    () => createCoreV0ProductionMessageView({ pool: fakePool(), context: missingCorrelation, baseState: { messages: {} }, schemaOptions: readinessOnly }),
+    error => error.code === 'CORE_V0_CONTEXT_REQUIRED'
+  );
+});
+
+test('a valid context is retained intact with normalized identity fields', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const view = await createCoreV0ProductionMessageView({ pool: fakePool(), context: VIEW_CONTEXT, baseState: { messages: {} }, schemaOptions: readinessOnly });
+  assert.equal(view.context.tenantId, VIEW_CONTEXT.tenantId);
+  assert.equal(view.context.subjectUserId, VIEW_CONTEXT.subjectUserId);
+  assert.equal(view.context.actorType, VIEW_CONTEXT.actorType);
+  assert.equal(view.context.actorId, VIEW_CONTEXT.actorId);
+  assert.equal(view.context.correlationId, VIEW_CONTEXT.correlationId);
 });
