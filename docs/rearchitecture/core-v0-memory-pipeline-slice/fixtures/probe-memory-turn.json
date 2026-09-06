@@ -1,0 +1,17 @@
+{
+  "scenario": "probe the fact from a brand-new session",
+  "request": {
+    "sessionId": "session-probe-fact",
+    "message": "下午茶想吃点心，有什么需要避开的吗？",
+    "channel": "默认",
+    "headers": { "Idempotency-Key": "r005-probe-fact-01" }
+  },
+  "expected": {
+    "turnStatus": "committed",
+    "memoryStatus": "available",
+    "recalledCountAtLeast": 1,
+    "memoryAnswerability": "known",
+    "replyBranch": "memory"
+  },
+  "note": "The probe shares no content word with the stated fact beyond single characters, so a recall proves the extraction pipeline, not lexical echo."
+}

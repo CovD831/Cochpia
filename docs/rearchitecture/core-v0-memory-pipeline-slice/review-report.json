@@ -1,0 +1,9 @@
+{
+  "package_id": "R-005-memory-extraction-pipeline",
+  "input_revision": "5fa81cf+working-tree-r005-docs",
+  "reviewer": null,
+  "cycle": "pending-input-adversarial-review",
+  "findings": [],
+  "steelman": "",
+  "overall": "Awaiting the input adversarial review before implementation is authorized."
+}

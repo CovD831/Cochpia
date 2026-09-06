@@ -1,0 +1,25 @@
+{
+  "package_id": "R-005-memory-extraction-pipeline",
+  "size": "implementation",
+  "baseline_revision": "5fa81cf",
+  "current_revision": "5fa81cf+working-tree-r005-docs",
+  "documents": {
+    "scope": "00-scope.md",
+    "positioning": "01-positioning.md",
+    "l1": "02-l1-target.md",
+    "mapping": "03-current-to-target-map.md",
+    "l2": ["04-l2-contracts.md"],
+    "adr": ["05-adr.md"],
+    "handoff": "06-handoff.md",
+    "l3": "07-l3-task-contract.md",
+    "fixtures": "fixtures/README.md",
+    "acceptance": "acceptance.md",
+    "rollback": "rollback.md",
+    "review_report": "review-report.json",
+    "review_ledger": "review-ledger.json"
+  },
+  "review": {"status": "pending"},
+  "next_task": {"id": "R-005-REVIEW-AND-IMPLEMENT", "owner": "Codex + CovD"},
+  "advancement_trigger": "The projection side effect, the extraction drain, the recall semantics exposure, paired fixtures, package acceptance and the automated memory-loop proof pass; deletion propagation and traffic promotion remain separate gates.",
+  "stop_rule": "Stop before implementation if extraction writes Core tables, projection runs outside the promote transaction, the drain spawns a new process, or an extraction failure can fail an already committed turn."
+}

@@ -1,0 +1,13 @@
+{
+  "scenario": "state one durable fact",
+  "request": {
+    "sessionId": "session-state-fact",
+    "message": "请记住：我对花生过敏，吃花生制品会起疹子。",
+    "channel": "默认",
+    "headers": { "Idempotency-Key": "r005-state-fact-01" }
+  },
+  "expected": {
+    "turnStatus": "committed",
+    "rawEventContentIncludes": "花生"
+  }
+}

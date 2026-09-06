@@ -1,0 +1,29 @@
+{
+  "contract": "deterministic extractor double",
+  "input": {
+    "eventRole": "user",
+    "contentType": "plain_text",
+    "content": "请记住：我对花生过敏，吃花生制品会起疹子。"
+  },
+  "candidates": [
+    {
+      "content": "用户对花生过敏，食用花生制品会起疹子。",
+      "memoryType": "dietary_restriction",
+      "assertionType": "observed_fact",
+      "scopeType": "user",
+      "expectedSensitivity": "S0",
+      "expectedStatusAfterPolicy": "active"
+    }
+  ],
+  "sensitiveVariant": {
+    "content": "用户在服用抗凝血药物，不能受伤。",
+    "expectedSensitivity": "S2",
+    "expectedStatusAfterPolicy": "pending_confirmation",
+    "retrievalVisibleBeforeConfirmation": false
+  },
+  "invariants": [
+    "every candidate carries the source event id",
+    "an event with an existing assertion version source is skipped without a call",
+    "no candidate is produced without a source event"
+  ]
+}
