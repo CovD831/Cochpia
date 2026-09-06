@@ -206,6 +206,18 @@ const requireRequestState = () => {
   }
   return requestState;
 };
+// One error shape for every Core v0 route: service-originated codes are
+// preserved verbatim, anything else normalizes to CORE_V0_FAILED, and the
+// Retry-After header follows the retryable flag instead of per-route habits.
+const respondCoreV0Error = (res, error) => {
+  const response = coreV0ErrorResponse(error);
+  if (response.body.error.retryable) res.set('Retry-After', '1');
+  return res.status(response.status).json(response.body);
+};
+const coreV0MessageViewForRequest = req => createCoreV0ProductionMessageView({
+  context: coreV0ContextForRequest(req),
+  baseState: requireRequestState()
+});
 const coreV0ServiceForRequest = async req => {
   const context = coreV0ContextForRequest(req);
   const requestState = requireRequestState();
@@ -239,17 +251,14 @@ const finishRun = run => {
 
 app.post('/api/chat/turns', async (req, res) => {
   if (!coreV0Enabled()) {
-    res.set('Retry-After', '1');
-    return res.status(503).json({ error: { code: 'CORE_V0_DISABLED', message: 'Core v0 is disabled', retryable: true, unknown: false } });
+    return respondCoreV0Error(res, new CoreV0Error('CORE_V0_DISABLED', 'Core v0 is disabled', { status: 503, retryable: true }));
   }
   try {
     const service = await coreV0ServiceForRequest(req);
     const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
     return res.status(result.status === 'pending' ? 202 : 200).json(result);
   } catch (error) {
-    const response = coreV0ErrorResponse(error);
-    if (response.body.error.retryable) res.set('Retry-After', '1');
-    return res.status(response.status).json(response.body);
+    return respondCoreV0Error(res, error);
   }
 });
 const attachStreamResponse = (run, res, afterId = '') => {
@@ -362,15 +371,10 @@ app.get('/api/sessions/:id/messages', async (req, res) => {
   let allMessages;
   if (storageProvider === 'postgres') {
     try {
-      const view = await createCoreV0ProductionMessageView({
-        context: coreV0ContextForRequest(req),
-        baseState: requireRequestState()
-      });
+      const view = await coreV0MessageViewForRequest(req);
       allMessages = await view.listMessages(req.params.id, { channel });
     } catch (error) {
-      const response = coreV0ErrorResponse(error);
-      if (response.body.error.retryable) res.set('Retry-After', '1');
-      return res.status(response.status).json(response.body);
+      return respondCoreV0Error(res, error);
     }
   } else {
     allMessages = state.messages[req.params.id] || [];
@@ -384,15 +388,10 @@ app.get('/api/sessions/:id/channels', async (req, res) => {
   if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   if (storageProvider === 'postgres') {
     try {
-      const view = await createCoreV0ProductionMessageView({
-        context: coreV0ContextForRequest(req),
-        baseState: requireRequestState()
-      });
+      const view = await coreV0MessageViewForRequest(req);
       return res.json(await view.listChannels(req.params.id));
     } catch (error) {
-      const response = coreV0ErrorResponse(error);
-      if (response.body.error.retryable) res.set('Retry-After', '1');
-      return res.status(response.status).json(response.body);
+      return respondCoreV0Error(res, error);
     }
   }
   const counts = new Map();
@@ -405,13 +404,13 @@ app.get('/api/sessions/:id/channels', async (req, res) => {
 app.patch('/api/sessions/:id/messages/:messageId', async (req, res) => {
   if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   if (storageProvider === 'postgres') {
-    const view = await createCoreV0ProductionMessageView({
-      context: coreV0ContextForRequest(req),
-      baseState: requireRequestState()
-    });
-    const messages = await view.listMessages(req.params.id);
-    const message = messages.find(item => item.id === req.params.messageId);
-    if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be edited in this slice');
+    try {
+      const view = await coreV0MessageViewForRequest(req);
+      const message = (await view.listMessages(req.params.id)).find(item => item.id === req.params.messageId);
+      if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be edited in this slice');
+    } catch (error) {
+      return respondCoreV0Error(res, error);
+    }
   }
   const message = getMessage(req.params.id, req.params.messageId);
   if (!message) return fail(res, 404, 'MESSAGE_NOT_FOUND', 'Message not found');
@@ -422,12 +421,13 @@ app.patch('/api/sessions/:id/messages/:messageId', async (req, res) => {
 app.delete('/api/sessions/:id/messages/:messageId', async (req, res) => {
   if (!getSession(req.params.id)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   if (storageProvider === 'postgres') {
-    const view = await createCoreV0ProductionMessageView({
-      context: coreV0ContextForRequest(req),
-      baseState: requireRequestState()
-    });
-    const message = (await view.listMessages(req.params.id)).find(item => item.id === req.params.messageId);
-    if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be deleted in this slice');
+    try {
+      const view = await coreV0MessageViewForRequest(req);
+      const message = (await view.listMessages(req.params.id)).find(item => item.id === req.params.messageId);
+      if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be deleted in this slice');
+    } catch (error) {
+      return respondCoreV0Error(res, error);
+    }
   }
   const messages = state.messages[req.params.id] || [];
   const index = messages.findIndex(message => message.id === req.params.messageId);
