@@ -264,8 +264,11 @@ app.post('/api/chat/turns', async (req, res) => {
   }
   try {
     const { service, drainExtraction } = await coreV0ServiceForRequest(req);
-    await coreV0DrainExtraction(drainExtraction);
     const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
+    // R-007b: the drain fires after the response is written and never blocks
+    // it. A stated fact enters the retrieval corpus at most one turn later
+    // (eventual consistency); crashes are covered by the durable outbox.
+    setImmediate(() => { coreV0DrainExtraction(drainExtraction); });
     return res.status(result.status === 'pending' ? 202 : 200).json(result);
   } catch (error) {
     return respondCoreV0Error(res, error);

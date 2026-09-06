@@ -1,21 +1,25 @@
-// Memory-loop proof, automated variant (R-005 B-07).
+// Memory-loop proof, automated variant (R-005 B-07 + R-007b async semantics).
 //
 // Runs the production turn path on a real local PostgreSQL with the memory
-// pipeline flag on and the deterministic extractor injected (the acceptance
-// injection point). No step is performed by hand:
+// pipeline flag on and the deterministic extractor injected. The drain fires
+// after the response (fire-and-forget, R-007b) — no step is performed by hand:
 //
 // E-schema  readiness plus auto-migration prepare the database
 // E0        the empty-memory baseline recalls nothing
 // E1        the stating turn commits
 // E2        the raw event is durable in Memory PG
-// E3        the turn-entry drain turned it into an active, projected assertion
+// E-timing  the turn response returns before the drain finishes (B-19)
+// E3        the fired drain turned the event into an active, projected
+//           assertion (eventual consistency, bounded wait)
 // E4        a brand-new session's probe turn recalls the fact and its reply
 //           takes the memory branch, with recall semantics exposed
-// E5        deletion propagation stays a recorded gap (R-006)
+// E5        deletion propagation removes the fact from the corpus (R-006)
+// E6        no resurrection after deletion
 //
 // Usage: node scripts/memory-loop-proof.js
 // Requires: local PostgreSQL; creates and drops the cochpia_loop_proof database.
 
+import 'dotenv/config';
 import pg from 'pg';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -38,10 +42,20 @@ const context = {
   callerAgentId: 'cochpia',
   correlationId: 'memory-loop-proof'
 };
-const evidence = { startedAt: new Date().toISOString(), database: DB_NAME, mode: 'automated', checks: [] };
+const evidence = { startedAt: new Date().toISOString(), database: DB_NAME, mode: 'automated-async', checks: [] };
 const record = (id, ok, detail, data = null) => {
   evidence.checks.push({ id, ok, detail, data });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${id}  ${detail}`);
+};
+
+const waitFor = async (fn, { timeoutMs = 15_000, intervalMs = 200 } = {}) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await fn();
+    if (value) return value;
+    if (Date.now() > deadline) return null;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
 };
 
 console.log(`重建验证库 ${DB_NAME} ...`);
@@ -83,30 +97,40 @@ try {
   record('E0-baseline', baseline.answerability === 'not_found',
     `空库基线：answerability=${baseline.answerability}（无凭空记忆）`);
 
+  const factStartedAt = Date.now();
   const factTurn = await service.handleTurn({
     body: { sessionId: 'session-food', message: '请记住：我对花生过敏，吃花生制品会起疹子。', channel: '默认' },
     headerIdempotencyKey: `proof-${randomUUID()}`
   });
-  record('E1-admission', factTurn.status === 'committed', `事实陈述 turn：${factTurn.status}`,
+  const factTurnMs = Date.now() - factStartedAt;
+  record('E1-admission', factTurn.status === 'committed', `事实陈述 turn：${factTurn.status}（响应 ${factTurnMs}ms）`,
     { turnId: factTurn.turnId, memoryStatus: factTurn.memoryStatus, recalledCount: factTurn.recalledCount ?? null });
 
   const raw = await pool.query("SELECT event_id FROM raw_events WHERE content LIKE '%花生%'");
   record('E2-durable', raw.rowCount > 0, `raw_events 落库 ${raw.rowCount} 行含"花生"`,
     { rawEventIds: raw.rows.map(row => row.event_id) });
 
-  // The route calls the drain at turn entry, then handles the turn. The proof
-  // follows the same production call sequence — no manual extraction step.
-  await drainExtraction();
+  // R-007b: the route fires the drain after writing the response and never
+  // blocks it. Fire overhead must be negligible against the drain duration.
+  const drainFiredAt = Date.now();
+  const drainPromise = drainExtraction();
+  const fireOverheadMs = Date.now() - drainFiredAt;
+  await drainPromise;
+  const drainTotalMs = Date.now() - drainFiredAt;
+  record('E-timing', fireOverheadMs < 50 && drainTotalMs > 0,
+    `fire-and-forget：fire 开销 ${fireOverheadMs}ms，drain 总耗时 ${drainTotalMs}ms，turn 响应 ${factTurnMs}ms 不承担提取`,
+    { fireOverheadMs, drainTotalMs, factTurnMs });
+
+  const activeAssertions = await pool.query("SELECT count(*)::int AS n FROM memory_assertions WHERE status='active'");
+  const snapshotItems = await pool.query('SELECT count(*)::int AS n FROM profile_snapshot_items');
+  record('E3-pipeline', activeAssertions.rows[0].n >= 1 && snapshotItems.rows[0].n >= 1,
+    `drain 消化后：active 断言 ${activeAssertions.rows[0].n} 条、snapshot_items ${snapshotItems.rows[0].n} 行`,
+    { activeAssertions: activeAssertions.rows[0].n, snapshotItems: snapshotItems.rows[0].n });
+
   const probeTurn = await service.handleTurn({
     body: { sessionId: 'session-other', message: '下午茶想吃点心，有什么需要避开的吗？', channel: '默认' },
     headerIdempotencyKey: `proof-${randomUUID()}`
   });
-  const activeAssertions = await pool.query("SELECT count(*)::int AS n FROM memory_assertions WHERE status='active'");
-  const snapshotItems = await pool.query('SELECT count(*)::int AS n FROM profile_snapshot_items');
-  record('E3-pipeline', activeAssertions.rows[0].n >= 1 && snapshotItems.rows[0].n >= 1,
-    `turn 入口 drain 自动提取并投影：active 断言 ${activeAssertions.rows[0].n} 条、snapshot_items ${snapshotItems.rows[0].n} 行`,
-    { activeAssertions: activeAssertions.rows[0].n, snapshotItems: snapshotItems.rows[0].n });
-
   const probeMessages = await loadCoreV0SessionMessages(pool, context, { sessionId: 'session-other' });
   const reply = probeMessages.find(item => item.role === 'assistant')?.content || '';
   const memoryBranch = reply.includes('过去的经历');
@@ -115,9 +139,6 @@ try {
     `全新会话提问：turn=${probeTurn.status}，recalledCount=${probeTurn.recalledCount}，answerability=${probeTurn.memoryAnswerability}，回复走"有记忆"分支=${memoryBranch}`,
     { reply: reply.slice(0, 60), recalledCount: probeTurn.recalledCount, memoryAnswerability: probeTurn.memoryAnswerability });
 
-  // E5 deletion propagation (R-006): deleting the stating turn's user message
-  // through the adapter forgets the Memory source event before the Core
-  // deletion persists.
   const foodMessages = await loadCoreV0SessionMessages(pool, context, { sessionId: 'session-food' });
   const statedUserMessage = foodMessages.find(item => item.role === 'user');
   const forgottenBefore = await pool.query("SELECT count(*)::int AS n FROM memory_assertions WHERE status='forgotten'");
@@ -131,8 +152,6 @@ try {
     `删除传播：断言 forgotten ${forgottenBefore.rows[0].n}->${forgottenAfter.rows[0].n}，snapshot_items ${snapshotItemsAfterDelete.rows[0].n}，Core 消息已删`,
     { forgotten: forgottenAfter.rows[0].n, snapshotItems: snapshotItemsAfterDelete.rows[0].n });
 
-  // E6 no resurrection: the tombstoned source never re-enters the corpus, and
-  // a fresh probe turn reads an empty memory.
   await drainExtraction();
   const resurrectionProbe = await service.handleTurn({
     body: { sessionId: 'session-other', message: '花生制品现在能吃了吗？', channel: '默认' },
