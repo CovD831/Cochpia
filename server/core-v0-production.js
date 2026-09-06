@@ -305,8 +305,9 @@ export async function createCoreV0ProductionAdapter({
   // Extraction injection point: an explicit extractor wins; production falls
   // back to the model-backed extractor and skips silently on mock providers.
   const effectiveExtractor = extractor || (provider === 'mock' ? null : createModelExtractor(model));
+  const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 2000;
   const drainExtraction = memoryPipelineEnabled
-    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, context, moduleOptions: effectiveModuleOptions })
+    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs })
     : null;
   const service = createCoreV0TurnService({
     state: store.state,
