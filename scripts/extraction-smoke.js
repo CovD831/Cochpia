@@ -6,6 +6,7 @@
 // Usage: DEEPSEEK_API_KEY=... node scripts/extraction-smoke.js
 // Requires: local PostgreSQL; creates and drops cochpia_extraction_smoke.
 
+import 'dotenv/config';
 import pg from 'pg';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';

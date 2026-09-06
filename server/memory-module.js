@@ -938,6 +938,21 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return projected;
   };
 
+  // Keep an active assertion's snapshot rows pointing at its current version
+  // after an in-place update (correction), without duplicating rows.
+  const syncProjectionVersions = (context, assertion) => {
+    if (!projectionEnabled) return 0;
+    let synced = 0;
+    for (const item of state.profileSnapshotItems) {
+      if (item.assertionId === assertion.id && item.versionId !== assertion.currentVersionId) {
+        item.versionId = assertion.currentVersionId;
+        synced += 1;
+      }
+    }
+    if (synced > 0) audit(state, context, 'memory_projection_synced', { memoryId: assertion.id, rows: synced });
+    return synced;
+  };
+
   const promoteCandidate = async (rawContext, id, input = {}) => {
     const context = contextOf(rawContext);
     assertUserGovernanceActor(context);
@@ -1410,6 +1425,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     bumpSequence();
     state.outboxEvents.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, consumerName: 'memory-derived', type: 'assertion.active', aggregateId: assertion.id, schemaVersion: 1, commitSeq: state.sequence, status: 'pending', createdAt: nowIso() });
     audit(state, context, 'memory_corrected', { memoryId: assertion.id, supersedesVersionId: oldVersion.id, versionId: version.id });
+    syncProjectionVersions(context, assertion);
     await persist();
     return { memory: serializeAssertion(state, assertion, { includeGovernance: true }), consistencyToken: tokenFor(state, context) };
   };

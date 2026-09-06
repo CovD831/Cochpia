@@ -10,7 +10,7 @@
 // the extractor is an explicit constructor parameter; tests and the proof
 // inject the deterministic double, and a missing extractor is a silent no-op.
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 import { createMemoryModule } from './memory-module.js';
 
@@ -20,6 +20,12 @@ const DEFAULT_TIME_BUDGET_MS = 2_000;
 const FAILURE_THRESHOLD = 5;
 const COOLDOWN_MS = 5 * 60_000;
 const MAX_CANDIDATES_PER_EVENT = 3;
+const AUDN_SIMILAR_LIMIT = 5;
+
+// Cheap dedup gate (R-007a): normalize away case, whitespace and punctuation,
+// then hash. CJK needs no stemming; this catches restated duplicates.
+const normalizeForHash = value => String(value || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+const hashContent = value => createHash('md5').update(normalizeForHash(value)).digest('hex');
 
 function auditEvent(state, context, action, details = {}) {
   const entry = {
@@ -64,10 +70,14 @@ export function createDeterministicExtractor({ keywords = ['过敏', '记住', '
 
 // Model-backed extractor: reuses the application model configuration and
 // demands a fixed JSON schema. Malformed output is an extraction failure.
+// R-007a: only durable facts are worth remembering - chit-chat, weather,
+// one-off events and transient emotions produce zero candidates.
 export function createModelExtractor(model) {
   return async function extract(rawEvent) {
     const prompt = [
-      '从下面的用户消息中提取 0 到 3 条可长期保留的事实，只输出 JSON。',
+      '从下面的用户消息中提取 0 到 3 条值得长期记住的稳定事实，只输出 JSON。',
+      '值得记住：身份、长期偏好、健康、重要关系、关键经历。',
+      '忽略：闲聊、天气、一次性事件、即时情绪、寒暄——这类消息返回 {"candidates":[]}。',
       '格式: {"candidates":[{"content":"事实陈述","memoryType":"fact","assertionType":"observed_fact"}]}',
       '不要输出任何其他文字。',
       `用户消息: ${String(rawEvent.content || '').slice(0, 500)}`
@@ -94,10 +104,46 @@ export function createModelExtractor(model) {
   };
 }
 
+// AUDN decision maker (R-007a, after Mem0's write-time arbitration): given a
+// candidate and the numbered similar memories, choose ADD / UPDATE / DELETE /
+// NOOP. Malformed output degrades to ADD so a stated fact is never lost.
+export function createModelAuditor(model) {
+  return async function audit(proposal, similarMemories) {
+    if (!similarMemories.length) return { decision: 'ADD' };
+    const listing = similarMemories
+      .map((item, index) => `${index}: ${item.content}`)
+      .join('\n');
+    const prompt = [
+      '新候选事实需要决定如何并入已有记忆，只输出 JSON。',
+      '已有记忆（编号）：',
+      listing,
+      `新候选事实：${proposal.content}`,
+      '规则：NOOP=无长期价值或完全重复；ADD=全新事实；UPDATE=修正/补充编号指向的已有记忆；DELETE=新候选表明该已有记忆作废。',
+      '格式: {"decision":"ADD|UPDATE|DELETE|NOOP","target":<编号或null>,"reason":"一句话"}'
+    ].join('\n');
+    const raw = await model.generate({ message: prompt });
+    const match = String(raw || '').match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('MEMORY_AUDIT_MALFORMED_OUTPUT');
+    let parsed;
+    try {
+      parsed = JSON.parse(match[0]);
+    } catch {
+      throw new Error('MEMORY_AUDIT_MALFORMED_OUTPUT');
+    }
+    const decision = ['ADD', 'UPDATE', 'DELETE', 'NOOP'].includes(parsed?.decision) ? parsed.decision : 'ADD';
+    const target = Number.isInteger(parsed?.target) ? parsed.target : null;
+    if ((decision === 'UPDATE' || decision === 'DELETE') && (target === null || !similarMemories[target])) {
+      return { decision: 'ADD' };
+    }
+    return { decision, target, reason: typeof parsed?.reason === 'string' ? parsed.reason : '' };
+  };
+}
+
 export function createMemoryExtractionDrain({
   pool,
   repository,
   extractor = null,
+  auditor = null,
   context,
   moduleOptions = {},
   batch = DEFAULT_BATCH,
@@ -118,7 +164,7 @@ export function createMemoryExtractionDrain({
 
     const started = Date.now();
     const remaining = () => timeBudgetMs - (Date.now() - started);
-    const summary = { status: 'drained', extracted: 0, promoted: 0, pending: 0, skipped: 0, failed: 0 };
+    const summary = { status: 'drained', extracted: 0, promoted: 0, pending: 0, skipped: 0, updated: 0, noop: 0, failed: 0 };
 
     const lockClient = await pool.connect();
     try {
@@ -148,30 +194,112 @@ export function createMemoryExtractionDrain({
 
       const memory = createMemoryModule(state, () => repository.save(context, state), moduleOptions);
 
+      // Dedup gate seeds: every active assertion's current content hash.
+      const seenHashes = new Set();
+      for (const assertion of state.assertions.filter(item => item.status === 'active')) {
+        const version = (state.assertionVersions || []).find(item => item.id === assertion.currentVersionId);
+        if (version?.content) seenHashes.add(hashContent(version.content));
+      }
+
+      const findSimilar = proposal => {
+        try {
+          const retrieved = memory.retrieve(context, { query: proposal.content, purpose: 'answer_user_query' });
+          return (retrieved.items || []).slice(0, AUDN_SIMILAR_LIMIT).map(item => {
+            const assertion = (state.assertions || []).find(entry => entry.id === (item.memoryId || item.id));
+            const version = assertion
+              ? (state.assertionVersions || []).find(entry => entry.id === assertion.currentVersionId)
+              : null;
+            return assertion && version
+              ? { id: assertion.id, content: version.content, resourceRevision: assertion.resourceRevision }
+              : null;
+          }).filter(Boolean);
+        } catch {
+          return [];
+        }
+      };
+
+      const addCandidate = async (event, proposal) => {
+        const created = await memory.createCandidate(context, {
+          sourceEventId: event.id,
+          content: proposal.content,
+          memoryType: proposal.memoryType || 'fact',
+          assertionType: proposal.assertionType || 'observed_fact',
+          scopeType: proposal.scopeType || 'user',
+          ...(proposal.sensitivity ? { sensitivity: proposal.sensitivity } : {})
+        });
+        summary.extracted += 1;
+        if (created.status === 'pending_confirmation') {
+          summary.pending += 1;
+        } else if (created.status === 'quarantined_current_state' || !created.memory) {
+          summary.skipped += 1;
+        } else {
+          const promoted = await memory.promoteCandidate(context, created.memory.memoryId, {
+            resourceRevision: created.memory.resourceRevision
+          });
+          if (promoted.status === 'active') summary.promoted += 1;
+        }
+        seenHashes.add(hashContent(proposal.content));
+      };
+
       for (const event of pendingEvents) {
         if (remaining() <= 0) break;
         try {
           const proposals = await withTimeout(extractor(event), remaining());
           for (const proposal of proposals.slice(0, MAX_CANDIDATES_PER_EVENT)) {
-            const created = await memory.createCandidate(context, {
-              sourceEventId: event.id,
-              content: proposal.content,
-              memoryType: proposal.memoryType || 'fact',
-              assertionType: proposal.assertionType || 'observed_fact',
-              scopeType: proposal.scopeType || 'user',
-              ...(proposal.sensitivity ? { sensitivity: proposal.sensitivity } : {})
-            });
-            summary.extracted += 1;
-            if (created.status === 'pending_confirmation') {
-              summary.pending += 1;
-            } else if (created.status === 'quarantined_current_state' || !created.memory) {
+            // Dedup gate: exact restatement of an existing or in-batch fact.
+            const contentHash = hashContent(proposal.content);
+            if (seenHashes.has(contentHash)) {
               summary.skipped += 1;
-            } else {
-              const promoted = await memory.promoteCandidate(context, created.memory.memoryId, {
-                resourceRevision: created.memory.resourceRevision
-              });
-              if (promoted.status === 'active') summary.promoted += 1;
+              continue;
             }
+
+            // AUDN write-time arbitration against similar active memories.
+            let similar = [];
+            if (auditor) {
+              similar = findSimilar(proposal);
+              let decision;
+              try {
+                decision = await withTimeout(auditor(proposal, similar), remaining());
+              } catch (error) {
+                // Degrade to ADD: a stated fact is never lost to an audit
+                // failure. The reason is still auditable.
+                auditEvent(memory.state, context, 'memory_audn_failed', {
+                  sourceEventId: event.id,
+                  errorCode: error?.code || error?.message || 'MEMORY_AUDIT_FAILED'
+                });
+                decision = { decision: 'ADD' };
+              }
+              auditEvent(memory.state, context, 'memory_audn', {
+                sourceEventId: event.id,
+                decision: decision.decision,
+                target: decision.target ?? null,
+                reason: decision.reason || ''
+              });
+              if (decision.decision === 'NOOP') {
+                summary.noop += 1;
+                continue;
+              }
+              if (decision.decision === 'UPDATE') {
+                const target = similar[decision.target];
+                await memory.correct(context, target.id, {
+                  content: proposal.content,
+                  resourceRevision: target.resourceRevision
+                });
+                summary.updated += 1;
+                seenHashes.add(contentHash);
+                continue;
+              }
+              if (decision.decision === 'DELETE') {
+                const target = similar[decision.target];
+                await memory.forget(context, target.id, {
+                  resourceRevision: target.resourceRevision
+                });
+                // Fall through to ADD: "I no longer X" usually carries a new
+                // fact that replaces the forgotten one.
+              }
+            }
+
+            await addCandidate(event, proposal);
           }
           consecutiveFailures = 0;
         } catch (error) {

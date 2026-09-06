@@ -362,3 +362,123 @@ test('Core message deletion persists across hydration and keeps the turn', async
   assert.ok(repeatedDeletionError, 'repeated deletion must fail');
   assert.equal(repeatedDeletionError?.status, 404);
 });
+
+
+// ---------------------------------------------------------------------------
+// R-007a: AUDN write-time decisions, dedup gate, degradation
+// ---------------------------------------------------------------------------
+
+import { createModelAuditor } from './memory-extraction.js';
+
+async function seededState() {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-seed', '请记住：我对花生过敏')] });
+  const memory = createMemoryModule(state, async () => {}, { projectionEnabled: true });
+  const candidate = await memory.createCandidate(CTX, {
+    sourceEventId: 're-seed', content: '我对花生过敏，吃花生制品会起疹子。',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, candidate.memory.memoryId, { resourceRevision: candidate.memory.resourceRevision });
+  return state;
+}
+
+test('B-13 dedup gate: a restated fact is skipped before any candidate is created', async () => {
+  const state = await seededState();
+  state.rawEvents.push(rawEvent('re-2', '我花生过敏，不能吃花生！', 2));
+  const { pool, repository } = mockRepository(state);
+  const assertionsBefore = state.assertions.length;
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '我对花生过敏，吃花生制品会起疹子!', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.equal(result.skipped, 1, 'restatement deduped: ' + JSON.stringify(result));
+  assert.equal(state.assertions.length, assertionsBefore, 'no duplicate assertion');
+});
+
+test('B-14 NOOP: an audited no-value candidate never enters the corpus', async () => {
+  const state = await seededState();
+  state.rawEvents.push(rawEvent('re-2', '今天天气真好', 2));
+  const { pool, repository } = mockRepository(state);
+  const assertionsBefore = state.assertions.length;
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '用户说今天天气很好。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: async () => ({ decision: 'NOOP', target: null, reason: 'chit-chat' }),
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.equal(result.noop, 1);
+  assert.equal(state.assertions.length, assertionsBefore, 'NOOP adds no assertion');
+});
+
+test('B-15 UPDATE: correct supersedes the version and snapshot rows follow', async () => {
+  const state = await seededState();
+  const target = state.assertions.find(item => item.status === 'active');
+  const oldVersionId = target.currentVersionId;
+  const snapshotBefore = state.profileSnapshotItems.filter(item => item.assertionId === target.id);
+  assert.ok(snapshotBefore.length >= 1);
+  state.rawEvents.push(rawEvent('re-2', '我花生过敏很严重，会休克的那种', 2));
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '用户对花生严重过敏，接触可能休克。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: async () => ({ decision: 'UPDATE', target: 0, reason: 'severity changed' }),
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.equal(result.updated, 1);
+  assert.equal(target.currentVersionId === oldVersionId, false, 'current version moved');
+  const superseded = state.assertionVersions.find(item => item.id === oldVersionId);
+  assert.equal(superseded.versionStatus, 'superseded');
+  const current = state.assertionVersions.find(item => item.id === target.currentVersionId);
+  assert.ok(current.content.includes('休克'));
+  for (const item of state.profileSnapshotItems.filter(entry => entry.assertionId === target.id)) {
+    assert.equal(item.versionId, target.currentVersionId, 'snapshot rows follow the current version');
+  }
+});
+
+test('B-16 DELETE: the audited target is forgotten and cleaned from snapshots', async () => {
+  const state = await seededState();
+  const target = state.assertions.find(item => item.status === 'active');
+  state.rawEvents.push(rawEvent('re-2', '其实我对花生不过敏，之前搞错了', 2));
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '用户实际上不过敏花生。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: async () => ({ decision: 'DELETE', target: 0, reason: 'fact retracted' }),
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.equal(target.status, 'forgotten');
+  assert.equal(state.profileSnapshotItems.filter(item => item.assertionId === target.id).length, 0);
+  assert.ok(result.extracted >= 1, 'the replacement candidate still goes through ADD');
+});
+
+test('B-17 degradation: an auditor failure degrades to ADD with an audit trail', async () => {
+  const state = await seededState();
+  state.rawEvents.push(rawEvent('re-2', '请记住：我对芒果也过敏', 2));
+  const { pool, repository } = mockRepository(state);
+  const assertionsBefore = state.assertions.length;
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '用户对芒果过敏。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: async () => { throw new Error('auditor down'); },
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.ok(result.promoted >= 1, 'degraded to ADD: ' + JSON.stringify(result));
+  assert.equal(state.assertions.length, assertionsBefore + 1);
+  assert.ok(state.auditEvents.some(item => item.action === 'memory_audn_failed'));
+  assert.ok(state.auditEvents.some(item => item.action === 'memory_audn'));
+});

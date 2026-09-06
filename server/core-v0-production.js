@@ -12,7 +12,7 @@ import {
 } from './core-v0-postgres.js';
 import { createMemoryModulePostgresRepository } from './memory-module-postgres.js';
 import { createMemoryModule } from './memory-module.js';
-import { createMemoryExtractionDrain, createModelExtractor } from './memory-extraction.js';
+import { createMemoryExtractionDrain, createModelExtractor, createModelAuditor } from './memory-extraction.js';
 
 let schemaPreparationCache = new WeakMap();
 
@@ -274,6 +274,7 @@ export async function createCoreV0ProductionAdapter({
   modelName = null,
   retryAttempts = 2,
   extractor = null,
+  auditor = null,
   moduleOptions = {},
   schemaOptions = {}
 } = {}) {
@@ -305,9 +306,12 @@ export async function createCoreV0ProductionAdapter({
   // Extraction injection point: an explicit extractor wins; production falls
   // back to the model-backed extractor and skips silently on mock providers.
   const effectiveExtractor = extractor || (provider === 'mock' ? null : createModelExtractor(model));
+  // R-007a AUDN injection point: same pattern. Null auditor = ADD-only legacy
+  // behavior (flag parity preserved for existing tests and the proof).
+  const effectiveAuditor = auditor || (provider === 'mock' ? null : createModelAuditor(model));
   const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 2000;
   const drainExtraction = memoryPipelineEnabled
-    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs })
+    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs })
     : null;
   const service = createCoreV0TurnService({
     state: store.state,
