@@ -115,9 +115,37 @@ try {
     `全新会话提问：turn=${probeTurn.status}，recalledCount=${probeTurn.recalledCount}，answerability=${probeTurn.memoryAnswerability}，回复走"有记忆"分支=${memoryBranch}`,
     { reply: reply.slice(0, 60), recalledCount: probeTurn.recalledCount, memoryAnswerability: probeTurn.memoryAnswerability });
 
-  const rawCount = await pool.query('SELECT count(*)::int AS n FROM raw_events');
-  record('E5-deletion', false, `删除传播缺口（预期内，R-006）：${rawCount.rows[0].n} 条 raw event 无级联删除路径，事实仍在`,
-    { rawEvents: rawCount.rows[0].n });
+  // E5 deletion propagation (R-006): deleting the stating turn's user message
+  // through the adapter forgets the Memory source event before the Core
+  // deletion persists.
+  const foodMessages = await loadCoreV0SessionMessages(pool, context, { sessionId: 'session-food' });
+  const statedUserMessage = foodMessages.find(item => item.role === 'user');
+  const forgottenBefore = await pool.query("SELECT count(*)::int AS n FROM memory_assertions WHERE status='forgotten'");
+  await adapter.deleteApplicationMessage({ sessionId: 'session-food', messageId: statedUserMessage.id });
+  const forgottenAfter = await pool.query("SELECT count(*)::int AS n FROM memory_assertions WHERE status='forgotten'");
+  const snapshotItemsAfterDelete = await pool.query('SELECT count(*)::int AS n FROM profile_snapshot_items');
+  const messageAfterDelete = await loadCoreV0SessionMessages(pool, context, { sessionId: 'session-food' });
+  record('E5-deletion', forgottenAfter.rows[0].n > forgottenBefore.rows[0].n
+    && snapshotItemsAfterDelete.rows[0].n === 0
+    && !messageAfterDelete.some(item => item.id === statedUserMessage.id),
+    `删除传播：断言 forgotten ${forgottenBefore.rows[0].n}->${forgottenAfter.rows[0].n}，snapshot_items ${snapshotItemsAfterDelete.rows[0].n}，Core 消息已删`,
+    { forgotten: forgottenAfter.rows[0].n, snapshotItems: snapshotItemsAfterDelete.rows[0].n });
+
+  // E6 no resurrection: the tombstoned source never re-enters the corpus, and
+  // a fresh probe turn reads an empty memory.
+  await drainExtraction();
+  const resurrectionProbe = await service.handleTurn({
+    body: { sessionId: 'session-other', message: '花生制品现在能吃了吗？', channel: '默认' },
+    headerIdempotencyKey: `proof-${randomUUID()}`
+  });
+  const resurrectionMessages = await loadCoreV0SessionMessages(pool, context, { sessionId: 'session-other' });
+  const resurrectionReply = resurrectionMessages.filter(item => item.role === 'assistant').at(-1)?.content || '';
+  const noMemoryBranch = !resurrectionReply.includes('过去的经历');
+  record('E6-no-resurrection', (resurrectionProbe.recalledCount ?? 0) === 0
+    && resurrectionProbe.memoryAnswerability === 'not_found'
+    && noMemoryBranch,
+    `删除后全新提问：recalledCount=${resurrectionProbe.recalledCount}，answerability=${resurrectionProbe.memoryAnswerability}，无记忆回复分支=${noMemoryBranch}`,
+    { reply: resurrectionReply.slice(0, 60), recalledCount: resurrectionProbe.recalledCount });
 } finally {
   evidence.finishedAt = new Date().toISOString();
   evidence.passed = evidence.checks.filter(item => item.ok).length;

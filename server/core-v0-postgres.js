@@ -284,6 +284,24 @@ export async function createPostgresCoreV0Store({ pool, context: rawContext, bas
     return store;
   };
 
+  // R-006: remove one application message from the Core store. The turn
+  // admission survives for replay and audit; the caller receives the owning
+  // turn's event id so the Memory side can forget its source event.
+  const deleteApplicationMessage = ({ sessionId, messageId } = {}) => {
+    const list = state.messages[sessionId];
+    if (!Array.isArray(list)) {
+      throw coreError('MESSAGE_NOT_FOUND', 'Message not found', { status: 404 });
+    }
+    const index = list.findIndex(item => item.id === messageId);
+    if (index === -1) {
+      throw coreError('MESSAGE_NOT_FOUND', 'Message not found', { status: 404 });
+    }
+    const [deleted] = list.splice(index, 1);
+    const owningTurn = (state.coreV0?.turnAdmissions || [])
+      .find(turn => turn.applicationMessageId === messageId);
+    return { deleted, eventId: owningTurn?.eventId || null };
+  };
+
   const persist = async () => {
     const snapshot = validateCoreSnapshot(state, context);
     const baseSequence = Number(snapshot.core.persistenceBaseSequence ?? 0);
@@ -343,6 +361,7 @@ export async function createPostgresCoreV0Store({ pool, context: rawContext, bas
     core: state.coreV0,
     load,
     persist,
+    deleteApplicationMessage,
     schemaVersion: CORE_V0_POSTGRES_SCHEMA_VERSION
   };
   await load();

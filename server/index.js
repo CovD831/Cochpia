@@ -434,7 +434,17 @@ app.delete('/api/sessions/:id/messages/:messageId', async (req, res) => {
     try {
       const view = await coreV0MessageViewForRequest(req);
       const message = (await view.listMessages(req.params.id)).find(item => item.id === req.params.messageId);
-      if (message?.coreV0) return fail(res, 501, 'CORE_MESSAGE_MUTATION_UNSUPPORTED', 'Core v0 messages cannot be deleted in this slice');
+      if (message?.coreV0) {
+        // R-006: Core messages are deleted through the adapter, which forgets
+        // the Memory source event before persisting the Core deletion.
+        const adapter = await createCoreV0ProductionAdapter({
+          context: coreV0ContextForRequest(req),
+          baseState: requireRequestState(),
+          modelProvider: process.env.MODEL_PROVIDER || 'mock'
+        });
+        await adapter.deleteApplicationMessage({ sessionId: req.params.id, messageId: req.params.messageId });
+        return res.status(204).end();
+      }
     } catch (error) {
       return respondCoreV0Error(res, error);
     }

@@ -305,3 +305,60 @@ test('model extractor demands the fixed JSON schema', async () => {
   await assert.rejects(() => createModelExtractor({ generate: async () => '我觉得没问题' })({ content: 'x' }),
     /MEMORY_EXTRACTION_MALFORMED_OUTPUT/);
 });
+
+test('Core message deletion persists across hydration and keeps the turn', async () => {
+  const { createCoreV0PostgresFixture } = await import('./core-v0-postgres-fixture.js');
+  const { CORE_V0_PRODUCTION_TABLES, MEMORY_PRODUCTION_TABLES, CORE_V0_PRODUCTION_REQUIRED_COLUMNS, MEMORY_PRODUCTION_REQUIRED_COLUMNS } =
+    await import('./core-v0-production.js');
+  const { createPostgresCoreV0Store } = await import('./core-v0-postgres.js');
+  const fixture = createCoreV0PostgresFixture();
+  const allColumns = { ...CORE_V0_PRODUCTION_REQUIRED_COLUMNS, ...MEMORY_PRODUCTION_REQUIRED_COLUMNS };
+  const pool = {
+    async connect() {
+      const client = await fixture.connect();
+      const original = client.query.bind(client);
+      client.query = async (sql, values = []) => {
+        const normalized = String(sql).replace(/\s+/g, ' ').trim();
+        if (/information_schema\.tables/i.test(normalized)) {
+          const names = Array.isArray(values?.[0]) ? values[0] : [];
+          return { rows: names.map(table_name => ({ table_name })) };
+        }
+        if (/information_schema\.columns/i.test(normalized)) {
+          const names = Array.isArray(values?.[0]) ? values[0] : [];
+          return { rows: names.flatMap(table_name => (allColumns[table_name] || []).map(column_name => ({ table_name, column_name }))) };
+        }
+        return original(sql, values);
+      };
+      return client;
+    },
+    async query(sql, values = []) {
+      const client = await this.connect();
+      try { return await client.query(sql, values); } finally { client.release(); }
+    }
+  };
+  const store = await createPostgresCoreV0Store({ pool, context: CTX, baseState: baseState() });
+  store.state.messages['session-a'].push({
+    id: 'message-delete-me', role: 'user', content: '我会被删除', channel: '默认',
+    createdAt: '2026-01-01T00:00:00.000Z', coreV0: { applicationSessionId: 'session-a', turnId: 'turn-1' }
+  });
+  store.state.coreV0.turnAdmissions.push({
+    turnId: 'turn-1', applicationSessionId: 'session-a', applicationMessageId: 'message-delete-me', status: 'committed', fingerprint: 'fp-del-1', idempotencyKey: 'del-key-1', sourceRevision: 'rev-del-1', sequenceNo: 1, channel: '默认',
+    eventId: 'event-1', tenantId: CTX.tenantId, subjectUserId: CTX.subjectUserId
+  });
+  await store.persist();
+  const deleted = store.deleteApplicationMessage({ sessionId: 'session-a', messageId: 'message-delete-me' });
+  assert.equal(deleted.eventId, 'event-1', 'deletion resolves the owning turn event id');
+  await store.persist();
+  const fresh = await createPostgresCoreV0Store({ pool, context: CTX, baseState: baseState() });
+  const stillThere = (fresh.state.messages['session-a'] || []).some(item => item.id === 'message-delete-me');
+  assert.equal(stillThere, false, 'deleted message does not resurrect after hydration');
+  assert.ok(fresh.state.coreV0.turnAdmissions.some(turn => turn.turnId === 'turn-1'), 'turn admission survives');
+  let repeatedDeletionError = null;
+  try {
+    fresh.deleteApplicationMessage({ sessionId: 'session-a', messageId: 'message-delete-me' });
+  } catch (error) {
+    repeatedDeletionError = error;
+  }
+  assert.ok(repeatedDeletionError, 'repeated deletion must fail');
+  assert.equal(repeatedDeletionError?.status, 404);
+});

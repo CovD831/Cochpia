@@ -11,6 +11,7 @@ import {
   loadCoreV0SessionMessages
 } from './core-v0-postgres.js';
 import { createMemoryModulePostgresRepository } from './memory-module-postgres.js';
+import { createMemoryModule } from './memory-module.js';
 import { createMemoryExtractionDrain, createModelExtractor } from './memory-extraction.js';
 
 let schemaPreparationCache = new WeakMap();
@@ -316,6 +317,44 @@ export async function createCoreV0ProductionAdapter({
     enabled: true
   });
 
+  // R-006 deletion propagation: Memory forget first, Core deletion second.
+  // The safe partial-failure direction is remembering less, never more
+  // (ADR-006-02); the turn admission always survives its message
+  // (ADR-006-03). A Memory failure surfaces before the Core deletion runs.
+  const deleteApplicationMessage = async ({ sessionId, messageId } = {}) => {
+    const stated = store.deleteApplicationMessage({ sessionId, messageId });
+    let fanOut = null;
+    if (stated.eventId) {
+      const rows = await pool.query(
+        'SELECT id, resource_revision FROM raw_events WHERE event_id=$1 AND tenant_id=$2 AND user_id=$3 LIMIT 1',
+        [stated.eventId, context.tenantId, context.subjectUserId]
+      );
+      const rawRow = rows.rows[0];
+      if (rawRow) {
+        const memoryState = await repository.load(context);
+        const memory = createMemoryModule(memoryState, () => repository.save(context, memoryState), effectiveModuleOptions);
+        try {
+          await memory.forgetSourceEvent(context, rawRow.id, {
+            resourceRevision: Number(rawRow.resource_revision) || 1
+          });
+          fanOut = { forgotten: true };
+        } catch (error) {
+          if (error?.code === 'SOURCE_EVENT_NOT_FOUND') {
+            fanOut = { forgotten: false, reason: 'source_event_not_found' };
+          } else {
+            throw new CoreV0Error('MEMORY_FORGET_FAILED', 'Memory forget failed before Core deletion', {
+              status: 503,
+              retryable: true,
+              cause: error
+            });
+          }
+        }
+      }
+    }
+    await store.persist();
+    return { deleted: stated.deleted, eventId: stated.eventId, fanOut };
+  };
+
   return {
     pool,
     schema,
@@ -326,6 +365,7 @@ export async function createCoreV0ProductionAdapter({
     memoryPort,
     memoryPipelineEnabled,
     drainExtraction,
+    deleteApplicationMessage,
     model: modelInfo(model),
     modelGateway,
     service
