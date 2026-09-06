@@ -31,20 +31,29 @@ infrastructure: the outbox ordering already persisted by the Module.
 
 Trade-offs. Memory becomes visible one turn later than the fact was stated
 when the drain budget is exhausted; the first turn after a cold start pays
-the drain cost. Failure semantics stay explicit through repair records.
+the drain cost. Failure semantics stay explicit through Memory audit events.
+Consumed review hardening (R5-AR-001/002): per-subject advisory locks
+serialize concurrent drains, a hard time budget bounds request latency, and a
+circuit breaker prevents retry storms against a failing model.
 
-## ADR-005-03: One extractor contract, two implementations, model optional
+## ADR-005-03: One extractor contract, two implementations, injected explicitly
 
 Decision. The deterministic double is the test authority; the model-backed
-extractor reuses the application model configuration and records a skip when
-unavailable (mock provider, missing key, or error).
+extractor reuses the application model configuration and is skipped when
+unavailable (mock provider, missing key, or error). The adapter and Module
+accept an explicit extractor override; tests and the automated proof inject
+the deterministic double, so the loop-closure acceptance (B-07) is verifiable
+offline.
 
 Rationale. Extraction quality is a Phase 3 concern; this slice owns wiring
 and failure semantics. Making the model mandatory would make the loop
 untestable offline and would couple chat availability to extraction.
 
 Trade-offs. A skip leaves raw events unextracted until a real model is
-configured; the repair records make the backlog visible instead of silent.
+configured; the audit trail makes the backlog visible instead of silent.
+Consumed review hardening (R5-AR-003/006): the injection point is a named
+construction parameter, the output is a fixed JSON schema with a per-event
+candidate cap, and malformed output follows the failure path.
 
 ## ADR-005-04: Deletion propagation moves to R-006
 

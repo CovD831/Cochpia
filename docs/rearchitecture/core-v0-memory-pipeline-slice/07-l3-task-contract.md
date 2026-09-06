@@ -22,12 +22,29 @@ skipped without calling the extractor. The drain wraps its own transaction
 per event, never the turn's, and returns a summary
 (extracted, promoted, pending, skipped, failed).
 
-## Failure and repair
+## Concurrency and budget
 
-An extractor throw, timeout or unavailable model records one repair attempt
-row (operation `memory_extraction`) and leaves the event unextracted for the
-next drain. The turn proceeds regardless. Consecutive failures do not grow
-the batch.
+Each event transaction first acquires a PostgreSQL advisory transaction lock
+scoped to the (tenant, subject) pair, so concurrent drains serialize before
+any full-state save. The drain enforces a hard time budget (default 2s): it
+checks the remaining budget before every event and abandons the batch cleanly
+when exhausted. A per-subject circuit breaker counts consecutive extractor
+failures; past the threshold (default 5) the drain no-ops until a cooldown
+window (default 5 minutes) passes. Failures are recorded as Memory audit
+events (`memory_extraction_failed` / `memory_extraction_skipped`), never as
+Core rows; the turn proceeds regardless.
+
+## Flag and injection
+
+`CORE_V0_MEMORY_PIPELINE_ENABLED` (default off) gates the drain and the
+projection side effect together. The flag reaches the Module as the
+`projectionEnabled` construction option and the adapter as a drain
+constructor input; no route reads the environment for it. The adapter and
+Module accept an explicit extractor override: tests and the automated proof
+inject the deterministic double from the fixture, while production resolves
+the model-backed extractor and resolves to a silent no-op drain when the
+provider is mock or unconfigured. Flag off must leave baseline behavior byte
+for byte, including the proof's manual path.
 
 ## Recall semantics
 
