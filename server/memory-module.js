@@ -329,6 +329,9 @@ function serializeAssertion(state, assertion, { includeGovernance = false, pinVe
     versionId: version?.id || null,
     content: contentVisible ? version?.content || null : null,
     structuredData: contentVisible ? version?.structuredData || {} : {},
+    observedAt: version?.observedAt || null,
+    validFrom: version?.validFrom || null,
+    validTo: version?.validTo || null,
     scope: {
       type: assertion.scopeType,
       agentId: assertion.relationshipAgentId || null,
@@ -1457,7 +1460,11 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       return { status: 'pending_confirmation', memory: serializeAssertion(state, assertion, { includeGovernance: true }), confirmation: clone(confirmation), consistencyToken: tokenFor(state, context) };
     }
     oldVersion.versionStatus = 'superseded';
-    const version = addVersion(state, assertion, { ...input, content }, context, { sourceType: 'correction_request', sourceId: randomUUID() });
+    // R-009: the replacement inherits the original validity start unless the
+    // caller supplies a new one (a contradiction re-stated later), and the
+    // superseded version's interval closes at that moment.
+    const version = addVersion(state, assertion, { ...input, content, validFrom: input.validFrom ?? input.valid_from ?? oldVersion.validFrom ?? undefined }, context, { sourceType: 'correction_request', sourceId: randomUUID() });
+    oldVersion.validTo = version.validFrom ?? version.observedAt ?? nowIso();
     assertion.currentVersionId = version.id;
     assertion.sensitivity = sensitivity;
     assertion.resourceRevision += 1;

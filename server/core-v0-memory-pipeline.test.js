@@ -615,3 +615,59 @@ test('C-10 S2 vocabulary: health phrasing without the old keywords is still clas
   assert.equal(state.assertions[0].status, 'pending_confirmation');
   assert.equal(state.profileSnapshotItems.length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// R-009: bi-temporal validity wiring
+// ---------------------------------------------------------------------------
+
+test('D-01/D-02: drain stamps valid_from from the event and UPDATE closes the timeline', async () => {
+  const state = memoryFixture({ rawEvents: [Object.assign(rawEvent('re-1', '请记住：我对花生过敏'), { occurredAt: '2026-01-01T08:00:00.000Z' })] });
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '我对花生过敏，吃花生制品会起疹子。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  await drain();
+  const target = state.assertions[0];
+  const version = state.assertionVersions.find(item => item.id === target.currentVersionId);
+  assert.equal(version.validFrom, '2026-01-01T08:00:00.000Z', 'valid_from follows the raw event occurrence');
+
+  state.rawEvents.push(Object.assign(rawEvent('re-2', '我花生过敏很严重，会休克的那种', 2), { occurredAt: '2026-01-02T08:00:00.000Z' }));
+  const { pool: pool2, repository: repository2 } = mockRepository(state);
+  const drain2 = createMemoryExtractionDrain({
+    pool: pool2,
+    repository: repository2,
+    extractor: async () => [{ content: '用户对花生严重过敏，接触可能休克。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: async () => ({ decision: 'UPDATE', target: 0, reason: 'severity' }),
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  await drain2();
+  const oldVersion = state.assertionVersions.find(item => item.id === oldVersionId(state, target));
+  const newVersion = state.assertionVersions.find(item => item.id === target.currentVersionId);
+  assert.equal(newVersion.validFrom, '2026-01-02T08:00:00.000Z', 'restatement starts the new interval');
+  assert.equal(oldVersion.validTo, '2026-01-02T08:00:00.000Z', 'superseded interval closes at the new valid_from');
+  assert.equal(newVersion.supersedesVersionId, oldVersion.id, 'the replacement supersedes the old version');
+});
+
+function oldVersionId(state, assertion) {
+  return state.assertionVersions.find(item => item.id !== assertion.currentVersionId && item.assertionId === assertion.id).id;
+}
+
+test('D-03: serialized items expose the bi-temporal fields', async () => {
+  const state = memoryFixture({ rawEvents: [Object.assign(rawEvent('re-1', '请记住：我对花生过敏'), { occurredAt: '2026-01-01T08:00:00.000Z' })] });
+  const memory = createMemoryModule(state, async () => {}, { projectionEnabled: true, featureFlags: { hybridRetrieval: true } });
+  const candidate = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '我对花生过敏。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user',
+    observedAt: '2026-01-01T08:00:00.000Z', validFrom: '2026-01-01T08:00:00.000Z'
+  });
+  await memory.promoteCandidate(CTX, candidate.memory.memoryId, { resourceRevision: candidate.memory.resourceRevision });
+  const retrieved = await memory.retrieveAsync(CTX, { query: '花生', purpose: 'answer_user_query' });
+  const item = retrieved.items[0];
+  assert.equal(item.observedAt, '2026-01-01T08:00:00.000Z');
+  assert.equal(item.validFrom, '2026-01-01T08:00:00.000Z');
+  assert.equal(item.validTo, null, 'an active assertion has no valid_to yet');
+});

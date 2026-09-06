@@ -212,11 +212,65 @@ export function createMemoryExtractionDrain({
               ? (state.assertionVersions || []).find(entry => entry.id === assertion.currentVersionId)
               : null;
             return assertion && version
-              ? { id: assertion.id, content: version.content, resourceRevision: assertion.resourceRevision }
+              ? {
+                id: assertion.id,
+                content: version.content,
+                resourceRevision: assertion.resourceRevision,
+                // R-009: give the auditor the bi-temporal context so it can
+                // reason about "what was true when" before choosing UPDATE.
+                validFrom: version.validFrom || null,
+                validTo: version.validTo || null,
+                observedAt: version.observedAt || null
+              }
               : null;
           }).filter(Boolean);
         } catch {
           return [];
+        }
+      };
+
+      const indexAssertionForRetrieval = async (assertion, content) => {
+        // R-007c/R-009: index (or re-index after a correction) the active
+        // assertion for semantic retrieval. An embedding failure never blocks
+        // activation - BM25 still covers the assertion and the audit trail
+        // records the gap.
+        if (typeof embeddingGateway !== 'function') return;
+        try {
+          const vector = await withTimeout(
+            embeddingGateway(content),
+            Math.max(200, Math.min(remaining(), 10_000))
+          );
+          if (!Array.isArray(vector)) return;
+          state.indexDocuments = state.indexDocuments.filter(doc => doc.sourceId !== assertion.id);
+          state.indexDocuments.push({
+            id: `idx:${randomUUID()}`,
+            tenantId: context.tenantId,
+            sourceType: 'assertion',
+            sourceId: assertion.id,
+            sourceVersion: assertion.currentVersionId,
+            userId: context.subjectUserId,
+            scopeType: assertion.scopeType,
+            relationshipAgentId: assertion.relationshipAgentId || null,
+            sessionId: assertion.sessionId || null,
+            searchText: content,
+            sensitivity: assertion.sensitivity,
+            contextualizable: true,
+            mentionable: true,
+            redactionEpoch: 0,
+            policyEpoch: 0,
+            grantVersion: 0,
+            embedding: vector,
+            embeddingVersion: embeddingModel,
+            lexicalVersion: null,
+            indexStatus: 'active',
+            sourceRefs: [],
+            createdAt: new Date().toISOString()
+          });
+        } catch (error) {
+          auditEvent(memory.state, context, 'memory_embedding_failed', {
+            memoryId: assertion.id,
+            errorCode: error?.message || 'MEMORY_EMBEDDING_FAILED'
+          });
         }
       };
 
@@ -227,6 +281,10 @@ export function createMemoryExtractionDrain({
           memoryType: proposal.memoryType || 'fact',
           assertionType: proposal.assertionType || 'observed_fact',
           scopeType: proposal.scopeType || 'user',
+          // R-009 bi-temporal wiring: the fact is valid from the moment the
+          // user stated it (the raw event's occurrence time).
+          observedAt: event.occurredAt,
+          validFrom: event.occurredAt,
           ...(proposal.sensitivity ? { sensitivity: proposal.sensitivity } : {})
         });
         summary.extracted += 1;
@@ -240,51 +298,8 @@ export function createMemoryExtractionDrain({
           });
           if (promoted.status === 'active') {
             summary.promoted += 1;
-            // R-007c: index the active assertion for semantic retrieval. An
-            // embedding failure never blocks activation - BM25 still covers
-            // the assertion and the audit trail records the gap.
-            if (typeof embeddingGateway === 'function') {
-              try {
-                const vector = await withTimeout(
-                  embeddingGateway(promoted.memory.content || proposal.content),
-                  Math.max(200, Math.min(remaining(), 10_000))
-                );
-                if (Array.isArray(vector)) {
-                  const assertion = state.assertions.find(item => item.id === created.memory.memoryId);
-                  if (assertion) {
-                    state.indexDocuments.push({
-                      id: `idx:${randomUUID()}`,
-                      tenantId: context.tenantId,
-                      sourceType: 'assertion',
-                      sourceId: assertion.id,
-                      sourceVersion: assertion.currentVersionId,
-                      userId: context.subjectUserId,
-                      scopeType: assertion.scopeType,
-                      relationshipAgentId: assertion.relationshipAgentId || null,
-                      sessionId: assertion.sessionId || null,
-                      searchText: promoted.memory.content || proposal.content,
-                      sensitivity: assertion.sensitivity,
-                      contextualizable: true,
-                      mentionable: true,
-                      redactionEpoch: 0,
-                      policyEpoch: 0,
-                      grantVersion: 0,
-                      embedding: vector,
-                      embeddingVersion: embeddingModel,
-                      lexicalVersion: null,
-                      indexStatus: 'active',
-                      sourceRefs: [],
-                      createdAt: new Date().toISOString()
-                    });
-                  }
-                }
-              } catch (error) {
-                auditEvent(memory.state, context, 'memory_embedding_failed', {
-                  memoryId: created.memory.memoryId,
-                  errorCode: error?.message || 'MEMORY_EMBEDDING_FAILED'
-                });
-              }
-            }
+            const assertion = state.assertions.find(item => item.id === created.memory.memoryId);
+            if (assertion) await indexAssertionForRetrieval(assertion, promoted.memory.content || proposal.content);
           }
         }
         seenHashes.add(hashContent(proposal.content));
@@ -332,10 +347,19 @@ export function createMemoryExtractionDrain({
                 const target = similar[decision.target];
                 await memory.correct(context, target.id, {
                   content: proposal.content,
-                  resourceRevision: target.resourceRevision
+                  resourceRevision: target.resourceRevision,
+                  // R-009: the restatement closes the superseded version's
+                  // interval and starts the new one at this occurrence.
+                  observedAt: event.occurredAt,
+                  validFrom: event.occurredAt
                 });
                 summary.updated += 1;
                 seenHashes.add(contentHash);
+                // The correction drops the old index document inside the
+                // Module; re-index the corrected assertion for semantic
+                // retrieval.
+                const correctedAssertion = state.assertions.find(item => item.id === target.id);
+                if (correctedAssertion) await indexAssertionForRetrieval(correctedAssertion, proposal.content);
                 continue;
               }
               if (decision.decision === 'DELETE') {
