@@ -145,7 +145,11 @@ function fingerprintForMutation(input, context, resourceId = null) {
 }
 
 function detectS2(content) {
-  return /健康|创伤|病史|诊断|医疗|药物|性取向|性生活|银行卡|财务|收入|债务|身份证|家庭冲突|trauma|diagnos|medical|medication|sexual|bank account|finance|income|debt|identity document/i.test(String(content || ''));
+  // R-008: the vocabulary is deliberately broader than one keyword - model
+  // phrasing varies ("服用华法林抗凝治疗" never contains 药物), so health
+  // and finance signals are enumerated generously. An S2 hit only means the
+  // fact enters the confirmation flow, so false positives are cheap.
+  return /健康|创伤|病史|诊断|医疗|药物|服药|用药|剂量|停药|处方|抗凝|华法林|胰岛素|血糖|血压|确诊|手术|住院|复查|复诊|性取向|性生活|银行卡|财务|收入|债务|身份证|家庭冲突|trauma|diagnos|medical|medication|medicin|dose|surgery|hospitaliz|symptom|insulin|blood pressure|blood sugar|sexual|bank account|finance|income|debt|identity document/i.test(String(content || ''));
 }
 
 function sanitizeMetadata(metadata) {
@@ -542,6 +546,9 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   state.grantVersion ||= 0;
   state.policyVersion ||= 'memory-policy-v1';
   const featureFlags = options.featureFlags || state.featureFlags || {};
+  // R-008 conflict arbitration: within a conflicting canonical_key group only
+  // the newest version reaches the prompt when enabled.
+  const conflictLatestWins = featureFlags.conflictLatestWins === true;
   const proactiveMentionEnabled = Object.hasOwn(featureFlags, 'proactiveMention')
     ? featureFlags.proactiveMention === true
     : options.proactiveMentionEnabled !== false;
@@ -1097,8 +1104,42 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     }
     const candidates = rankedItems.filter(item => !item.assertion || (item.assertion.directQueryPolicy !== 'deny' && (item.assertion.directQueryPolicy !== 'require_confirmation' || purpose !== 'answer_user_query' || allowedAccessIds.has(item.id))));
     const conflicts = detectConflicts(candidates.filter(item => item.assertion).map(item => ({ canonicalKey: item.assertion.canonicalKey, content: item.version?.content || currentVersion(state, item.assertion)?.content, structuredData: item.version?.structuredData || currentVersion(state, item.assertion)?.structuredData })));
-    const items = candidates.map(item => ({ ...(item.assertion ? serializeAssertion(state, item.assertion, { versionOverride: item.version, versionIdOverride: item.version?.id, sourceRefsOverride: item.sourceRefs }) : serializeCurrentState(state, item.currentState)), score: item.score }));
-    const result = { answerability: conflicts.length ? 'conflict' : items.length ? 'known' : 'not_found', consistency: 'fresh', serviceMode: 'normal', queryRoute: input.queryRoute || 'unknown', retrievalMode, policyResult: blocks.length && !items.length ? 'filtered' : 'allowed', items, blocks, uncertainties: conflicts, consistencyToken: tokenFor(state, context) };
+    // R-008 conflict arbitration (flag conflictLatestWins): within a
+    // conflicting canonical_key group only the newest version reaches the
+    // prompt; the suppressed values move to uncertainties with their content
+    // preserved, so contradictions stop co-existing silently while the
+    // history stays inspectable.
+    const conflictedKeys = new Set(conflicts.map(group => group.canonicalKey));
+    const uncertainties = [];
+    let effectiveCandidates = candidates;
+    let remainingConflicts = conflicts;
+    if (conflictLatestWins && conflictedKeys.size) {
+      const keepIds = new Set();
+      const newestByKey = new Map();
+      for (const item of candidates) {
+        if (!item.assertion || !conflictedKeys.has(item.assertion.canonicalKey)) continue;
+        const version = item.version || currentVersion(state, item.assertion);
+        const stamp = version?.createdAt || item.assertion.updatedAt || '';
+        const prev = newestByKey.get(item.assertion.canonicalKey);
+        if (!prev || String(stamp) > String(prev.stamp)) newestByKey.set(item.assertion.canonicalKey, { stamp, id: item.assertion.id });
+      }
+      for (const entry of newestByKey.values()) keepIds.add(entry.id);
+      effectiveCandidates = candidates.filter(item => !item.assertion || !conflictedKeys.has(item.assertion.canonicalKey) || keepIds.has(item.assertion.id));
+      for (const item of candidates) {
+        if (item.assertion && conflictedKeys.has(item.assertion.canonicalKey) && !keepIds.has(item.assertion.id)) {
+          const version = item.version || currentVersion(state, item.assertion);
+          uncertainties.push({ type: 'conflict_suppressed', memoryId: item.assertion.id, canonicalKey: item.assertion.canonicalKey, suppressedContent: version?.content || '', reason: 'superseded_by_latest' });
+        }
+      }
+      remainingConflicts = detectConflicts(effectiveCandidates.filter(item => item.assertion).map(item => ({ canonicalKey: item.assertion.canonicalKey, content: item.version?.content || currentVersion(state, item.assertion)?.content, structuredData: item.version?.structuredData || currentVersion(state, item.assertion)?.structuredData })));
+    }
+    const items = effectiveCandidates.map(item => ({ ...(item.assertion ? serializeAssertion(state, item.assertion, { versionOverride: item.version, versionIdOverride: item.version?.id, sourceRefsOverride: item.sourceRefs }) : serializeCurrentState(state, item.currentState)), score: item.score }));
+    // Token budgeting lives in contextBundle's multi-stage compaction
+    // (evidence pop, collection trim, content halving, fail-closed) - a
+    // second truncation here would fight it. R-008 planned a token meter
+    // before that mechanism was found; the plan document records the
+    // retraction.
+    const result = { answerability: remainingConflicts.length ? 'conflict' : items.length ? 'known' : 'not_found', consistency: 'fresh', serviceMode: 'normal', queryRoute: input.queryRoute || 'unknown', retrievalMode, policyResult: blocks.length && !items.length ? 'filtered' : 'allowed', items, blocks, uncertainties, consistencyToken: tokenFor(state, context) };
     if (activeAccess && items.length) {
       activeAccess.status = 'consumed';
       activeAccess.consumedAt = nowIso();

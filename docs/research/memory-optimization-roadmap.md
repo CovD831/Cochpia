@@ -55,10 +55,10 @@
 
 | 阶段 | 内容 | 依据 | 预估 |
 |---|---|---|---|
-| R-007a | drain 内加 AUDN 决策 + 哈希去重门 + 提取 prompt 加"值得长期记住"过滤 | 冒烟暴露的闲聊噪音与重复断言 | 小（一个决策 prompt + 去重函数） |
-| R-007b | drain 移到响应后异步（fire-and-forget + 现有 retry/audit） | 冒烟 p95=9.9s | 小 |
-| R-007c | 接 embedding provider（配置面已埋），`index_documents` 写 embedding，检索加语义路 + RRF 融合 | 检索主瓶颈 | 中（需选 embedding 端点） |
-| R-008 | Zep 式双时间戳失效 + conflict 仲裁语义 + token 计量实现 | 数据模型演进 | 中 |
+| R-007a | ✅ 完成（3b294c7）：AUDN + 哈希去重门 + 提取过滤，真模型对比验证 | 冒烟暴露的闲聊噪音与重复断言 | 小 |
+| R-007b | ✅ 完成（126cbb4）：setImmediate fire-and-forget，E-timing 验证 | 冒烟 p95=9.9s | 小 |
+| R-007c | ✅ 完成（c2cda88）：Ollama bge-m3 @ openpilot-air + hybrid RRF，真模型验证 | 检索主瓶颈 | 中 |
+| R-008 | ✅ 完成：conflict latest-wins 仲裁 + S2 词表稳定化；token 计量撤回（既有 compaction 已实现）；双时间戳挪 R-009 | 数据模型演进 | 中 |
 | Phase 3 | 600-case 质量评测 + decay 重排 + Memory Alpha gate | 原计划 | 大 |
 
 ## 五、一句话结论

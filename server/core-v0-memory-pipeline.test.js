@@ -548,3 +548,70 @@ test('B-23 degradation: a dead gateway falls back to lexical BM25 without noise'
   assert.equal(retrieved.items.length >= 1, true, 'lexical fallback still recalls');
   assert.equal(String(retrieved.retrievalMode).startsWith('bm25'), true, 'mode: ' + retrieved.retrievalMode);
 });
+
+// ---------------------------------------------------------------------------
+// R-008: conflict arbitration and S2 vocabulary stabilization
+// ---------------------------------------------------------------------------
+
+async function conflictingState(flagOn) {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '请记住：我对花生过敏')] });
+  const memory = createMemoryModule(state, async () => {}, { projectionEnabled: true, featureFlags: { hybridRetrieval: true, conflictLatestWins: flagOn } });
+  const first = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '我对花生过敏，吃花生制品会起疹子。',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, first.memory.memoryId, { resourceRevision: first.memory.resourceRevision });
+  const secondSource = rawEvent('re-2', '其实我不能吃芒果', 2);
+  state.rawEvents.push(secondSource);
+  const second = await memory.createCandidate(CTX, {
+    sourceEventId: 're-2', content: '我不能吃芒果，一吃就起疹子。',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, second.memory.memoryId, { resourceRevision: second.memory.resourceRevision });
+  // Force the two distinct assertions into one canonical_key so
+  // detectConflicts sees a contradiction group.
+  const key = 'forced-conflict-key';
+  for (const assertion of state.assertions) assertion.canonicalKey = key;
+  return { state, memory, first, second };
+}
+
+test('C-07 arbitration: flag on keeps only the newest version in the prompt', async () => {
+  const { state, memory } = await conflictingState(true);
+  const later = state.assertions.find(item => item.currentVersionId === secondVersionId(state));
+  const retrieved = await memory.retrieveAsync(CTX, { query: '过敏 忌口 起疹子', purpose: 'answer_user_query' });
+  assert.equal(retrieved.items.length, 1, 'only the newest version survives: ' + retrieved.items.length);
+  assert.equal(retrieved.answerability, 'known');
+  const suppressed = retrieved.uncertainties.filter(item => item.type === 'conflict_suppressed');
+  assert.equal(suppressed.length, 1);
+  assert.ok(suppressed[0].suppressedContent && suppressed[0].suppressedContent !== retrieved.items[0].content);
+  assert.ok(later);
+});
+
+function secondVersionId(state) {
+  return state.assertions.map(a => a.currentVersionId).sort().at(-1);
+}
+
+test('C-08 flag parity: flag off keeps the baseline conflict behavior', async () => {
+  const { memory } = await conflictingState(false);
+  const retrieved = await memory.retrieveAsync(CTX, { query: '过敏 忌口 起疹子', purpose: 'answer_user_query' });
+  assert.equal(retrieved.items.length, 2, 'both contradictory values co-exist');
+  assert.equal(retrieved.answerability, 'conflict');
+  assert.equal(retrieved.uncertainties.filter(item => item.type === 'conflict_suppressed').length, 0);
+});
+
+test('C-10 S2 vocabulary: health phrasing without the old keywords is still classified S2', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '提醒：我在服用华法林进行抗凝治疗，每周要验血')] });
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '用户在服用华法林进行抗凝治疗，每周验血。', memoryType: 'medical', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: null,
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.equal(result.pending, 1, 'S2 lands in pending_confirmation: ' + JSON.stringify(result));
+  assert.equal(state.assertions[0].status, 'pending_confirmation');
+  assert.equal(state.profileSnapshotItems.length, 0);
+});

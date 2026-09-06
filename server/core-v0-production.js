@@ -315,7 +315,7 @@ export async function createCoreV0ProductionAdapter({
   const effectiveModuleOptions = {
     ...moduleOptions,
     projectionEnabled: memoryPipelineEnabled,
-    featureFlags: { hybridRetrieval: Boolean(hybridRetrieval && embeddingGateway) },
+    featureFlags: { hybridRetrieval: Boolean(hybridRetrieval && embeddingGateway), conflictLatestWins: isTruthy(process.env.MEMORY_CONFLICT_LATEST_WINS) },
     embeddingGateway,
     embeddingTimeoutMs: Number(process.env.MEMORY_MODULE_EMBEDDING_TIMEOUT_MS) || 2000
   };
