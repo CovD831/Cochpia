@@ -25,14 +25,10 @@
    整组都无法保留时才维持 conflict/not_found；
 4. flag off = 现行为（parity）。
 
-### 2.2 token 预算（真实计量 + 截断）
+### 2.2 token 预算（**实施时撤回**）
 
-- `approxTokens(text)`：CJK 字符计数 + 非 CJK 词计数（近似、零依赖）；
-- `finalizeRetrieve` 组装 items 后按 `input.tokenBudget`（默认 1800）截断：
-  保留 score 降序头部，超预算尾部 items 移入 uncertainties（reason=
-  `token_budget`）；
-- result 携带 `tokenCount`/`truncated`，bundle 组装引用真实值（替换写死的
-  0/false）。
+**实施时发现调研误判**：`contextBundle` 已有完整的多级 token 压缩机制（evidence 逐条弹出 → 集合裁剪 → 内容减半 → 超限 fail-closed，`TOKEN_BUDGET_TOO_SMALL` 兜底），比计划中的 items 截断更完善。原判断只看到 bundle 构建处的 `tokenCount: 0` 占位，未核查 compaction 逻辑——调研结论已修正：tokenBudget 并非空壳。该部分代码已回退，避免双重截断与既有行为冲突。
+
 
 ### 2.3 S2 词表稳定化
 
@@ -54,7 +50,6 @@ dose、insulin。动机：冒烟两轮华法林分别被判 S2/S0——模型措
 - C-07 仲裁：同 canonical_key 两个矛盾 active 值，flag on 时 prompt 只见
   最新值，旧值在 uncertainties；
 - C-08 flag parity：flag off 时 conflict 行为与基线一致；
-- C-09 token 预算：超预算截断，tokenCount/truncated 真实上报；
 - C-10 S2 稳定化：含"服用华法林抗凝治疗"（无"药物"字样）的候选判 S2 进
   确认流。
 
