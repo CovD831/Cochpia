@@ -79,6 +79,16 @@ function resultForReturning(sql, row) {
 }
 
 function selectRows(tables, sql, values) {
+  // Aggregate channel counts backing the bounded session view.
+  if (/^SELECT COALESCE\(channel, \$4\)/i.test(sql)) {
+    const grouped = new Map();
+    for (const row of tables.core_v0_messages || []) {
+      if (row.tenant_id !== values[0] || row.subject_user_id !== values[1] || row.application_session_id !== values[2]) continue;
+      const name = row.channel ?? values[3];
+      grouped.set(name, (grouped.get(name) || 0) + 1);
+    }
+    return { rows: [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, count]) => ({ name, count })) };
+  }
   const tableMatch = sql.match(/FROM ([a-z0-9_]+)/i);
   if (!tableMatch) return { rows: [] };
   const table = tableMatch[1];
@@ -92,6 +102,19 @@ function selectRows(tables, sql, values) {
     if (sql.includes('admission_key=$2')) rows = rows.filter(row => row.gate_id === values[0] && row.admission_key === values[1] && row.status === 'active');
     else rows = rows.filter(row => row.gate_id === values[0] && row.status === 'active');
   }
+  if (table === 'core_v0_messages') {
+    if (sql.includes('application_session_id=$3')) rows = rows.filter(row => row.application_session_id === values[2]);
+    if (sql.includes('$4::text IS NULL OR channel=$4')) {
+      const scopedChannel = values[3];
+      if (scopedChannel != null) {
+        rows = rows.filter(row => row.channel === scopedChannel || (row.channel == null && scopedChannel === values[4]));
+      }
+    }
+    if (sql.includes('ORDER BY created_at DESC, application_message_id DESC')) {
+      rows = [...rows].sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))
+        || String(right.application_message_id).localeCompare(String(left.application_message_id)));
+    }
+  }
   if (table === 'core_v0_repair_attempts' && sql.includes('repair_attempt_id=$1')) rows = rows.filter(row => row.repair_attempt_id === values[0]);
 
   const selected = sql.match(/^SELECT (.+?) FROM/i)?.[1] || '*';
@@ -99,6 +122,8 @@ function selectRows(tables, sql, values) {
     const columns = selected.split(',').map(column => column.trim());
     rows = rows.map(row => Object.fromEntries(columns.map(column => [column, row[column]])));
   }
+  const limitMatch = sql.match(/LIMIT \$(\d+)\s*$/i);
+  if (limitMatch) rows = rows.slice(0, Number(values[Number(limitMatch[1]) - 1]));
   return { rows };
 }
 

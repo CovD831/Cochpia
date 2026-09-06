@@ -11,9 +11,12 @@ import {
   CORE_V0_PRODUCTION_TABLES,
   MEMORY_PRODUCTION_REQUIRED_COLUMNS,
   MEMORY_PRODUCTION_TABLES,
+  createCoreV0ProductionMessageView,
   prepareCoreV0ProductionSchema,
   resetCoreV0ProductionSchemaCache
 } from './core-v0-production.js';
+import { CORE_V0_SESSION_MESSAGE_LIMIT } from './core-v0-postgres.js';
+import { createCoreV0PostgresFixture } from './core-v0-postgres-fixture.js';
 
 const ALL_COLUMNS = { ...CORE_V0_PRODUCTION_REQUIRED_COLUMNS, ...MEMORY_PRODUCTION_REQUIRED_COLUMNS };
 const ALL_TABLES = [...CORE_V0_PRODUCTION_TABLES, ...MEMORY_PRODUCTION_TABLES];
@@ -190,4 +193,161 @@ test('a failed preparation is not cached and can be retried', async () => {
   const afterFailure = pool.queries.length;
   await assert.rejects(() => prepareCoreV0ProductionSchema(pool, readinessOnly));
   assert.ok(pool.queries.length > afterFailure, 'a rejected preparation must not poison the cache');
+});
+
+// ---------------------------------------------------------------------------
+// Session-scoped bounded message view
+// ---------------------------------------------------------------------------
+
+const VIEW_CONTEXT = { tenantId: 'tenant-view', subjectUserId: 'user-view' };
+const INSERT_MESSAGE = 'INSERT INTO core_v0_messages (tenant_id,subject_user_id,application_message_id,application_session_id,role,content,channel,created_at,visible_at,core_v0) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)';
+
+// The relational double does not model information_schema, so readiness probes
+// are answered here while domain statements still reach the fixture.
+function viewPool() {
+  const fixture = createCoreV0PostgresFixture();
+  const pool = {
+    async connect() {
+      const client = await fixture.connect();
+      const original = client.query.bind(client);
+      client.query = async (sql, values = []) => {
+        const normalized = String(sql).replace(/\s+/g, ' ').trim();
+        if (/information_schema\.tables/i.test(normalized)) {
+          const names = Array.isArray(values?.[0]) ? values[0] : [];
+          return { rows: names.map(table_name => ({ table_name })) };
+        }
+        if (/information_schema\.columns/i.test(normalized)) {
+          const names = Array.isArray(values?.[0]) ? values[0] : [];
+          return { rows: names.flatMap(table_name => (ALL_COLUMNS[table_name] || []).map(column_name => ({ table_name, column_name }))) };
+        }
+        return original(sql, values);
+      };
+      return client;
+    },
+    async query(sql, values = []) {
+      const client = await this.connect();
+      try { return await client.query(sql, values); } finally { client.release(); }
+    }
+  };
+  return pool;
+}
+
+async function insertMessage(pool, { id, sessionId, role = 'user', content = 'content', channel = null, createdAt }) {
+  await pool.query(INSERT_MESSAGE, [VIEW_CONTEXT.tenantId, VIEW_CONTEXT.subjectUserId, id, sessionId, role, content, channel, createdAt, createdAt, { applicationSessionId: sessionId }]);
+}
+
+const viewOptions = (baseState, limit) => ({
+  context: VIEW_CONTEXT,
+  baseState,
+  ...(limit ? { limit } : {}),
+  schemaOptions: readinessOnly
+});
+
+test('session message view returns only the requested session', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const pool = viewPool();
+  await insertMessage(pool, { id: 'a-1', sessionId: 'session-a', createdAt: '2026-01-01T00:00:00.000Z' });
+  await insertMessage(pool, { id: 'b-1', sessionId: 'session-b', createdAt: '2026-01-02T00:00:00.000Z' });
+  const view = await createCoreV0ProductionMessageView({ pool, ...viewOptions({ messages: {} }) });
+  const messages = await view.listMessages('session-a');
+  assert.deepEqual(messages.map(item => item.id), ['a-1']);
+});
+
+test('session message view is bounded and keeps the newest messages', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const pool = viewPool();
+  for (let index = 1; index <= 5; index += 1) {
+    await insertMessage(pool, { id: `m-${index}`, sessionId: 'session-a', createdAt: `2026-01-0${index}T00:00:00.000Z` });
+  }
+  const view = await createCoreV0ProductionMessageView({ pool, ...viewOptions({ messages: {} }, 3) });
+  const messages = await view.listMessages('session-a');
+  assert.equal(messages.length, 3);
+  assert.deepEqual(messages.map(item => item.id), ['m-3', 'm-4', 'm-5']);
+});
+
+test('session message view defaults to a bounded limit', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const pool = viewPool();
+  const view = await createCoreV0ProductionMessageView({ pool, ...viewOptions({ messages: {} }) });
+  for (let index = 0; index < CORE_V0_SESSION_MESSAGE_LIMIT + 5; index += 1) {
+    const day = String(index).padStart(4, '0');
+    await insertMessage(pool, { id: `m-${index}`, sessionId: 'session-a', createdAt: `2026-01-01T00:${day}Z`.slice(0, 24) + 'Z' });
+  }
+  const messages = await view.listMessages('session-a');
+  assert.equal(messages.length, CORE_V0_SESSION_MESSAGE_LIMIT);
+});
+
+test('channel filter applies to Core rows including the null default channel', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const pool = viewPool();
+  await insertMessage(pool, { id: 'plain', sessionId: 's', channel: '默认', createdAt: '2026-01-01T00:00:00.000Z' });
+  await insertMessage(pool, { id: 'work', sessionId: 's', channel: 'work', createdAt: '2026-01-02T00:00:00.000Z' });
+  await insertMessage(pool, { id: 'nulled', sessionId: 's', channel: null, createdAt: '2026-01-03T00:00:00.000Z' });
+  const view = await createCoreV0ProductionMessageView({ pool, ...viewOptions({ messages: {} }) });
+  assert.deepEqual((await view.listMessages('s', { channel: '默认' })).map(item => item.id).sort(), ['nulled', 'plain']);
+  assert.deepEqual((await view.listMessages('s', { channel: 'work' })).map(item => item.id), ['work']);
+});
+
+test('Core and legacy messages are both visible and Core rows never enter JSON state', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const pool = viewPool();
+  await insertMessage(pool, { id: 'core-1', sessionId: 's', role: 'assistant', createdAt: '2026-01-02T00:00:00.000Z' });
+  const baseState = { messages: { s: [{ id: 'legacy-1', role: 'user', content: 'old', channel: null, createdAt: '2026-01-01T00:00:00.000Z' }] } };
+  const view = await createCoreV0ProductionMessageView({ pool, ...viewOptions(baseState) });
+  const messages = await view.listMessages('s');
+  assert.deepEqual(messages.map(item => item.id), ['legacy-1', 'core-1']);
+  assert.equal(baseState.messages.s.length, 1);
+  assert.equal(baseState.messages.s[0].id, 'legacy-1');
+});
+
+test('channel counts stay complete when the session exceeds the read limit', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const pool = viewPool();
+  for (let index = 1; index <= 4; index += 1) {
+    await insertMessage(pool, { id: `m-${index}`, sessionId: 's', channel: index <= 2 ? '默认' : 'work', createdAt: `2026-01-0${index}T00:00:00.000Z` });
+  }
+  const view = await createCoreV0ProductionMessageView({ pool, ...viewOptions({ messages: {} }, 2) });
+  assert.equal((await view.listMessages('s')).length, 2);
+  const counts = Object.fromEntries((await view.listChannels('s')).map(entry => [entry.name, entry.count]));
+  assert.deepEqual(counts, { 默认: 2, work: 2 });
+});
+
+test('an empty session identifier reads nothing', async () => {
+  resetCoreV0ProductionSchemaCache();
+  const view = await createCoreV0ProductionMessageView({ pool: viewPool(), ...viewOptions({ messages: {} }) });
+  assert.deepEqual(await view.listMessages(''), []);
+  assert.deepEqual(await view.listChannels(''), []);
+});
+
+test('assistant commit time stays strictly after the user message time', async () => {
+  const { createCoreV0Store, createCoreV0TurnService, createInProcessMemoryPort } = await import('./core-v0.js');
+  const { createMemoryModule, createMemoryModuleState } = await import('./memory-module.js');
+  const state = {
+    sessions: [{ id: 's', title: 't', summary: '', persona: '', atmosphere: '', companionIntent: 'listen' }],
+    messages: { s: [] },
+    personality: { version: 1, summary: '', traits: [] },
+    profile: {}
+  };
+  const store = createCoreV0Store({ state });
+  const context = { tenantId: 'tenant-order', subjectUserId: 'user-order', actorType: 'user', actorId: 'user-order', callerAgentId: 'cochpia', correlationId: 'order' };
+  const service = createCoreV0TurnService({
+    state,
+    store,
+    context,
+    memoryPort: createInProcessMemoryPort({ memoryModule: createMemoryModule(createMemoryModuleState(), async () => {}), context }),
+    modelGateway: { generate: async () => ({ content: 'reply' }) },
+    enabled: true
+  });
+  const result = await service.handleTurn({
+    body: { sessionId: 's', message: 'hello', channel: '默认' },
+    headerIdempotencyKey: 'order-key-1'
+  });
+  assert.equal(result.status, 'committed');
+  const user = state.messages.s.find(item => item.role === 'user');
+  const assistant = state.messages.s.find(item => item.role === 'assistant');
+  assert.ok(user && assistant, 'both messages must be present');
+  assert.ok(
+    String(assistant.createdAt) > String(user.createdAt),
+    `assistant (${assistant.createdAt}) must be strictly after user (${user.createdAt})`
+  );
 });

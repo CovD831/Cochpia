@@ -184,6 +184,13 @@ export function createCoreV0Store({ state, persist = async () => {} } = {}) {
   const findMessage = (sessionId, messageId) => messagesFor(sessionId).find(item => item.id === messageId) || null;
 
   const commitAssistantInMemory = ({ turn, commit, content, createdAt = nowIso() }) => {
+    // A same-millisecond commit would leave the assistant row with an identical
+    // created_at to the user row, which makes read ordering depend on row
+    // identity instead of write order. Commit time is therefore kept strictly
+    // after the turn admission time.
+    const commitAt = createdAt && turn?.createdAt && String(createdAt) <= String(turn.createdAt)
+      ? new Date(Date.parse(turn.createdAt) + 1).toISOString()
+      : createdAt;
     const messages = messagesFor(turn.applicationSessionId);
     const existing = messages.find(item => item.id === commit.assistantMessageId);
     if (existing && (existing.role !== 'assistant'
@@ -195,7 +202,7 @@ export function createCoreV0Store({ state, persist = async () => {} } = {}) {
       id: commit.assistantMessageId,
       role: 'assistant',
       content,
-      createdAt,
+      createdAt: commitAt,
       channel: turn.channel,
       visibleAt: null,
       coreV0: {
@@ -205,14 +212,14 @@ export function createCoreV0Store({ state, persist = async () => {} } = {}) {
       }
     };
     if (!existing) messages.push(message);
-    message.visibleAt = createdAt;
+    message.visibleAt = commitAt;
     message.coreV0 = { ...message.coreV0, status: 'committed', turnId: turn.turnId, commitId: commit.commitId };
     commit.content = content;
     commit.status = 'completed';
-    commit.completedAt = createdAt;
+    commit.completedAt = commitAt;
     commit.receiptId ||= `receipt:${commit.commitId}`;
     turn.status = 'committed';
-    turn.committedAt = createdAt;
+    turn.committedAt = commitAt;
     turn.result = {
       status: 'committed',
       turnId: turn.turnId,

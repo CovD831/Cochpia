@@ -2,7 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { getApplicationPostgresPool, loadState } from './store.js';
 import { createModelProvider, resolveModelSelection } from './model-provider.js';
 import { CoreV0Error, createCoreV0TurnService, createInProcessMemoryPort } from './core-v0.js';
-import { createPostgresCoreV0Store, createPostgresMemoryPort } from './core-v0-postgres.js';
+import {
+  CORE_V0_DEFAULT_CHANNEL,
+  CORE_V0_SESSION_MESSAGE_LIMIT,
+  countCoreV0SessionChannels,
+  createPostgresCoreV0Store,
+  createPostgresMemoryPort,
+  loadCoreV0SessionMessages
+} from './core-v0-postgres.js';
 import { createMemoryModulePostgresRepository } from './memory-module-postgres.js';
 
 let schemaPreparationCache = new WeakMap();
@@ -292,41 +299,67 @@ export async function createCoreV0ProductionAdapter({
   };
 }
 
+// Legacy and Core messages are merged across two sources, so ordering is
+// applied after the merge rather than trusted from either one.
+const compareMessageOrder = (left, right) => {
+  const byTime = String(left?.createdAt || '').localeCompare(String(right?.createdAt || ''));
+  return byTime !== 0 ? byTime : String(left?.id || '').localeCompare(String(right?.id || ''));
+};
+
 export async function createCoreV0ProductionMessageView({
   pool: providedPool = null,
   getPool = getApplicationPostgresPool,
   context: rawContext,
   baseState = null,
+  limit = CORE_V0_SESSION_MESSAGE_LIMIT,
   schemaOptions = {}
 } = {}) {
   const context = requireRequestContext(rawContext);
   const pool = providedPool || await getPool();
   const schema = await prepareCoreV0ProductionSchema(pool, schemaOptions);
   const state = baseState || await loadState();
-  const store = await createPostgresCoreV0Store({ pool, context, baseState: state });
+
+  // Legacy messages still live in App Runtime state and stay visible for
+  // read parity. Core-owned rows are read through the bounded query and are
+  // never copied back into that JSON state.
+  const legacyMessages = (sessionId, channel) => {
+    const stored = Array.isArray(state?.messages?.[sessionId]) ? state.messages[sessionId] : [];
+    const legacy = stored.filter(message => !message?.coreV0);
+    return channel ? legacy.filter(message => (message.channel || CORE_V0_DEFAULT_CHANNEL) === channel) : legacy;
+  };
 
   const listMessages = async (sessionId, { channel = '' } = {}) => {
     const normalizedSessionId = String(sessionId || '').trim();
-    const messages = Array.isArray(store.state.messages?.[normalizedSessionId])
-      ? store.state.messages[normalizedSessionId]
-      : [];
-    const scoped = channel
-      ? messages.filter(message => (message.channel || '默认') === channel)
-      : messages;
-    return structuredClone(scoped);
+    if (!normalizedSessionId) return [];
+    const scopedChannel = channel ? String(channel) : null;
+    const coreMessages = await loadCoreV0SessionMessages(pool, context, {
+      sessionId: normalizedSessionId,
+      channel: scopedChannel,
+      limit
+    });
+    const merged = [...legacyMessages(normalizedSessionId, scopedChannel), ...coreMessages]
+      .sort(compareMessageOrder);
+    const bounded = merged.length > limit ? merged.slice(-limit) : merged;
+    return structuredClone(bounded);
   };
 
   const listChannels = async sessionId => {
-    const messages = await listMessages(sessionId);
+    const normalizedSessionId = String(sessionId || '').trim();
+    if (!normalizedSessionId) return [];
     const counts = new Map();
-    for (const message of messages) {
-      const name = message.channel || '默认';
+    for (const message of legacyMessages(normalizedSessionId, null)) {
+      const name = message.channel || CORE_V0_DEFAULT_CHANNEL;
       counts.set(name, (counts.get(name) || 0) + 1);
     }
-    return [...counts.entries()].map(([name, count]) => ({ name, count }));
+    for (const entry of await countCoreV0SessionChannels(pool, context, { sessionId: normalizedSessionId })) {
+      counts.set(entry.name, (counts.get(entry.name) || 0) + entry.count);
+    }
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((left, right) => left.name.localeCompare(right.name));
   };
 
-  return { pool, schema, state: store.state, store, listMessages, listChannels };
+  return { pool, schema, state, listMessages, listChannels };
 }
 
 export function createCoreV0LocalAdapter({

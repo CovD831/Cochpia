@@ -349,6 +349,66 @@ export async function createPostgresCoreV0Store({ pool, context: rawContext, bas
   return store;
 }
 
+export const CORE_V0_DEFAULT_CHANNEL = '默认';
+export const CORE_V0_SESSION_MESSAGE_LIMIT = 500;
+const CORE_V0_SESSION_MESSAGE_LIMIT_CEILING = 2000;
+
+function normalizeSessionMessageLimit(limit) {
+  const value = Number(limit);
+  if (!Number.isInteger(value) || value <= 0) return CORE_V0_SESSION_MESSAGE_LIMIT;
+  return Math.min(value, CORE_V0_SESSION_MESSAGE_LIMIT_CEILING);
+}
+
+function requireSubjectScope(context) {
+  if (!context?.tenantId || !context?.subjectUserId) {
+    throw new TypeError('Core v0 session reads require tenant and subject context');
+  }
+  return context;
+}
+
+// The session view is a bounded query rather than a hydration of the whole
+// subject. Reading one session must not pull every message that subject ever
+// produced, and the result must never be written back into JSON app state.
+export async function loadCoreV0SessionMessages(pool, context, { sessionId, channel = null, limit } = {}) {
+  requireSubjectScope(context);
+  if (!pool || typeof pool.connect !== 'function') throw new TypeError('A PostgreSQL pool is required');
+  const normalizedSessionId = String(sessionId || '').trim();
+  if (!normalizedSessionId) return [];
+  const boundedLimit = normalizeSessionMessageLimit(limit);
+  const scopedChannel = channel ? String(channel) : null;
+  const client = await pool.connect();
+  try {
+    // Newest first so the limit keeps the most recent messages, then restored
+    // to chronological order for callers.
+    const result = await client.query(
+      'SELECT * FROM core_v0_messages WHERE tenant_id=$1 AND subject_user_id=$2 AND application_session_id=$3 AND ($4::text IS NULL OR channel=$4 OR (channel IS NULL AND $4=$5)) ORDER BY created_at DESC, application_message_id DESC LIMIT $6',
+      [context.tenantId, context.subjectUserId, normalizedSessionId, scopedChannel, CORE_V0_DEFAULT_CHANNEL, boundedLimit]
+    );
+    return result.rows.map(mapMessage).reverse();
+  } finally {
+    client.release();
+  }
+}
+
+// Channel counts come from an aggregate rather than from a truncated message
+// page, so the counts stay correct once a session exceeds the read limit.
+export async function countCoreV0SessionChannels(pool, context, { sessionId } = {}) {
+  requireSubjectScope(context);
+  if (!pool || typeof pool.connect !== 'function') throw new TypeError('A PostgreSQL pool is required');
+  const normalizedSessionId = String(sessionId || '').trim();
+  if (!normalizedSessionId) return [];
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      'SELECT COALESCE(channel, $4) AS name, COUNT(*)::int AS count FROM core_v0_messages WHERE tenant_id=$1 AND subject_user_id=$2 AND application_session_id=$3 GROUP BY COALESCE(channel, $4) ORDER BY name',
+      [context.tenantId, context.subjectUserId, normalizedSessionId, CORE_V0_DEFAULT_CHANNEL]
+    );
+    return result.rows.map(row => ({ name: row.name, count: Number(row.count) || 0 }));
+  } finally {
+    client.release();
+  }
+}
+
 function contextWithSession(context, memorySessionId) {
   return { ...context, sessionId: memorySessionId };
 }
