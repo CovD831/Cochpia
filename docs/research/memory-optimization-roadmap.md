@@ -59,6 +59,10 @@
 | R-007b | ✅ 完成（126cbb4）：setImmediate fire-and-forget，E-timing 验证 | 冒烟 p95=9.9s | 小 |
 | R-007c | ✅ 完成（c2cda88）：Ollama bge-m3 @ openpilot-air + hybrid RRF，真模型验证 | 检索主瓶颈 | 中 |
 | R-008 | ✅ 完成：conflict latest-wins 仲裁 + S2 词表稳定化；token 计量撤回（既有 compaction 已实现）；双时间戳挪 R-009 | 数据模型演进 | 中 |
+| R-009 | ✅ 完成（291dc43）：双时间戳字段端到端贯通 | 数据模型演进 | 中 |
+| R-010 | ✅ 完成（892e90b）：96-case 评测基线；首跑暴露 canonical_key 粒度、AUDN 无阈值、精度阈值三大缺陷 | 质量标尺 | 中 |
+| R-011 | ✅ 完成：canonical_key 事实级语义键 + AUDN findSimilar 0.60 阈值 + 检索向量下限 0.55 + 零候选事件消费标记 + 索引落库修复（jsonb/lexical_version）+ 评测器八项修复；run9 基线：paraphrase 12→18、lexical 5→9、arbitration 0→4、dedup 真实 8/8；诚实负结果：noise 全局阈值无法完全分离（3/3 残留 1-2 条）、S2 词表缺口（9/12）、confirm 后不可直查（设计缺口） | R-010 首跑证据 + 探针校准 | 中 |
+| R-012 | 建议下一步：S2 词表补全 + confirm/access 双闸门语义合并 + 连接池根因（带 eval-progress.log 池水位曲线）+ noise 重排或意图分流阈值 | R-011 run9 失败明细 | 中 |
 | Phase 3 | 600-case 质量评测 + decay 重排 + Memory Alpha gate | 原计划 | 大 |
 
 ## 五、一句话结论

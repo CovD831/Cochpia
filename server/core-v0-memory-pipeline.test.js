@@ -378,6 +378,16 @@ async function seededState() {
     memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
   });
   await memory.promoteCandidate(CTX, candidate.memory.memoryId, { resourceRevision: candidate.memory.resourceRevision });
+  // R-011: AUDN similar lookup is vector-based, so the seeded assertion needs
+  // an active index document with an embedding for the auditor to see it.
+  const seeded = state.assertions.find(item => item.id === candidate.memory.memoryId);
+  state.indexDocuments.push({
+    id: 'idx-seed', tenantId: CTX.tenantId, sourceType: 'assertion', sourceId: seeded.id,
+    sourceVersion: seeded.currentVersionId, userId: CTX.subjectUserId, scopeType: 'user',
+    searchText: '我对花生过敏，吃花生制品会起疹子。', sensitivity: seeded.sensitivity,
+    embedding: [1, 0], embeddingVersion: 'test-vec', indexStatus: 'active', sourceRefs: [],
+    createdAt: '2026-01-01T00:00:00.000Z'
+  });
   return state;
 }
 
@@ -429,6 +439,7 @@ test('B-15 UPDATE: correct supersedes the version and snapshot rows follow', asy
     repository,
     extractor: async () => [{ content: '用户对花生严重过敏，接触可能休克。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
     auditor: async () => ({ decision: 'UPDATE', target: 0, reason: 'severity changed' }),
+    embeddingGateway: async () => [1, 0],
     context: CTX,
     moduleOptions: { projectionEnabled: true }
   });
@@ -454,6 +465,7 @@ test('B-16 DELETE: the audited target is forgotten and cleaned from snapshots', 
     repository,
     extractor: async () => [{ content: '用户实际上不过敏花生。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
     auditor: async () => ({ decision: 'DELETE', target: 0, reason: 'fact retracted' }),
+    embeddingGateway: async () => [1, 0],
     context: CTX,
     moduleOptions: { projectionEnabled: true }
   });
@@ -627,6 +639,7 @@ test('D-01/D-02: drain stamps valid_from from the event and UPDATE closes the ti
     pool,
     repository,
     extractor: async () => [{ content: '我对花生过敏，吃花生制品会起疹子。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    embeddingGateway: async () => [1, 0],
     context: CTX,
     moduleOptions: { projectionEnabled: true }
   });
@@ -642,6 +655,7 @@ test('D-01/D-02: drain stamps valid_from from the event and UPDATE closes the ti
     repository: repository2,
     extractor: async () => [{ content: '用户对花生严重过敏，接触可能休克。', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
     auditor: async () => ({ decision: 'UPDATE', target: 0, reason: 'severity' }),
+    embeddingGateway: async () => [1, 0],
     context: CTX,
     moduleOptions: { projectionEnabled: true }
   });
@@ -670,4 +684,162 @@ test('D-03: serialized items expose the bi-temporal fields', async () => {
   assert.equal(item.observedAt, '2026-01-01T08:00:00.000Z');
   assert.equal(item.validFrom, '2026-01-01T08:00:00.000Z');
   assert.equal(item.validTo, null, 'an active assertion has no valid_to yet');
+});
+
+// ---------------------------------------------------------------------------
+// R-011: fact-level canonical keys, AUDN similarity threshold, vector floor
+// ---------------------------------------------------------------------------
+
+test('R-011a: two extractor candidates on different topics never share a canonical key', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '我对花生过敏'), rawEvent('re-2', '我最喜欢的水果是榴莲', 2)] });
+  const memory = createMemoryModule(state, async () => {}, { projectionEnabled: true });
+  const first = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '用户对花生过敏', key: 'allergy_peanut',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, first.memory.memoryId, { resourceRevision: first.memory.resourceRevision });
+  const second = await memory.createCandidate(CTX, {
+    sourceEventId: 're-2', content: '用户最喜欢的水果是榴莲', key: 'favorite_fruit',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, second.memory.memoryId, { resourceRevision: second.memory.resourceRevision });
+  assert.notEqual(state.assertions[0].canonicalKey, state.assertions[1].canonicalKey,
+    'distinct topics must not collapse onto one canonical key');
+  assert.ok(state.assertions[0].canonicalKey.includes('allergy_peanut'));
+  assert.ok(state.assertions[1].canonicalKey.includes('favorite_fruit'));
+});
+
+test('R-011b: without a semantic key the canonical key falls back to a content fingerprint', async () => {
+  const state = memoryFixture({ rawEvents: [
+    rawEvent('re-1', '我对花生过敏'),
+    rawEvent('re-2', '我最喜欢的水果是榴莲', 2),
+    rawEvent('re-3', '再说一遍，榴莲是我最喜欢的水果', 3)
+  ] });
+  const memory = createMemoryModule(state, async () => {}, { projectionEnabled: true });
+  const first = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '用户对花生过敏',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, first.memory.memoryId, { resourceRevision: first.memory.resourceRevision });
+  const second = await memory.createCandidate(CTX, {
+    sourceEventId: 're-2', content: '用户最喜欢的水果是榴莲',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, second.memory.memoryId, { resourceRevision: second.memory.resourceRevision });
+  assert.notEqual(state.assertions[0].canonicalKey, state.assertions[1].canonicalKey,
+    'the old default keyed both as user:fact and detected a false conflict');
+  assert.ok(/hash:/.test(state.assertions[0].canonicalKey), 'fallback is a content hash: ' + state.assertions[0].canonicalKey);
+  // The same content asserted from another source lands on the same key.
+  const third = await memory.createCandidate(CTX, {
+    sourceEventId: 're-3', content: '用户最喜欢的水果是榴莲',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, third.memory.memoryId, { resourceRevision: third.memory.resourceRevision });
+  assert.equal(state.assertions[2].canonicalKey, state.assertions[1].canonicalKey,
+    'identical content hashes to one key - restatement groups, it does not create a false conflict');
+});
+
+test('R-011c: same semantic key with a changed value arbitrates to the newest version', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '请记住：我最喜欢的水果是榴莲')] });
+  const memory = createMemoryModule(state, async () => {}, {
+    projectionEnabled: true,
+    featureFlags: { conflictLatestWins: true }
+  });
+  const first = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '用户最喜欢的水果是榴莲', key: 'favorite_fruit',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, first.memory.memoryId, { resourceRevision: first.memory.resourceRevision });
+  state.rawEvents.push(rawEvent('re-2', '我最喜欢的水果变了，现在是西瓜', 2));
+  const second = await memory.createCandidate(CTX, {
+    sourceEventId: 're-2', content: '用户最喜欢的水果是西瓜', key: 'favorite_fruit',
+    memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  await memory.promoteCandidate(CTX, second.memory.memoryId, { resourceRevision: second.memory.resourceRevision });
+  const retrieved = await memory.retrieveAsync(CTX, { query: '水果', purpose: 'answer_user_query' });
+  assert.equal(retrieved.answerability, 'known', 'same-key value change arbitrates instead of conflicting');
+  assert.equal(retrieved.items.filter(item => item.memoryId).length, 1, 'only one value reaches the prompt');
+});
+
+test('R-011d: model extractor maps the semantic key and tolerates junk keys', async () => {
+  const extractor = createModelExtractor({
+    generate: async () => '{"candidates":[{"content":"用户对花生过敏","key":"Allergy--PEANUT!!","memoryType":"fact"},{"content":"用户在学日语","key":"   ","memoryType":"fact"}]}'
+  });
+  const proposals = await extractor({ content: '我对花生过敏，最近在学日语' });
+  assert.equal(proposals.length, 2);
+  assert.equal(proposals[0].key, 'allergy_peanut', 'key is normalized to lowercase snake form');
+  assert.equal('key' in proposals[1], false, 'blank keys are dropped, not passed as empty strings');
+});
+
+test('R-011e: findSimilar eliminates memories below the cosine threshold', async () => {
+  const state = await seededState();
+  state.rawEvents.push(rawEvent('re-2', '我在服用华法林抗凝', 2));
+  const { pool, repository } = mockRepository(state);
+  let seenSimilar = null;
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [{ content: '用户在服用华法林抗凝', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: async (proposal, similar) => { seenSimilar = similar; return { decision: 'ADD', target: null, reason: 'unrelated to seeded memory' }; },
+    // Orthogonal vector: cosine with the seeded [1,0] embedding is 0.
+    embeddingGateway: async () => [0, 1],
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  await drain();
+  assert.equal(seenSimilar.length, 0, 'unrelated candidate must not reach the auditor');
+  assert.ok(state.assertions.some(item => item.status === 'active' && item.canonicalKey.includes('hash:')),
+    'the ADD lands with a content-hash canonical key');
+});
+
+test('R-011f: vectorSearch applies the minScore floor', async () => {
+  const { vectorSearch } = await import('./memory-module-retrieval.js');
+  const documents = [
+    { id: 'near', text: '用户对花生过敏', embedding: [1, 0] },
+    { id: 'far', text: '用户在学日语', embedding: [0, 1] }
+  ];
+  const embed = async () => [0.92, 0.39]; // cos: near≈0.92, far≈0.39
+  const floored = await vectorSearch(documents, '花生过敏', embed, { minScore: 0.55 });
+  assert.deepEqual(floored.items.map(item => item.id), ['near'], 'below-floor hits are eliminated');
+  const open = await vectorSearch(documents, '花生过敏', embed, {});
+  assert.equal(open.items.length, 2, 'default 0 keeps legacy behavior');
+});
+
+test('R-011g: a zero-candidate event is consumed, not re-sent forever', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '今天天气真不错啊')] });
+  const { pool, repository } = mockRepository(state);
+  let extractorCalls = 0;
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => { extractorCalls += 1; return []; },
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const first = await drain();
+  assert.equal(first.exhausted, 1, 'zero-yield event marked exhausted');
+  assert.equal(extractorCalls, 1);
+  assert.ok(state.auditEvents.some(item => item.action === 'memory_extraction_exhausted'));
+  const second = await drain();
+  assert.equal(second.status, 'idle', 'exhausted event no longer pending');
+  assert.equal(extractorCalls, 1, 'the model is not re-sent the dead event');
+});
+
+test('R-011h: chit-chat ahead in the queue no longer starves later facts', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '今天天气真不错啊'), rawEvent('re-2', '请记住：我对花生过敏', 2)] });
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    // batch=1: the chit event occupies the first drain entirely; before the
+    // exhaustion marker the fact event behind it never got a turn.
+    batch: 1,
+    extractor: async event => (String(event.content).includes('花生') ? [{ content: '用户对花生过敏', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }] : []),
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const first = await drain();
+  assert.equal(first.exhausted, 1, 'first drain consumes the chit event');
+  const second = await drain();
+  assert.equal(second.promoted, 1, 'second drain reaches the fact event: ' + JSON.stringify(second));
 });

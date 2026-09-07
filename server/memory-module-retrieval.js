@@ -55,7 +55,7 @@ export function reciprocalRankFusion(rankedLists, { k = 60, limit = 50 } = {}) {
     .slice(0, limit);
 }
 
-function cosineSimilarity(left, right) {
+export function cosineSimilarity(left, right) {
   if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length || !left.length) return 0;
   let dot = 0;
   let leftNorm = 0;
@@ -70,7 +70,7 @@ function cosineSimilarity(left, right) {
   return leftNorm && rightNorm ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
 }
 
-export async function vectorSearch(documents, query, embed, { limit = 50, timeoutMs = 150 } = {}) {
+export async function vectorSearch(documents, query, embed, { limit = 50, timeoutMs = 150, minScore = 0 } = {}) {
   if (typeof embed !== 'function' || !documents.length) return { mode: 'disabled', items: [] };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -81,7 +81,11 @@ export async function vectorSearch(documents, query, embed, { limit = 50, timeou
       if (!Array.isArray(document.embedding)) continue;
       items.push({ ...document, score: cosineSimilarity(queryVector, document.embedding) });
     }
-    return { mode: 'vector', items: items.filter(item => item.score > 0).sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id))).slice(0, limit) };
+    // R-011 precision floor: unrelated-pair cosines still score 0.3-0.55 with
+    // bge-m3, so a positive score alone is not evidence of relevance. Hits
+    // below minScore are eliminated outright (Mem0-aligned) instead of
+    // reaching the fused ranking.
+    return { mode: 'vector', items: items.filter(item => item.score >= minScore).sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id))).slice(0, limit) };
   } catch (error) {
     return { mode: error?.name === 'AbortError' ? 'embedding_timeout' : 'embedding_error', items: [], errorCode: error?.code || 'EMBEDDING_UNAVAILABLE' };
   } finally {
@@ -89,9 +93,9 @@ export async function vectorSearch(documents, query, embed, { limit = 50, timeou
   }
 }
 
-export async function hybridSearch(documents, query, { embed = null, limit = 50, timeoutMs = 150 } = {}) {
+export async function hybridSearch(documents, query, { embed = null, limit = 50, timeoutMs = 150, minScore = 0 } = {}) {
   const lexical = bm25Search(documents, query, { limit });
-  const vector = await vectorSearch(documents, query, embed, { limit, timeoutMs });
+  const vector = await vectorSearch(documents, query, embed, { limit, timeoutMs, minScore });
   const fused = vector.items.length ? reciprocalRankFusion([lexical, vector.items], { limit }) : lexical;
   return { mode: vector.items.length ? 'hybrid_rrf' : `bm25_${vector.mode}`, items: fused };
 }

@@ -83,6 +83,13 @@ export const MEMORY_PRODUCTION_REQUIRED_COLUMNS = Object.freeze({
 });
 
 const isTruthy = value => /^(1|true|yes)$/i.test(String(value || ''));
+
+// R-011: similarity thresholds are env-tunable floats in [0,1]; "0" is a
+// valid value (disabled), so parse without the || fallback trap.
+const parseScoreThreshold = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+};
 const isProductionEnvironment = () => String(process.env.NODE_ENV || '').toLowerCase() === 'production';
 const usesAutoMigration = () => isTruthy(process.env.CORE_V0_AUTO_MIGRATE);
 
@@ -317,7 +324,11 @@ export async function createCoreV0ProductionAdapter({
     projectionEnabled: memoryPipelineEnabled,
     featureFlags: { hybridRetrieval: Boolean(hybridRetrieval && embeddingGateway), conflictLatestWins: isTruthy(process.env.MEMORY_CONFLICT_LATEST_WINS) },
     embeddingGateway,
-    embeddingTimeoutMs: Number(process.env.MEMORY_MODULE_EMBEDDING_TIMEOUT_MS) || 2000
+    embeddingTimeoutMs: Number(process.env.MEMORY_MODULE_EMBEDDING_TIMEOUT_MS) || 2000,
+    // R-011 precision floor for the vector leg of hybrid retrieval. The
+    // calibrated bge-m3 noise floor is 0.55 (unrelated query pairs max out at
+    // 0.546); 0 keeps legacy behavior when unset.
+    vectorMinScore: parseScoreThreshold(process.env.MEMORY_VECTOR_MIN_SCORE, 0.55)
   };
   const memoryPort = createPostgresMemoryPort({ repository, context, retryAttempts, moduleOptions: effectiveModuleOptions });
   // Extraction injection point: an explicit extractor wins; production falls

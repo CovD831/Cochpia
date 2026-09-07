@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { bm25Search, detectConflicts, hybridSearch, vectorSearch } from './memory-module-retrieval.js';
 import { routeMemoryQuery } from './memory-module-query-router.js';
 import { PaginationCursorError, assertCursorBinding, decodeOpaqueCursor, pageNewestFirst } from './memory-module-pagination.js';
@@ -134,6 +134,16 @@ function canonicalizeFingerprint(value) {
       .map(([key, item]) => [key, canonicalizeFingerprint(item)]));
   }
   return value;
+}
+
+// R-011: fact-level canonical keys. When the caller supplies neither an
+// explicit canonical_key nor a semantic topic key, the fallback is a content
+// fingerprint instead of the memory type - the old default collapsed every
+// 'fact' assertion in a scope onto one key, which turned any content mismatch
+// into a detected conflict and flooded retrieval with answerability=conflict.
+function contentFingerprint(content) {
+  const normalized = String(content || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+  return createHash('md5').update(normalized).digest('hex').slice(0, 16);
 }
 
 function fingerprintForMutation(input, context, resourceId = null) {
@@ -495,7 +505,7 @@ function makeAssertion(state, context, input, scope, sensitivity, status) {
     sessionId: scope.sessionId,
     memoryType: normalizeText(input.memoryType ?? input.memory_type ?? input.type ?? 'fact', 80),
     assertionType: input.assertionType ?? input.assertion_type ?? 'observed_fact',
-    canonicalKey: normalizeText(input.canonicalKey ?? input.canonical_key ?? `${scopeKey(scope)}:${normalizeText(input.key ?? input.memoryType ?? input.type ?? 'fact', 120)}`, 300),
+    canonicalKey: normalizeText(input.canonicalKey ?? input.canonical_key ?? `${scopeKey(scope)}:${input.key ? normalizeText(input.key, 120) : input.content ? `hash:${contentFingerprint(input.content)}` : normalizeText(input.memoryType ?? input.type ?? 'fact', 120)}`, 300),
     status,
     subjectType: input.subjectType ?? input.subject_type ?? 'user',
     subjectId: input.subjectId ?? input.subject_id ?? context.subjectUserId,
@@ -562,6 +572,13 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   const embeddingGateway = options.embeddingGateway || null;
   const nativeRetriever = typeof options.nativeRetriever === 'function' ? options.nativeRetriever : null;
   const embeddingTimeoutMs = Number(options.embeddingTimeoutMs || 150);
+  // R-011 precision floor for the vector leg of hybrid retrieval. 0 keeps the
+  // legacy behavior for callers that have not opted in (same pattern as the
+  // hybridRetrieval feature flag); production wiring sets the calibrated
+  // bge-m3 noise floor.
+  const vectorMinScore = Number.isFinite(Number(options.vectorMinScore)) && Number(options.vectorMinScore) >= 0 && Number(options.vectorMinScore) <= 1
+    ? Number(options.vectorMinScore)
+    : 0;
   const retrievedOverride = Symbol('retrieved_override');
   const mutationLocks = new Map();
   let persistenceSuppressed = 0;
@@ -1198,10 +1215,10 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const embed = typeof embeddingGateway === 'function' ? embeddingGateway : embeddingGateway?.embed;
     if (!hybridEnabled && !vectorEnabled) result = finalizeRetrieve(context, { ...input, queryRoute }, bm25Search(documents, query, { limit: 50 }), 'bm25');
     else if (hybridEnabled) {
-      const hybrid = await hybridSearch(documents, query, { embed, limit: 50, timeoutMs: embeddingTimeoutMs });
+      const hybrid = await hybridSearch(documents, query, { embed, limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore });
       result = finalizeRetrieve(context, { ...input, queryRoute }, hybrid.items, hybrid.mode);
     } else {
-      const vector = await vectorSearch(documents, query, embed, { limit: 50, timeoutMs: embeddingTimeoutMs });
+      const vector = await vectorSearch(documents, query, embed, { limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore });
       const lexical = bm25Search(documents, query, { limit: 50 });
       result = finalizeRetrieve(context, { ...input, queryRoute }, vector.items.length ? vector.items : lexical, vector.items.length ? 'vector' : `bm25_${vector.mode}`);
     }
