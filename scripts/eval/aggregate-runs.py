@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-RUNS_DIR = Path(__file__).resolve().parent.parent / '.rearchitecture-runs'
+RUNS_DIR = Path(__file__).resolve().parent.parent.parent / '.rearchitecture-runs'
 PREFIX = 'phase3a-run'
 OUT = RUNS_DIR / 'phase3a-baseline.json'
 
