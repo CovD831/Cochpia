@@ -65,7 +65,7 @@
 | R-012 | ✅ 完成（889085d）：S2 词表补全（s2 9→11/12）+ confirm 闸门合并方案 A（confirm 0→5/5，确认=授权直查+可入上下文，不主动提及）+ noise 归因（残留全是 BM25 词法通道命中）+ 池归因（退出残留非泄漏）。诚实负结果：模型类指标单 run 摆动大（dedup 8→3、paraphrase 18→11），Phase 3 必须多 run 均值 ± 方差 | R-011 run9 失败明细 | 中 |
 | R-013 | ✅ 完成：S2 分类同时看 raw event 内容（run11 S2 12/12，C-S12 不再依赖改述措辞）；词法下限与 AUDN 稳定性按 R-012 计划移交 Phase 3 | R-012 run10 归因 | 小 |
 | Phase 3a | ✅ 完成（e0912be 后续提交）：220 case × 3 runs 统计基线——机制类稳定（leak 100%、confirm 97.8%、s2 88.9%、noise 94.7%），dedup 20% 为量化后第一优先缺口（AUDN NOOP 不稳定）；词法下限与 AUDN 稳定性按 R-012 计划移交 Phase 3 | 修订版：600 手写题 → 220 case × 3 runs | 中 |
-| Phase 3b | 待做：bulk 合成语料（500-2000 断言）→ 库深下的 precision@k / 延迟 / decay 测量 | Phase 3 修订 | 中 |
+| Phase 3b | ✅ 完成：2000 断言 bulk 语料三档库深测量——needle hit@1=100%（500/1000/2000 全部）、rank 中位 1、p95 平坦 56-72ms（排序质量不随库深退化）；noise 召回在库深下饱和到 limit=50，残留确认为 BM25 词法通道主导（同域二元重叠），3c 修复位正确 | phase3b-depth.json | 中 |
 | Phase 3c | 待做：decay 重排实现 + AUDN NOOP 稳定性（针对 dedup 20%）+ 词法下限，用 3a/3b 数字验收 | Phase 3 修订 | 中 |
 | promotion | 压后（老板拍板）：R-004-PROMOTION-PREPARE（Auth/TLS + context-spoofing 证据、cutover/rollback 演练）→ A-01~A-12 核对 | 主线收官 | 中 |
 
