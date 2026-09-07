@@ -1,0 +1,100 @@
+[2026-09-07T06:02:51.265Z] groupA start pool=4/4+0
+[2026-09-07T06:02:51.265Z] A A-F01 pool=4/4+0
+[2026-09-07T06:02:57.588Z] A A-F02 pool=4/4+0
+[2026-09-07T06:03:04.380Z] A A-F03 pool=2/2+0
+[2026-09-07T06:03:11.178Z] A A-F04 pool=2/2+0
+[2026-09-07T06:03:19.478Z] A A-F05 pool=2/2+0
+[wd 2026-09-07T06:03:21.193Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:03:26.457Z] A A-F06 pool=2/2+0
+[2026-09-07T06:03:37.460Z] A A-F07 pool=2/2+0
+[2026-09-07T06:03:44.136Z] A A-F08 pool=2/2+0
+[wd 2026-09-07T06:03:51.194Z] pool total=2 idle=1 waiting=0
+[2026-09-07T06:03:54.431Z] A A-F09 pool=2/2+0
+[2026-09-07T06:04:00.573Z] A A-F10 pool=2/2+0
+[2026-09-07T06:04:07.877Z] A A-F11 pool=2/2+0
+[2026-09-07T06:04:15.795Z] A A-F12 pool=2/2+0
+[2026-09-07T06:04:20.382Z] A A-F13 pool=2/2+0
+[wd 2026-09-07T06:04:21.195Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:04:32.366Z] A A-F14 pool=2/2+0
+[2026-09-07T06:04:39.244Z] A A-F15 pool=2/2+0
+[wd 2026-09-07T06:04:51.194Z] pool total=2 idle=1 waiting=0
+[wd 2026-09-07T06:05:21.196Z] pool total=2 idle=2 waiting=0
+[wd 2026-09-07T06:05:51.197Z] pool total=2 idle=2 waiting=0
+[wd 2026-09-07T06:06:21.198Z] pool total=2 idle=2 waiting=0
+[wd 2026-09-07T06:06:51.199Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:07:14.593Z] groupB ingest start pool=2/2+0
+[2026-09-07T06:07:14.594Z] B-ingest B-S01 pool=2/2+0
+[wd 2026-09-07T06:07:21.200Z] pool total=2 idle=1 waiting=0
+[2026-09-07T06:07:22.079Z] B-ingest B-S02 pool=2/2+0
+[2026-09-07T06:07:31.079Z] B-ingest B-S03 pool=2/2+0
+[2026-09-07T06:07:37.134Z] B-ingest B-S04 pool=2/2+0
+[2026-09-07T06:07:45.226Z] B-ingest B-S05 pool=2/2+0
+[wd 2026-09-07T06:07:51.201Z] pool total=2 idle=1 waiting=0
+[2026-09-07T06:07:53.337Z] B-ingest B-S06 pool=2/2+0
+[2026-09-07T06:07:58.788Z] B-ingest B-S07 pool=2/2+0
+[2026-09-07T06:08:05.904Z] B-ingest B-S08 pool=2/2+0
+[2026-09-07T06:08:13.559Z] B-ingest B-S09 pool=2/2+0
+[2026-09-07T06:08:19.953Z] B-ingest B-S10 pool=2/2+0
+[wd 2026-09-07T06:08:21.201Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:08:26.981Z] B-ingest B-S11 pool=2/2+0
+[2026-09-07T06:08:36.568Z] B-ingest B-S12 pool=2/2+0
+[2026-09-07T06:08:43.792Z] B-ingest B-S13 pool=2/2+0
+[2026-09-07T06:08:50.410Z] B-ingest B-S14 pool=2/2+0
+[wd 2026-09-07T06:08:51.202Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:08:57.294Z] B-ingest B-S15 pool=2/2+0
+[2026-09-07T06:09:05.495Z] B-ingest B-S16 pool=2/2+0
+[2026-09-07T06:09:16.587Z] B-ingest B-S17 pool=2/2+0
+[wd 2026-09-07T06:09:21.202Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:09:23.863Z] B-ingest B-S18 pool=2/2+0
+[2026-09-07T06:09:34.465Z] B-ingest B-S19 pool=2/2+0
+[2026-09-07T06:09:43.270Z] B-ingest B-S20 pool=2/2+0
+[2026-09-07T06:09:50.151Z] groupB probe start pool=2/2+0
+[2026-09-07T06:09:50.168Z] groupC S2 start pool=2/2+0
+[2026-09-07T06:09:50.168Z] C-S C-S01 pool=2/2+0
+[wd 2026-09-07T06:09:51.203Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:09:58.001Z] C-S C-S02 pool=2/2+0
+[2026-09-07T06:10:09.604Z] C-S C-S03 pool=2/2+0
+[wd 2026-09-07T06:10:21.204Z] pool total=2 idle=1 waiting=0
+[2026-09-07T06:10:21.394Z] C-S C-S04 pool=2/2+0
+[2026-09-07T06:10:30.281Z] C-S C-S05 pool=2/2+0
+[2026-09-07T06:10:45.492Z] C-S C-S06 pool=2/2+0
+[wd 2026-09-07T06:10:51.205Z] pool total=2 idle=1 waiting=0
+[2026-09-07T06:10:52.301Z] C-S C-S07 pool=2/2+0
+[2026-09-07T06:10:59.757Z] C-S C-S08 pool=2/2+0
+[2026-09-07T06:11:08.460Z] C-S C-S09 pool=2/2+0
+[2026-09-07T06:11:17.559Z] C-S C-S10 pool=2/2+0
+[wd 2026-09-07T06:11:21.207Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:11:27.957Z] C-S C-S11 pool=2/2+0
+[2026-09-07T06:11:35.721Z] C-S C-S12 pool=2/2+0
+[2026-09-07T06:11:44.598Z] groupC forget start pool=2/2+0
+[2026-09-07T06:11:44.598Z] C-F C-F01 pool=2/2+0
+[wd 2026-09-07T06:11:51.207Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:11:55.097Z] C-F C-F02 pool=2/2+0
+[2026-09-07T06:12:01.946Z] C-F C-F03 pool=2/2+0
+[2026-09-07T06:12:09.275Z] C-F C-F04 pool=2/2+0
+[2026-09-07T06:12:20.079Z] C-F C-F05 pool=2/2+0
+[wd 2026-09-07T06:12:21.208Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:12:30.335Z] C-F C-F06 pool=2/2+0
+[2026-09-07T06:12:38.007Z] C-F C-F07 pool=2/2+0
+[2026-09-07T06:12:44.056Z] C-F C-F08 pool=2/2+0
+[wd 2026-09-07T06:12:51.209Z] pool total=2 idle=1 waiting=0
+[2026-09-07T06:12:51.678Z] groupC arbitration start pool=2/2+0
+[2026-09-07T06:12:51.681Z] C-A C-A01 pool=2/2+0
+[2026-09-07T06:13:08.558Z] C-A C-A02 pool=2/2+0
+[wd 2026-09-07T06:13:21.209Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:13:25.063Z] C-A C-A03 pool=2/2+0
+[wd 2026-09-07T06:13:51.210Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:14:03.966Z] C-A C-A04 pool=2/2+0
+[wd 2026-09-07T06:14:21.210Z] pool total=2 idle=0 waiting=0
+[2026-09-07T06:14:21.267Z] C-A C-A05 pool=2/2+0
+[2026-09-07T06:14:37.162Z] groupC confirm start pool=2/2+0
+[2026-09-07T06:14:37.164Z] C-K C-K01 pool=2/2+0
+[2026-09-07T06:14:47.926Z] C-K C-K02 pool=2/2+0
+[wd 2026-09-07T06:14:51.211Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:14:57.055Z] C-K C-K03 pool=2/2+0
+[2026-09-07T06:15:10.038Z] C-K C-K04 pool=2/2+0
+[2026-09-07T06:15:17.546Z] C-K C-K05 pool=2/2+0
+[wd 2026-09-07T06:15:21.212Z] pool total=2 idle=2 waiting=0
+[2026-09-07T06:15:27.938Z] finally pool=2/2+0
+[2026-09-07T06:15:27.939Z] pool-before-end total=2 idle=2 waiting=0 pool=2/2+0
+[2026-09-07T06:15:27.940Z] pool-end closed pool=0/0+0

@@ -159,7 +159,10 @@ function detectS2(content) {
   // phrasing varies ("服用华法林抗凝治疗" never contains 药物), so health
   // and finance signals are enumerated generously. An S2 hit only means the
   // fact enters the confirmation flow, so false positives are cheap.
-  return /健康|创伤|病史|诊断|医疗|药物|服药|用药|剂量|停药|处方|抗凝|华法林|胰岛素|血糖|血压|确诊|手术|住院|复查|复诊|性取向|性生活|银行卡|财务|收入|债务|身份证|家庭冲突|trauma|diagnos|medical|medication|medicin|dose|surgery|hospitaliz|symptom|insulin|blood pressure|blood sugar|sexual|bank account|finance|income|debt|identity document/i.test(String(content || ''));
+  // R-012: run9 eval showed salary/credit-card/chemotherapy/family-conflict
+  // phrasings slipping through, so the finance, oncology and family/legal
+  // groups are extended with precise terms only.
+  return /健康|创伤|病史|诊断|医疗|药物|服药|用药|剂量|停药|处方|抗凝|华法林|胰岛素|血糖|血压|确诊|手术|住院|复查|复诊|化疗|放疗|性取向|性生活|银行卡|信用卡|财务|收入|月薪|工资|债务|欠|贷款|网贷|冻结|征信|身份证|家庭冲突|家庭矛盾|家里矛盾|离婚|官司|拘留|trauma|diagnos|medical|medication|medicin|dose|surgery|hospitaliz|symptom|insulin|blood pressure|blood sugar|sexual|bank account|credit card|finance|income|salary|debt|identity document|divorce|lawsuit|detention|chemotherapy/i.test(String(content || ''));
 }
 
 function sanitizeMetadata(metadata) {
@@ -2014,6 +2017,16 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
         state.indexDocuments = (state.indexDocuments || []).filter(document => document.sourceId !== assertion.id);
       }
       assertion.status = 'active';
+      // R-012 gate merge (plan option A): the user confirming this memory IS
+      // the direct-query authorization. Keeping require_confirmation after
+      // confirmation made the confirmed memory permanently invisible to
+      // direct queries (run9 confirm 0/5). accessConfirmations keep their
+      // own role: one-shot temporary access to memories that were never
+      // confirmed. The mention policy relaxes to contextualizable_only - the
+      // bundle requires non-do_not_mention for assembly, but a confirmed
+      // memory still is not proactively mentioned.
+      assertion.directQueryPolicy = 'allow';
+      assertion.mentionPolicy = 'contextualizable_only';
       assertion.resourceRevision += 1;
       assertion.updatedAt = nowIso();
       bumpSequence();
@@ -2025,7 +2038,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       assertion.updatedAt = nowIso();
       bumpSequence();
     }
-    audit(state, context, `memory_${decision}d`, { memoryId: assertion.id, confirmationId: confirmation.id });
+    audit(state, context, `memory_${decision}d`, { memoryId: assertion.id, confirmationId: confirmation.id, directQueryPolicy: assertion.directQueryPolicy });
     projectActiveAssertion(context, assertion);
     await persist();
     return { confirmation: clone(confirmation), memory: serializeAssertion(state, assertion, { includeGovernance: true }), consistencyToken: tokenFor(state, context) };

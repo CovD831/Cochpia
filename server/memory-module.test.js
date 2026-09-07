@@ -279,10 +279,13 @@ test('S2 correction keeps the old version until confirmation and cannot bypass t
   const confirmed = await memory.confirm(userContext(), corrected.confirmation.id, { resourceRevision: corrected.confirmation.resourceRevision });
   assert.equal(confirmed.memory.content, '我的诊断信息');
   assert.equal(confirmed.memory.sensitivity, 'S2');
-  assert.equal(confirmed.memory.directQueryPolicy, 'require_confirmation');
-  const blocked = memory.retrieve(userContext(), { query: '诊断', purpose: 'answer_user_query' });
-  assert.equal(blocked.items.length, 0);
-  assert.equal(blocked.blocks.length, 1);
+  // R-012 gate merge: the confirmation IS the direct-query authorization, so
+  // the corrected memory answers direct queries right after confirmation.
+  assert.equal(confirmed.memory.directQueryPolicy, 'allow');
+  const visible = memory.retrieve(userContext(), { query: '诊断', purpose: 'answer_user_query' });
+  assert.equal(visible.items.length, 1);
+  assert.equal(visible.items[0].content, '我的诊断信息');
+  assert.equal(visible.blocks.length, 0);
 });
 
 test('S1 correction cannot promote long-term memory into a current-state sensitivity class', async () => {
@@ -755,22 +758,28 @@ test('context bundle excludes do-not-mention and unconfirmed direct-query memori
   const contextualizable = await memory.hold(userContext(), { content: '只用于上下文的偏好', sensitivity: 'S0', mentionPolicy: 'contextualizable_only' });
   const sensitive = await memory.hold(userContext(), { content: '我的诊断信息', sensitivity: 'S2' });
   await memory.confirm(userContext(), sensitive.confirmation.id, { resourceRevision: sensitive.confirmation.resourceRevision });
+  // R-012 gate merge: a confirmed S2 memory carries allow and reaches the
+  // bundle directly. The one-shot access token keeps covering memories that
+  // were never candidate-confirmed.
+  const gated = await memory.hold(userContext(), { content: '需逐次授权的记录', sensitivity: 'S0', directQueryPolicy: 'require_confirmation' });
 
   const ordinary = memory.contextBundle(userContext(), {});
   assert.equal(ordinary.userProfile.some(item => item.memoryId === hidden.memory.memoryId), false);
   assert.equal(ordinary.userProfile.some(item => item.memoryId === contextualizable.memory.memoryId), true);
-  assert.equal(ordinary.userProfile.some(item => item.memoryId === sensitive.memory.memoryId), false);
+  assert.equal(ordinary.userProfile.some(item => item.memoryId === sensitive.memory.memoryId), true);
 
   const unrelated = memory.contextBundle(userContext(), { query: '普通问题' });
   assert.equal(unrelated.userProfile.some(item => item.memoryId === hidden.memory.memoryId), false);
-  assert.equal(unrelated.userProfile.some(item => item.memoryId === sensitive.memory.memoryId), false);
+  assert.equal(unrelated.userProfile.some(item => item.memoryId === sensitive.memory.memoryId), true);
 
   const direct = memory.contextBundle(userContext(), { query: '诊断信息' });
-  assert.equal(direct.userProfile.some(item => item.memoryId === sensitive.memory.memoryId), false);
-  assert.equal(direct.blocks.length, 1);
-  const access = await memory.confirmAccess(userContext(), direct.blocks[0].accessConfirmationId);
-  const authorized = memory.contextBundle(userContext(), { query: '诊断信息', accessToken: access.accessToken });
-  assert.equal(authorized.evidence.some(item => item.memoryId === sensitive.memory.memoryId), true);
+  assert.equal(direct.userProfile.some(item => item.memoryId === sensitive.memory.memoryId), true);
+  assert.equal(direct.userProfile.some(item => item.memoryId === gated.memory.memoryId), false);
+  const gatedQuery = memory.contextBundle(userContext(), { query: '需逐次授权的记录' });
+  assert.equal(gatedQuery.blocks.length, 1);
+  const access = await memory.confirmAccess(userContext(), gatedQuery.blocks[0].accessConfirmationId);
+  const authorized = memory.contextBundle(userContext(), { query: '需逐次授权的记录', accessToken: access.accessToken });
+  assert.equal(authorized.evidence.some(item => item.memoryId === gated.memory.memoryId), true);
 });
 
 test('episode summaries cannot bypass a hidden policy on their source assertion', async () => {

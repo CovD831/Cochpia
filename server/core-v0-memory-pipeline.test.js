@@ -628,6 +628,42 @@ test('C-10 S2 vocabulary: health phrasing without the old keywords is still clas
   assert.equal(state.profileSnapshotItems.length, 0);
 });
 
+test('R-012a S2 vocabulary: salary, credit card, chemotherapy and family conflict phrasings enter the confirmation flow', async () => {
+  const messages = ['用户月薪大概一万五', '用户信用卡欠了几万块还没还清', '用户刚做完化疗，头发都掉了', '用户家里矛盾挺严重的，在考虑搬出去住'];
+  for (const [index, content] of messages.entries()) {
+    const state = memoryFixture({ rawEvents: [rawEvent(`re-${index}`, content)] });
+    const { pool, repository } = mockRepository(state);
+    const drain = createMemoryExtractionDrain({
+      pool,
+      repository,
+      extractor: async () => [{ content, memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+      auditor: null,
+      context: CTX,
+      moduleOptions: { projectionEnabled: true }
+    });
+    const result = await drain();
+    assert.equal(result.pending, 1, `"${content}" must land in pending_confirmation: ` + JSON.stringify(result));
+  }
+});
+
+test('R-012b gate merge: a confirmed S2 memory answers direct queries', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '提醒：我在服用华法林进行抗凝治疗')] });
+  const memory = createMemoryModule(state, async () => {}, { projectionEnabled: true });
+  const candidate = await memory.createCandidate(CTX, {
+    sourceEventId: 're-1', content: '用户在服用华法林进行抗凝治疗', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+  });
+  assert.equal(candidate.status, 'pending_confirmation');
+  const pending = await memory.retrieveAsync(CTX, { query: '华法林', purpose: 'answer_user_query' });
+  assert.equal(pending.items.length, 0, 'unconfirmed S2 stays blocked at direct query');
+  const confirmation = state.confirmations.find(item => item.candidateAssertionId === candidate.memory.memoryId && item.status === 'pending');
+  assert.ok(confirmation);
+  const decision = await memory.confirm(CTX, confirmation.id, { resourceRevision: confirmation.resourceRevision });
+  assert.equal(decision.memory.directQueryPolicy, 'allow', 'confirmation relaxes the direct-query gate');
+  const after = await memory.retrieveAsync(CTX, { query: '华法林', purpose: 'answer_user_query' });
+  assert.equal(after.items.length, 1, 'confirmed S2 answers direct queries');
+  assert.equal(after.blocks.length, 0, 'no access-confirmation block remains');
+});
+
 // ---------------------------------------------------------------------------
 // R-009: bi-temporal validity wiring
 // ---------------------------------------------------------------------------

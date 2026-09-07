@@ -123,19 +123,23 @@ test('V1 HTTP contract records proactive mentions only for authorized Agent call
 
 test('direct-query confirmation issues a one-time token bound to the current query session', async () => {
   await withApi(async base => {
-    const created = await request(base, '/v1/memories', { method: 'POST', body: JSON.stringify({ content: '家庭冲突记录', sensitivity: 'S2' }) });
-    const confirmed = await request(base, `/v1/confirmations/${created.body.confirmation.id}/confirm`, { method: 'POST', body: JSON.stringify({ resource_revision: 1 }) });
-    assert.equal(confirmed.response.status, 200);
-    const retrieved = await request(base, '/v1/retrieve', { method: 'POST', body: JSON.stringify({ query: '家庭冲突', purpose: 'answer_user_query' }) });
+    // R-012 gate merge: a CONFIRMED S2 memory now answers direct queries
+    // outright (the confirmation IS the authorization). The one-shot
+    // access-confirmation token keeps its role for memories that carry an
+    // explicit require_confirmation policy and were never candidate-confirmed,
+    // so this test drives that path directly.
+    const created = await request(base, '/v1/memories', { method: 'POST', body: JSON.stringify({ content: '需要逐次授权的记录', sensitivity: 'S0', direct_query_policy: 'require_confirmation' }) });
+    assert.equal(created.response.status, 201);
+    const retrieved = await request(base, '/v1/retrieve', { method: 'POST', body: JSON.stringify({ query: '需要逐次授权', purpose: 'answer_user_query' }) });
     assert.equal(retrieved.response.status, 200);
     assert.equal(retrieved.body.items.length, 0);
     assert.equal(retrieved.body.blocks.length, 1);
     const access = await request(base, `/v1/access-confirmations/${retrieved.body.blocks[0].accessConfirmationId}/confirm`, { method: 'POST' });
     assert.equal(access.response.status, 200);
-    const allowed = await request(base, '/v1/retrieve', { method: 'POST', body: JSON.stringify({ query: '家庭冲突', purpose: 'answer_user_query', access_token: access.body.accessToken }) });
+    const allowed = await request(base, '/v1/retrieve', { method: 'POST', body: JSON.stringify({ query: '需要逐次授权', purpose: 'answer_user_query', access_token: access.body.accessToken }) });
     assert.equal(allowed.response.status, 200);
-    assert.equal(allowed.body.items[0].content, '家庭冲突记录');
-    const reused = await request(base, '/v1/retrieve', { method: 'POST', body: JSON.stringify({ query: '家庭冲突', purpose: 'answer_user_query', access_token: access.body.accessToken }) });
+    assert.equal(allowed.body.items[0].content, '需要逐次授权的记录');
+    const reused = await request(base, '/v1/retrieve', { method: 'POST', body: JSON.stringify({ query: '需要逐次授权', purpose: 'answer_user_query', access_token: access.body.accessToken }) });
     assert.equal(reused.body.items.length, 0);
     assert.equal(reused.body.blocks.length, 1);
   });

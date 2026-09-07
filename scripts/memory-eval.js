@@ -185,7 +185,7 @@ try {
   });
   const rawRetrieve = async query => {
     const result = await probeMemory.retrieveAsync(context, { query, purpose: 'answer_user_query' });
-    return (result.items || []).map(item => String(item.memoryId || item.id || '')).filter(Boolean);
+    return (result.items || []).map(item => ({ id: String(item.memoryId || item.id || ''), score: Number(item.score ?? 0) })).filter(item => item.id);
   };
 
   logPhase('groupB probe start');
@@ -194,7 +194,7 @@ try {
     for (const item of cases.groupB.paraphrase) {
       const ids = assertionIdsFor(item.targetKeyword);
       const retrieved = await rawRetrieve(item.query);
-      const hit = ids.size > 0 && retrieved.some(id => ids.has(id));
+      const hit = ids.size > 0 && retrieved.some(item => ids.has(item.id));
       if (!hit) fail(item.id, 'paraphrase_miss', `query="${item.query}" (retrieved=${retrieved.length})`);
       else paraphraseHits += 1;
     }
@@ -203,7 +203,7 @@ try {
     for (const item of cases.groupB.lexical) {
       const ids = assertionIdsFor(item.targetKeyword);
       const retrieved = await rawRetrieve(item.query);
-      const hit = ids.size > 0 && retrieved.some(id => ids.has(id));
+      const hit = ids.size > 0 && retrieved.some(item => ids.has(item.id));
       if (!hit) fail(item.id, 'lexical_miss', `query="${item.query}" (retrieved=${retrieved.length})`);
       else lexicalHits += 1;
     }
@@ -211,7 +211,14 @@ try {
     let noise = 0;
     for (const item of cases.groupB.noise) {
       const retrieved = await rawRetrieve(item.query);
-      if (retrieved.length > 0) { noise += 1; fail(item.id, 'noise_recall', `unrelated query retrieved ${retrieved.length} items`); }
+      if (retrieved.length > 0) {
+        noise += 1;
+        // R-012: record the scores of the noise hits - without them the
+        // residual cannot be attributed (threshold too low vs corpus topic
+        // clustering vs fusion ordering).
+        const scores = retrieved.map(item => item.score.toFixed(4)).join(',');
+        fail(item.id, 'noise_recall', `unrelated query retrieved ${retrieved.length} items (scores: ${scores})`);
+      }
     }
     evidence.metrics.precision_noise = fmt(noise, cases.groupB.noise.length);
   }
@@ -330,9 +337,16 @@ try {
   evidence.failedCases = new Set(evidence.failures.map(item => item.caseId)).size;
   await writeFile(new URL('../.rearchitecture-runs/memory-eval.json', import.meta.url), JSON.stringify(evidence, null, 2));
   console.log(`\n==== 基线汇总：${allCases} case，${evidence.failedCases} 个失败 case，${evidence.failures.length} 条失败记录；明细见 .rearchitecture-runs/memory-eval.json ====`);
-  // A leaked pool checkout (e.g. a fire-and-forget drain still in flight when
-  // an error propagated) must not hang the run past cleanup.
-  await Promise.race([pool.end(), new Promise(resolve => setTimeout(resolve, 5000))]);
+  // R-012 pool attribution: record the counts before closing, then close
+  // gracefully (no race cap). If pool.end() completes and the DROP succeeds,
+  // the leftover sessions seen in earlier runs were exit-residue from
+  // process.exit, not mid-run leaks; if end() hangs, clients are genuinely
+  // still checked out and the counts identify the phase that leaked them.
+  console.log(`[pool] before end: total=${pool.totalCount} idle=${pool.idleCount} waiting=${pool.waitingCount}`);
+  logPhase(`pool-before-end total=${pool.totalCount} idle=${pool.idleCount} waiting=${pool.waitingCount}`);
+  const endResult = await Promise.race([pool.end().then(() => 'closed'), new Promise(resolve => setTimeout(() => resolve('timeout'), 15000))]);
+  console.log(`[pool] end: ${endResult}`);
+  logPhase(`pool-end ${endResult}`);
   try {
     execFileSync('psql', ['-q', '-d', 'postgres', '-c', `DROP DATABASE IF EXISTS ${DB_NAME}`]);
     console.log(`评测库 ${DB_NAME} 已清理`);

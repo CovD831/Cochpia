@@ -92,3 +92,38 @@ run9 的 noise 命中项分数未入 evidence，无法判断是阈值不足还�
 - 方案 A 改变确认语义：S2 仍走 pending 流程、S3 仍拒绝、S1 仍隔离，
   治理模型其余不变；证据留 audit（confirm 事件记 policy 变更）；
 - 池问题可能是非问题（退出残留）：先归因，避免为幻影修代码。
+
+## 6. 实施结果（run 10，2026-09-07，方案 A 已采纳并实施）
+
+| 指标 | run9 | run10 | 归因 |
+|---|---|---|---|
+| fact_recall | 13/15 | **14/15** | 提取 variance |
+| chit_chat_leak | 10/10 | **10/10** | 稳定 |
+| dedup | 8/8 | **3/8** | 纯模型 variance（AUDN 是否判 NOOP；两次运行间该路径代码零改动） |
+| paraphrase | 18/20 | 11/20 | 语料内容随提取改述波动 + dedup 失效放大（重复断言稀释检索） |
+| lexical | 9/10 | 5/10 | 同上 |
+| precision_noise | 3/3 | 3/3 | **归因完成**：残留命中全部是 BM25 词法通道（RRF 分数即 BM25 分，向量通道被 0.55 下限拦住）——CJK 二元分词使无关查询词法重叠（今年/每天/怎么） |
+| s2_accuracy | 9/12 | **11/12** | 词表补全生效；唯一残留 C-S12「家里矛盾」——提取改述丢掉了触发词（「与家人关系紧张」），**S2 分类只看改述后内容是结构性弱点**，应对原始消息同时分类（R-013 输入） |
+| forget | 6/8 | **7/8** | 提取 variance（戚风=一次性事件） |
+| arbitration | 4/5 | **5/5** | 稳定 |
+| confirm | 0/5 | **5/5** | 闸门合并生效（confirm → directQueryPolicy=allow + mentionPolicy=contextualizable_only） |
+| 池 | 11 连接残留 | **total=2，end=closed，DROP 成功** | **归因完成：残留是 process.exit 跳过优雅关闭的退出残留，不是中途泄漏**；run7 满池死锁已由 drain 串行化 + 池扩容缓解，~11 并发借用的瞬时成因仍开放 |
+
+### 6.1 关键结论
+
+1. **机制类修复全部稳定**：S2 词表（11/12）、confirm 闸门合并（5/5）、
+   arbitration（5/5）、forget（7/8）跨 run 一致改善；
+2. **模型类指标单 run 不可比**：dedup 8→3、paraphrase 18→11 在零代码
+   改动的两次运行间摆动——Phase 3 扩量必须带多 run 均值 ± 方差，单 run
+   数字不能作为回归判据；
+3. **noise 残留已定位**：BM25 词法通道无下限，CJK 二元分词的泛重叠；
+   修复（词法分数下限/相对阈值/分词改进）归 Phase 3，与重排一起做；
+4. **S2 分类的结构性弱点**：分类只看提取改述后的候选内容，改述丢词即
+   漏判；应对 raw event 内容同时分类（一行改动 + 词表天然冗余，
+   R-013 顺手修）。
+
+方案 A 落地：confirm 激活时 directQueryPolicy→allow、
+mentionPolicy→contextualizable_only（可入上下文与直查，不主动提及）；
+accessConfirmations 职责不变（未确认记忆的一次性临时授权）；audit 记录
+policy 变更。旧语义的三个测试已按新语义重写（memory-module.test ×2、
+memory-module-api.test ×1），新增 R-012a/R-012b 两个用例。
