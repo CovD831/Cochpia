@@ -664,6 +664,24 @@ test('R-012b gate merge: a confirmed S2 memory answers direct queries', async ()
   assert.equal(after.blocks.length, 0, 'no access-confirmation block remains');
 });
 
+test('R-013 S2 classification covers the raw message when the rephrase drops the trigger word', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '我家里矛盾挺严重的，在考虑搬出去住')] });
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    // The extractor rephrased away every trigger word - only the raw event
+    // carries "矛盾" (through sourceContent).
+    extractor: async () => [{ content: '用户与家人相处有摩擦，在考虑独立居住', memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user' }],
+    auditor: null,
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.equal(result.pending, 1, 'S2 must be classified from the raw message: ' + JSON.stringify(result));
+  assert.equal(state.assertions[0].status, 'pending_confirmation');
+});
+
 // ---------------------------------------------------------------------------
 // R-009: bi-temporal validity wiring
 // ---------------------------------------------------------------------------

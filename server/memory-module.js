@@ -180,7 +180,13 @@ function maxSensitivity(a, b) {
 function classifySensitivity(input) {
   const requested = SENSITIVITY_LEVELS.includes(input.sensitivity) ? input.sensitivity : 'S0';
   if (detectS3(input.content)) return 'S3';
-  if (detectS2(input.content)) return maxSensitivity(requested, 'S2');
+  // R-013: the S2 gate also sees the ORIGINAL message (sourceContent). The
+  // extractor rephrases candidates and routinely drops the trigger word
+  // ("我家里矛盾挺严重" became "用户考虑搬出去住"), so classifying only the
+  // rephrased content structurally under-classifies. The S3 surface stays
+  // content-only: it is a hard reject and the raw event already passed Core
+  // ingress policy.
+  if (detectS2(input.content) || detectS2(input.sourceContent)) return maxSensitivity(requested, 'S2');
   return requested;
 }
 

@@ -382,6 +382,10 @@ export function createMemoryExtractionDrain({
         const created = await memory.createCandidate(context, {
           sourceEventId: event.id,
           content: proposal.content,
+          // R-013: S2 classification also sees the raw message - the extractor
+          // routinely drops the trigger word when rephrasing ("我家里矛盾挺
+          // 严重" became a candidate with no trigger vocabulary).
+          sourceContent: event.content,
           // R-011: the fact-level semantic topic key from the extractor.
           // createCandidate passes it through to makeAssertion, where it
           // becomes the canonical_key; a missing key falls back to a content

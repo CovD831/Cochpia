@@ -63,7 +63,7 @@
 | R-010 | ✅ 完成（892e90b）：96-case 评测基线；首跑暴露 canonical_key 粒度、AUDN 无阈值、精度阈值三大缺陷 | 质量标尺 | 中 |
 | R-011 | ✅ 完成：canonical_key 事实级语义键 + AUDN findSimilar 0.60 阈值 + 检索向量下限 0.55 + 零候选事件消费标记 + 索引落库修复（jsonb/lexical_version）+ 评测器八项修复；run9 基线：paraphrase 12→18、lexical 5→9、arbitration 0→4、dedup 真实 8/8；诚实负结果：noise 全局阈值无法完全分离（3/3 残留 1-2 条）、S2 词表缺口（9/12）、confirm 后不可直查（设计缺口） | R-010 首跑证据 + 探针校准 | 中 |
 | R-012 | ✅ 完成（889085d）：S2 词表补全（s2 9→11/12）+ confirm 闸门合并方案 A（confirm 0→5/5，确认=授权直查+可入上下文，不主动提及）+ noise 归因（残留全是 BM25 词法通道命中）+ 池归因（退出残留非泄漏）。诚实负结果：模型类指标单 run 摆动大（dedup 8→3、paraphrase 18→11），Phase 3 必须多 run 均值 ± 方差 | R-011 run9 失败明细 | 中 |
-| R-013 | 建议：S2 分类同时看 raw event 内容（改述丢词漏判，一行改动）+ 词法通道下限/分词改进 + AUDN NOOP 稳定性（few-shot 或结构化决策） | R-012 run10 归因 | 小 |
+| R-013 | ✅ 完成：S2 分类同时看 raw event 内容（run11 S2 12/12，C-S12 不再依赖改述措辞）；词法下限与 AUDN 稳定性按 R-012 计划移交 Phase 3 | R-012 run10 归因 | 小 |
 | Phase 3 | 600-case 质量评测（多 run 均值 ± 方差）+ decay 重排 + Memory Alpha gate | 原计划 | 大 |
 
 ## 五、一句话结论
