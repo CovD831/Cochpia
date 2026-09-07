@@ -15,3 +15,4 @@ uploads/
 
 # User-provided media: publish only after ownership/license is confirmed
 client/public/306155_medium.mp4
+scripts/eval-progress.log
