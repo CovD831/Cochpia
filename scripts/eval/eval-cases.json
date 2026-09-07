@@ -1,125 +1,1319 @@
 {
-  "meta": { "version": "r010-baseline", "total": 96 },
-  "groupA": {
-    "facts": [
-      { "id": "A-F01", "message": "我叫林晓墨，墨水的墨。", "expectKeywords": ["林晓墨"] },
-      { "id": "A-F02", "message": "我今年 28 岁，在杭州工作。", "expectKeywords": ["28", "杭州"] },
-      { "id": "A-F03", "message": "我最喜欢的水果是榴莲，恨不得天天吃。", "expectKeywords": ["榴莲"] },
-      { "id": "A-F04", "message": "我完全不能吃香菜，看到都觉得恶心。", "expectKeywords": ["香菜"] },
-      { "id": "A-F05", "message": "我爸爸是高中老师，快 60 岁了。", "expectKeywords": ["老师"] },
-      { "id": "A-F06", "message": "我养了只猫叫汤圆，三花猫。", "expectKeywords": ["汤圆"] },
-      { "id": "A-F07", "message": "我是前端工程师，写 React 五年了。", "expectKeywords": ["React"] },
-      { "id": "A-F08", "message": "我每天坐地铁上班，大概四十分钟。", "expectKeywords": ["地铁"] },
-      { "id": "A-F09", "message": "我最近在学日语，准备去旅游的时候用。", "expectKeywords": ["日语"] },
-      { "id": "A-F10", "message": "我对芒果过敏，吃了嘴唇会肿。", "expectKeywords": ["芒果"] },
-      { "id": "A-F11", "message": "我有乳糖不耐，喝的都是无乳糖牛奶。", "expectKeywords": ["乳糖"] },
-      { "id": "A-F12", "message": "我的生日是 3 月 14 号。", "expectKeywords": ["3", "14"] },
-      { "id": "A-F13", "message": "我以前住成都，去年才搬到杭州的。", "expectKeywords": ["成都"] },
-      { "id": "A-F14", "message": "我最好的朋友叫阿衡，认识十年了。", "expectKeywords": ["阿衡"] },
-      { "id": "A-F15", "message": "我不爱社交，周末宁愿自己待着。", "expectKeywords": ["社交"] }
-    ],
-    "chitChat": [
-      { "id": "A-C01", "message": "今天天气真不错啊。" },
-      { "id": "A-C02", "message": "刚看了场电影，还行。" },
-      { "id": "A-C03", "message": "喂，在吗？" },
-      { "id": "A-C04", "message": "困死了，先睡了。" },
-      { "id": "A-C05", "message": "这个梗笑死我了哈哈哈哈。" },
-      { "id": "A-C06", "message": "居然都周五了，这周过得好快。" },
-      { "id": "A-C07", "message": "楼下饭馆好香啊。" },
-      { "id": "A-C08", "message": "手机没电了，我去充一下。" },
-      { "id": "A-C09", "message": "外面又下雨了，烦。" },
-      { "id": "A-C10", "message": "这首歌也太好听了吧。" }
-    ],
-    "dedup": [
-      { "id": "A-D01", "first": "我对花生过敏，吃了会起疹子。", "second": "我花生不能吃的，一吃就起疹子。" },
-      { "id": "A-D02", "first": "我叫林晓墨。", "second": "我叫林晓墨，你记一下。" },
-      { "id": "A-D03", "first": "我最喜欢的水果是榴莲。", "second": "榴莲是我最喜欢的水果啦。" },
-      { "id": "A-D04", "first": "我是做前端开发的。", "second": "我的工作就是写前端。" },
-      { "id": "A-D05", "first": "我的猫叫汤圆。", "second": "我家猫汤圆超可爱的。" },
-      { "id": "A-D06", "first": "我对芒果过敏。", "second": "芒果我一吃就肿，是过敏的。" },
-      { "id": "A-D07", "first": "我上班坐地铁。", "second": "我每天上下班都坐地铁。" },
-      { "id": "A-D08", "first": "我有乳糖不耐。", "second": "我的身体消化不了乳糖。" }
+ "meta": {
+  "version": "phase3a",
+  "total": 220
+ },
+ "groupA": {
+  "facts": [
+   {
+    "id": "A-F01",
+    "message": "我叫林晓墨，墨水的墨。",
+    "expectKeywords": [
+     "林晓墨"
     ]
-  },
-  "groupB": {
-    "paraphrase": [
-      { "id": "B-S01", "message": "我对花生过敏，吃了会起疹子。", "query": "下午茶吃点心有什么要注意的吗？", "targetKeyword": "花生" },
-      { "id": "B-S02", "message": "我最喜欢的水果是榴莲。", "query": "帮我挑点水果吃。", "targetKeyword": "榴莲" },
-      { "id": "B-S03", "message": "我完全不能吃香菜。", "query": "点菜的时候有什么忌口的？", "targetKeyword": "香菜" },
-      { "id": "B-S04", "message": "我是前端工程师，写 React 五年了。", "query": "你是做什么工作的呀？", "targetKeyword": "React" },
-      { "id": "B-S05", "message": "我养了只猫叫汤圆。", "query": "你家有什么宠物吗？", "targetKeyword": "汤圆" },
-      { "id": "B-S06", "message": "我最近在学日语。", "query": "最近有在学习什么新东西吗？", "targetKeyword": "日语" },
-      { "id": "B-S07", "message": "我有乳糖不耐。", "query": "牛奶我能喝吗？", "targetKeyword": "乳糖" },
-      { "id": "B-S08", "message": "我以前住成都。", "query": "你来这座城市之前在哪呀？", "targetKeyword": "成都" },
-      { "id": "B-S09", "message": "我最好的朋友叫阿衡。", "query": "你和谁的关系最好？", "targetKeyword": "阿衡" },
-      { "id": "B-S10", "message": "我不爱社交。", "query": "周末一般都怎么过？", "targetKeyword": "社交" },
-      { "id": "B-S11", "message": "我上班坐地铁。", "query": "你平时怎么通勤的？", "targetKeyword": "地铁" },
-      { "id": "B-S12", "message": "我的生日是 3 月 14 号。", "query": "你什么时候过生日？", "targetKeyword": "14" },
-      { "id": "B-S13", "message": "我对芒果过敏。", "query": "吃水果会不会有什么问题？", "targetKeyword": "芒果" },
-      { "id": "B-S14", "message": "我爸爸是高中老师。", "query": "家里人都是做什么的？", "targetKeyword": "老师" },
-      { "id": "B-S15", "message": "我写 React 五年了。", "query": "你写代码多久了？", "targetKeyword": "React" },
-      { "id": "B-S16", "message": "我周末宁愿自己待着。", "query": "放假的时候你喜欢干嘛？", "targetKeyword": "待" },
-      { "id": "B-S17", "message": "我的猫是三花猫。", "query": "那只猫是什么花色的？", "targetKeyword": "三花" },
-      { "id": "B-S18", "message": "我去年才搬到杭州。", "query": "你来杭州多久了？", "targetKeyword": "去年" },
-      { "id": "B-S19", "message": "我喝的都是无乳糖牛奶。", "query": "牛奶你一般怎么喝？", "targetKeyword": "乳糖" },
-      { "id": "B-S20", "message": "我和阿衡认识十年了。", "query": "你们认识多长时间了？", "targetKeyword": "十年" }
-    ],
-    "lexical": [
-      { "id": "B-L01", "query": "花生过敏的症状", "targetKeyword": "花生" },
-      { "id": "B-L02", "query": "最喜欢的水果榴莲", "targetKeyword": "榴莲" },
-      { "id": "B-L03", "query": "香菜不能吃", "targetKeyword": "香菜" },
-      { "id": "B-L04", "query": "前端工程师 React", "targetKeyword": "React" },
-      { "id": "B-L05", "query": "猫汤圆", "targetKeyword": "汤圆" },
-      { "id": "B-L06", "query": "学日语", "targetKeyword": "日语" },
-      { "id": "B-L07", "query": "乳糖不耐", "targetKeyword": "乳糖" },
-      { "id": "B-L08", "query": "以前住成都", "targetKeyword": "成都" },
-      { "id": "B-L09", "query": "朋友阿衡", "targetKeyword": "阿衡" },
-      { "id": "B-L10", "query": "坐地铁上班", "targetKeyword": "地铁" }
-    ],
-    "noise": [
-      { "id": "B-N01", "query": "今天天气怎么样" },
-      { "id": "B-N02", "query": "推荐一部电影" },
-      { "id": "B-N03", "query": "股票行情分析" }
+   },
+   {
+    "id": "A-F02",
+    "message": "我今年 28 岁，在杭州工作。",
+    "expectKeywords": [
+     "28",
+     "杭州"
     ]
-  },
-  "groupC": {
-    "s2": [
-      { "id": "C-S01", "message": "我在服用华法林抗凝，每周要去验血。", "expectKeywords": ["华法林"] },
-      { "id": "C-S02", "message": "我血糖有点高，医生让我控制饮食。", "expectKeywords": ["血糖"] },
-      { "id": "C-S03", "message": "我每天要打胰岛素。", "expectKeywords": ["胰岛素"] },
-      { "id": "C-S04", "message": "我最近确诊了中度抑郁，在服药。", "expectKeywords": ["抑郁"] },
-      { "id": "C-S05", "message": "我上个月做了个小手术，还在恢复期。", "expectKeywords": ["手术"] },
-      { "id": "C-S06", "message": "我月薪大概一万五。", "expectKeywords": ["一万五"] },
-      { "id": "C-S07", "message": "我信用卡欠了几万块还没还清。", "expectKeywords": ["信用卡"] },
-      { "id": "C-S08", "message": "我的银行卡被冻结了，牵扯到一个案子。", "expectKeywords": ["冻结"] },
-      { "id": "C-S09", "message": "我血压偏高，150 95 那种。", "expectKeywords": ["血压"] },
-      { "id": "C-S10", "message": "我刚做完化疗，头发都掉了。", "expectKeywords": ["化疗"] },
-      { "id": "C-S11", "message": "我的身份证过期了正在补办。", "expectKeywords": ["身份证"] },
-      { "id": "C-S12", "message": "我家里矛盾挺严重的，在考虑搬出去住。", "expectKeywords": ["矛盾"] }
-    ],
-    "forget": [
-      { "id": "C-F01", "message": "我的手机号是 13800001111。", "query": "我手机号多少来着", "targetKeyword": "13800001111" },
-      { "id": "C-F02", "message": "我在学烘焙，上周做了个戚风蛋糕。", "query": "我烘焙学得怎么样了", "targetKeyword": "戚风" },
-      { "id": "C-F03", "message": "我的工作邮箱是 dev.co@company.cn。", "query": "我工作邮箱是什么", "targetKeyword": "dev.co" },
-      { "id": "C-F04", "message": "我老家是温州的。", "query": "我老家在哪来着", "targetKeyword": "温州" },
-      { "id": "C-F05", "message": "我最近换了把机械键盘，Keychron K3。", "query": "我用的是什么键盘", "targetKeyword": "Keychron" },
-      { "id": "C-F06", "message": "我家附近有个乐刻健身房，我常去。", "query": "我在哪健身来着", "targetKeyword": "乐刻" },
-      { "id": "C-F07", "message": "我会做饭，拿手菜是红烧肉。", "query": "我拿手菜是什么", "targetKeyword": "红烧肉" },
-      { "id": "C-F08", "message": "我有辆电动车，通勤用的。", "query": "我有辆什么车", "targetKeyword": "电动车" }
-    ],
-    "arbitration": [
-      { "id": "C-A01", "first": "我对花生过敏。", "second": "其实我对花生不过敏了，现在能吃了。", "query": "花生能不能吃", "targetKeyword": "能吃" },
-      { "id": "C-A02", "first": "我最喜欢的水果是榴莲。", "second": "我最喜欢的水果变了，现在是西瓜。", "query": "我最喜欢的水果是什么", "targetKeyword": "西瓜" },
-      { "id": "C-A03", "first": "我现在住在杭州。", "second": "我搬家了，现在住在上海。", "query": "我现在住哪个城市", "targetKeyword": "上海" },
-      { "id": "C-A04", "first": "我的工作是前端开发。", "second": "我转行了，现在在做产品经理。", "query": "我现在做什么工作", "targetKeyword": "产品" },
-      { "id": "C-A05", "first": "我的猫叫汤圆。", "second": "猫改名了，现在叫麻薯。", "query": "我的猫叫什么名字", "targetKeyword": "麻薯" }
-    ],
-    "confirm": [
-      { "id": "C-K01", "message": "我在服用华法林抗凝药。", "query": "我在吃什么药", "targetKeyword": "华法林", "expectKeywords": ["华法林"] },
-      { "id": "C-K02", "message": "我血糖偏高，在饮食控制。", "query": "我血糖情况怎么样", "targetKeyword": "血糖", "expectKeywords": ["血糖"] },
-      { "id": "C-K03", "message": "我每天打胰岛素控制。", "query": "胰岛素的事你还记得吗", "targetKeyword": "胰岛素", "expectKeywords": ["胰岛素"] },
-      { "id": "C-K04", "message": "我确诊了中度抑郁在服药。", "query": "我心理健康方面的情况", "targetKeyword": "抑郁", "expectKeywords": ["抑郁"] },
-      { "id": "C-K05", "message": "我上个月做了个小手术。", "query": "我手术的事你还记得吗", "targetKeyword": "手术", "expectKeywords": ["手术"] }
+   },
+   {
+    "id": "A-F03",
+    "message": "我最喜欢的水果是榴莲，恨不得天天吃。",
+    "expectKeywords": [
+     "榴莲"
     ]
-  }
+   },
+   {
+    "id": "A-F04",
+    "message": "我完全不能吃香菜，看到都觉得恶心。",
+    "expectKeywords": [
+     "香菜"
+    ]
+   },
+   {
+    "id": "A-F05",
+    "message": "我爸爸是高中老师，快 60 岁了。",
+    "expectKeywords": [
+     "老师"
+    ]
+   },
+   {
+    "id": "A-F06",
+    "message": "我养了只猫叫汤圆，三花猫。",
+    "expectKeywords": [
+     "汤圆"
+    ]
+   },
+   {
+    "id": "A-F07",
+    "message": "我是前端工程师，写 React 五年了。",
+    "expectKeywords": [
+     "React"
+    ]
+   },
+   {
+    "id": "A-F08",
+    "message": "我每天坐地铁上班，大概四十分钟。",
+    "expectKeywords": [
+     "地铁"
+    ]
+   },
+   {
+    "id": "A-F09",
+    "message": "我最近在学日语，准备去旅游的时候用。",
+    "expectKeywords": [
+     "日语"
+    ]
+   },
+   {
+    "id": "A-F10",
+    "message": "我对芒果过敏，吃了嘴唇会肿。",
+    "expectKeywords": [
+     "芒果"
+    ]
+   },
+   {
+    "id": "A-F11",
+    "message": "我有乳糖不耐，喝的都是无乳糖牛奶。",
+    "expectKeywords": [
+     "乳糖"
+    ]
+   },
+   {
+    "id": "A-F12",
+    "message": "我的生日是 3 月 14 号。",
+    "expectKeywords": [
+     "3",
+     "14"
+    ]
+   },
+   {
+    "id": "A-F13",
+    "message": "我以前住成都，去年才搬到杭州的。",
+    "expectKeywords": [
+     "成都"
+    ]
+   },
+   {
+    "id": "A-F14",
+    "message": "我最好的朋友叫阿衡，认识十年了。",
+    "expectKeywords": [
+     "阿衡"
+    ]
+   },
+   {
+    "id": "A-F15",
+    "message": "我不爱社交，周末宁愿自己待着。",
+    "expectKeywords": [
+     "社交"
+    ]
+   },
+   {
+    "id": "A-F16",
+    "message": "我用的是 iPhone，照片都存 iCloud。",
+    "expectKeywords": [
+     "iPhone"
+    ]
+   },
+   {
+    "id": "A-F17",
+    "message": "我家宽带是电信的，用了三年。",
+    "expectKeywords": [
+     "电信"
+    ]
+   },
+   {
+    "id": "A-F18",
+    "message": "我练过五年钢琴。",
+    "expectKeywords": [
+     "钢琴"
+    ]
+   },
+   {
+    "id": "A-F19",
+    "message": "我对海鲜过敏，吃虾会起疹子。",
+    "expectKeywords": [
+     "海鲜"
+    ]
+   },
+   {
+    "id": "A-F20",
+    "message": "我养了两只仓鼠。",
+    "expectKeywords": [
+     "仓鼠"
+    ]
+   },
+   {
+    "id": "A-F21",
+    "message": "我的车是白色的本田。",
+    "expectKeywords": [
+     "本田"
+    ]
+   },
+   {
+    "id": "A-F22",
+    "message": "我每周三晚上都去打羽毛球。",
+    "expectKeywords": [
+     "羽毛球"
+    ]
+   },
+   {
+    "id": "A-F23",
+    "message": "我戒奶茶三个月了。",
+    "expectKeywords": [
+     "奶茶"
+    ]
+   },
+   {
+    "id": "A-F24",
+    "message": "我在读《三体》，看到第二部。",
+    "expectKeywords": [
+     "三体"
+    ]
+   }
+  ],
+  "chitChat": [
+   {
+    "id": "A-C01",
+    "message": "今天天气真不错啊。"
+   },
+   {
+    "id": "A-C02",
+    "message": "刚看了场电影，还行。"
+   },
+   {
+    "id": "A-C03",
+    "message": "喂，在吗？"
+   },
+   {
+    "id": "A-C04",
+    "message": "困死了，先睡了。"
+   },
+   {
+    "id": "A-C05",
+    "message": "这个梗笑死我了哈哈哈哈。"
+   },
+   {
+    "id": "A-C06",
+    "message": "居然都周五了，这周过得好快。"
+   },
+   {
+    "id": "A-C07",
+    "message": "楼下饭馆好香啊。"
+   },
+   {
+    "id": "A-C08",
+    "message": "手机没电了，我去充一下。"
+   },
+   {
+    "id": "A-C09",
+    "message": "外面又下雨了，烦。"
+   },
+   {
+    "id": "A-C10",
+    "message": "这首歌也太好听了吧。"
+   },
+   {
+    "id": "A-C11",
+    "message": "这附近有什么好吃的推荐吗。"
+   },
+   {
+    "id": "A-C12",
+    "message": "最近好累啊。"
+   },
+   {
+    "id": "A-C13",
+    "message": "你觉得猫和狗哪个更可爱。"
+   },
+   {
+    "id": "A-C14",
+    "message": "周五了终于。"
+   },
+   {
+    "id": "A-C15",
+    "message": "我刚跑完步。"
+   },
+   {
+    "id": "A-C16",
+    "message": "晚上吃什么好呢。"
+   },
+   {
+    "id": "A-C17",
+    "message": "这部剧还挺好看的。"
+   },
+   {
+    "id": "A-C18",
+    "message": "降温了记得多穿点。"
+   },
+   {
+    "id": "A-C19",
+    "message": "我刚开完会。"
+   },
+   {
+    "id": "A-C20",
+    "message": "周末人真多。"
+   },
+   {
+    "id": "A-C21",
+    "message": "这个软件更新了。"
+   },
+   {
+    "id": "A-C22",
+    "message": "我头发该剪了。"
+   },
+   {
+    "id": "A-C23",
+    "message": "今天堵车堵死了。"
+   },
+   {
+    "id": "A-C24",
+    "message": "刚吃了顿火锅好撑。"
+   }
+  ],
+  "dedup": [
+   {
+    "id": "A-D01",
+    "first": "我对花生过敏，吃了会起疹子。",
+    "second": "我花生不能吃的，一吃就起疹子。"
+   },
+   {
+    "id": "A-D02",
+    "first": "我叫林晓墨。",
+    "second": "我叫林晓墨，你记一下。"
+   },
+   {
+    "id": "A-D03",
+    "first": "我最喜欢的水果是榴莲。",
+    "second": "榴莲是我最喜欢的水果啦。"
+   },
+   {
+    "id": "A-D04",
+    "first": "我是做前端开发的。",
+    "second": "我的工作就是写前端。"
+   },
+   {
+    "id": "A-D05",
+    "first": "我的猫叫汤圆。",
+    "second": "我家猫汤圆超可爱的。"
+   },
+   {
+    "id": "A-D06",
+    "first": "我对芒果过敏。",
+    "second": "芒果我一吃就肿，是过敏的。"
+   },
+   {
+    "id": "A-D07",
+    "first": "我上班坐地铁。",
+    "second": "我每天上下班都坐地铁。"
+   },
+   {
+    "id": "A-D08",
+    "first": "我有乳糖不耐。",
+    "second": "我的身体消化不了乳糖。"
+   },
+   {
+    "id": "A-D09",
+    "first": "我每天早上六点起床跑步。",
+    "second": "我早上六点就起来跑步了，每天都这样。"
+   },
+   {
+    "id": "A-D10",
+    "first": "我对芒果过敏，一吃就嘴唇肿。",
+    "second": "芒果我不能碰，吃了嘴唇会肿。"
+   },
+   {
+    "id": "A-D11",
+    "first": "我家住在浦东新区。",
+    "second": "我住的地方是浦东新区。"
+   },
+   {
+    "id": "A-D12",
+    "first": "我用的输入法是搜狗。",
+    "second": "我打字用的是搜狗输入法。"
+   },
+   {
+    "id": "A-D13",
+    "first": "我的直属领导姓王。",
+    "second": "我们部门领导是王总，我直接向他汇报。"
+   },
+   {
+    "id": "A-D14",
+    "first": "我周末常去西湖边散步。",
+    "second": "周末我经常在西湖边上走走。"
+   },
+   {
+    "id": "A-D15",
+    "first": "我在学日语，已经背完五十音了。",
+    "second": "日语我学到五十音图都背下来了。"
+   },
+   {
+    "id": "A-D16",
+    "first": "我姐姐在上海工作。",
+    "second": "我姐在上班，坐标上海。"
+   },
+   {
+    "id": "A-D17",
+    "first": "我的电脑是 MacBook Pro。",
+    "second": "我平时用 MacBook Pro 写东西。"
+   },
+   {
+    "id": "A-D18",
+    "first": "我每晚十一点前睡觉。",
+    "second": "我一般都是十一点前入睡。"
+   },
+   {
+    "id": "A-D19",
+    "first": "我养了一只叫布丁的柯基。",
+    "second": "布丁是我家的柯基。"
+   },
+   {
+    "id": "A-D20",
+    "first": "我的手机套餐是 99 元每月。",
+    "second": "我每个月话费 99 块。"
+   }
+  ]
+ },
+ "groupB": {
+  "paraphrase": [
+   {
+    "id": "B-S01",
+    "message": "我对花生过敏，吃了会起疹子。",
+    "query": "下午茶吃点心有什么要注意的吗？",
+    "targetKeyword": "花生"
+   },
+   {
+    "id": "B-S02",
+    "message": "我最喜欢的水果是榴莲。",
+    "query": "帮我挑点水果吃。",
+    "targetKeyword": "榴莲"
+   },
+   {
+    "id": "B-S03",
+    "message": "我完全不能吃香菜。",
+    "query": "点菜的时候有什么忌口的？",
+    "targetKeyword": "香菜"
+   },
+   {
+    "id": "B-S04",
+    "message": "我是前端工程师，写 React 五年了。",
+    "query": "你是做什么工作的呀？",
+    "targetKeyword": "React"
+   },
+   {
+    "id": "B-S05",
+    "message": "我养了只猫叫汤圆。",
+    "query": "你家有什么宠物吗？",
+    "targetKeyword": "汤圆"
+   },
+   {
+    "id": "B-S06",
+    "message": "我最近在学日语。",
+    "query": "最近有在学习什么新东西吗？",
+    "targetKeyword": "日语"
+   },
+   {
+    "id": "B-S07",
+    "message": "我有乳糖不耐。",
+    "query": "牛奶我能喝吗？",
+    "targetKeyword": "乳糖"
+   },
+   {
+    "id": "B-S08",
+    "message": "我以前住成都。",
+    "query": "你来这座城市之前在哪呀？",
+    "targetKeyword": "成都"
+   },
+   {
+    "id": "B-S09",
+    "message": "我最好的朋友叫阿衡。",
+    "query": "你和谁的关系最好？",
+    "targetKeyword": "阿衡"
+   },
+   {
+    "id": "B-S10",
+    "message": "我不爱社交。",
+    "query": "周末一般都怎么过？",
+    "targetKeyword": "社交"
+   },
+   {
+    "id": "B-S11",
+    "message": "我上班坐地铁。",
+    "query": "你平时怎么通勤的？",
+    "targetKeyword": "地铁"
+   },
+   {
+    "id": "B-S12",
+    "message": "我的生日是 3 月 14 号。",
+    "query": "你什么时候过生日？",
+    "targetKeyword": "14"
+   },
+   {
+    "id": "B-S13",
+    "message": "我对芒果过敏。",
+    "query": "吃水果会不会有什么问题？",
+    "targetKeyword": "芒果"
+   },
+   {
+    "id": "B-S14",
+    "message": "我爸爸是高中老师。",
+    "query": "家里人都是做什么的？",
+    "targetKeyword": "老师"
+   },
+   {
+    "id": "B-S15",
+    "message": "我写 React 五年了。",
+    "query": "你写代码多久了？",
+    "targetKeyword": "React"
+   },
+   {
+    "id": "B-S16",
+    "message": "我周末宁愿自己待着。",
+    "query": "放假的时候你喜欢干嘛？",
+    "targetKeyword": "待"
+   },
+   {
+    "id": "B-S17",
+    "message": "我的猫是三花猫。",
+    "query": "那只猫是什么花色的？",
+    "targetKeyword": "三花"
+   },
+   {
+    "id": "B-S18",
+    "message": "我去年才搬到杭州。",
+    "query": "你来杭州多久了？",
+    "targetKeyword": "去年"
+   },
+   {
+    "id": "B-S19",
+    "message": "我喝的都是无乳糖牛奶。",
+    "query": "牛奶你一般怎么喝？",
+    "targetKeyword": "乳糖"
+   },
+   {
+    "id": "B-S20",
+    "message": "我和阿衡认识十年了。",
+    "query": "你们认识多长时间了？",
+    "targetKeyword": "十年"
+   },
+   {
+    "id": "B-S21",
+    "message": "我每天早上喝一杯美式咖啡。",
+    "query": "早上来杯喝的怎么选",
+    "targetKeyword": "咖啡"
+   },
+   {
+    "id": "B-S22",
+    "message": "我对尘螨过敏，家里常年除螨。",
+    "query": "家里要怎么打扫卫生",
+    "targetKeyword": "尘螨"
+   },
+   {
+    "id": "B-S23",
+    "message": "我练跆拳道三年了，蓝带。",
+    "query": "你有什么运动特长吗",
+    "targetKeyword": "跆拳道"
+   },
+   {
+    "id": "B-S24",
+    "message": "我在苏州工业园区上班。",
+    "query": "你在哪个城市上班呀",
+    "targetKeyword": "苏州"
+   },
+   {
+    "id": "B-S25",
+    "message": "我对乳胶过敏，不能用乳胶手套。",
+    "query": "打扫的时候买什么手套",
+    "targetKeyword": "乳胶"
+   },
+   {
+    "id": "B-S26",
+    "message": "我养了一只鹦鹉，会学舌。",
+    "query": "你家里养了什么呀",
+    "targetKeyword": "鹦鹉"
+   },
+   {
+    "id": "B-S27",
+    "message": "我每个月十五号交房租。",
+    "query": "什么时候交房租呀",
+    "targetKeyword": "房租"
+   },
+   {
+    "id": "B-S28",
+    "message": "我在追《繁花》这部剧。",
+    "query": "最近在看什么剧呢",
+    "targetKeyword": "繁花"
+   },
+   {
+    "id": "B-S29",
+    "message": "我用 notion 记笔记。",
+    "query": "你平时怎么记东西",
+    "targetKeyword": "notion"
+   },
+   {
+    "id": "B-S30",
+    "message": "我对酒精过敏，一滴都不能碰。",
+    "query": "聚会喝点什么好",
+    "targetKeyword": "酒精"
+   }
+  ],
+  "lexical": [
+   {
+    "id": "B-L01",
+    "query": "花生过敏的症状",
+    "targetKeyword": "花生"
+   },
+   {
+    "id": "B-L02",
+    "query": "最喜欢的水果榴莲",
+    "targetKeyword": "榴莲"
+   },
+   {
+    "id": "B-L03",
+    "query": "香菜不能吃",
+    "targetKeyword": "香菜"
+   },
+   {
+    "id": "B-L04",
+    "query": "前端工程师 React",
+    "targetKeyword": "React"
+   },
+   {
+    "id": "B-L05",
+    "query": "猫汤圆",
+    "targetKeyword": "汤圆"
+   },
+   {
+    "id": "B-L06",
+    "query": "学日语",
+    "targetKeyword": "日语"
+   },
+   {
+    "id": "B-L07",
+    "query": "乳糖不耐",
+    "targetKeyword": "乳糖"
+   },
+   {
+    "id": "B-L08",
+    "query": "以前住成都",
+    "targetKeyword": "成都"
+   },
+   {
+    "id": "B-L09",
+    "query": "朋友阿衡",
+    "targetKeyword": "阿衡"
+   },
+   {
+    "id": "B-L10",
+    "query": "坐地铁上班",
+    "targetKeyword": "地铁"
+   },
+   {
+    "id": "B-L11",
+    "query": "美式咖啡喝多了好不好",
+    "targetKeyword": "咖啡"
+   },
+   {
+    "id": "B-L12",
+    "query": "尘螨过敏怎么处理",
+    "targetKeyword": "尘螨"
+   },
+   {
+    "id": "B-L13",
+    "query": "跆拳道难学吗",
+    "targetKeyword": "跆拳道"
+   },
+   {
+    "id": "B-L14",
+    "query": "苏州的工作机会",
+    "targetKeyword": "苏州"
+   },
+   {
+    "id": "B-L15",
+    "query": "乳胶手套过敏",
+    "targetKeyword": "乳胶"
+   },
+   {
+    "id": "B-L16",
+    "query": "鹦鹉好养吗",
+    "targetKeyword": "鹦鹉"
+   },
+   {
+    "id": "B-L17",
+    "query": "交房租的日子",
+    "targetKeyword": "房租"
+   },
+   {
+    "id": "B-L18",
+    "query": "繁花大结局",
+    "targetKeyword": "繁花"
+   },
+   {
+    "id": "B-L19",
+    "query": "酒精过敏的人喝酒",
+    "targetKeyword": "酒精"
+   },
+   {
+    "id": "B-L20",
+    "query": "花生过敏要注意什么",
+    "targetKeyword": "花生"
+   },
+   {
+    "id": "B-L21",
+    "query": "学日语的方法",
+    "targetKeyword": "日语"
+   },
+   {
+    "id": "B-L22",
+    "query": "乳糖不耐怎么办",
+    "targetKeyword": "乳糖"
+   },
+   {
+    "id": "B-L23",
+    "query": "地铁通勤累不累",
+    "targetKeyword": "地铁"
+   },
+   {
+    "id": "B-L24",
+    "query": "过生日送什么礼物",
+    "targetKeyword": "生日"
+   },
+   {
+    "id": "B-L25",
+    "query": "吃芒果会过敏吗",
+    "targetKeyword": "芒果"
+   }
+  ],
+  "noise": [
+   {
+    "id": "B-N01",
+    "query": "今天天气怎么样"
+   },
+   {
+    "id": "B-N02",
+    "query": "推荐一部电影"
+   },
+   {
+    "id": "B-N03",
+    "query": "股票行情分析"
+   },
+   {
+    "id": "B-N04",
+    "query": "今天空气好不好"
+   },
+   {
+    "id": "B-N05",
+    "query": "帮我查个快递"
+   },
+   {
+    "id": "B-N06",
+    "query": "彩票中奖号码"
+   },
+   {
+    "id": "B-N07",
+    "query": "怎么烫头发好看"
+   },
+   {
+    "id": "B-N08",
+    "query": "附近有加油站吗"
+   },
+   {
+    "id": "B-N09",
+    "query": "明天会下雨吗"
+   },
+   {
+    "id": "B-N10",
+    "query": "热搜榜有什么"
+   },
+   {
+    "id": "B-N11",
+    "query": "宇宙有多大"
+   },
+   {
+    "id": "B-N12",
+    "query": "怎么给平板消毒"
+   },
+   {
+    "id": "B-N13",
+    "query": "地球离月亮多远"
+   },
+   {
+    "id": "B-N14",
+    "query": "推荐个旅游地方"
+   },
+   {
+    "id": "B-N15",
+    "query": "怎么煮溏心蛋"
+   },
+   {
+    "id": "B-N16",
+    "query": "键盘怎么清洁"
+   },
+   {
+    "id": "B-N17",
+    "query": "股票开户流程"
+   },
+   {
+    "id": "B-N18",
+    "query": "怎么报考驾校"
+   },
+   {
+    "id": "B-N19",
+    "query": "化妆品怎么选"
+   },
+   {
+    "id": "B-N20",
+    "query": "股票和基金区别"
+   },
+   {
+    "id": "B-N21",
+    "query": "帮我翻译个单词"
+   },
+   {
+    "id": "B-N22",
+    "query": "怎么瘦肚子"
+   },
+   {
+    "id": "B-N23",
+    "query": "今晚有什么比赛"
+   },
+   {
+    "id": "B-N24",
+    "query": "怎么养多肉"
+   },
+   {
+    "id": "B-N25",
+    "query": "天气预报准不准"
+   }
+  ]
+ },
+ "groupC": {
+  "s2": [
+   {
+    "id": "C-S01",
+    "message": "我在服用华法林抗凝，每周要去验血。",
+    "expectKeywords": [
+     "华法林"
+    ]
+   },
+   {
+    "id": "C-S02",
+    "message": "我血糖有点高，医生让我控制饮食。",
+    "expectKeywords": [
+     "血糖"
+    ]
+   },
+   {
+    "id": "C-S03",
+    "message": "我每天要打胰岛素。",
+    "expectKeywords": [
+     "胰岛素"
+    ]
+   },
+   {
+    "id": "C-S04",
+    "message": "我最近确诊了中度抑郁，在服药。",
+    "expectKeywords": [
+     "抑郁"
+    ]
+   },
+   {
+    "id": "C-S05",
+    "message": "我上个月做了个小手术，还在恢复期。",
+    "expectKeywords": [
+     "手术"
+    ]
+   },
+   {
+    "id": "C-S06",
+    "message": "我月薪大概一万五。",
+    "expectKeywords": [
+     "一万五"
+    ]
+   },
+   {
+    "id": "C-S07",
+    "message": "我信用卡欠了几万块还没还清。",
+    "expectKeywords": [
+     "信用卡"
+    ]
+   },
+   {
+    "id": "C-S08",
+    "message": "我的银行卡被冻结了，牵扯到一个案子。",
+    "expectKeywords": [
+     "冻结"
+    ]
+   },
+   {
+    "id": "C-S09",
+    "message": "我血压偏高，150 95 那种。",
+    "expectKeywords": [
+     "血压"
+    ]
+   },
+   {
+    "id": "C-S10",
+    "message": "我刚做完化疗，头发都掉了。",
+    "expectKeywords": [
+     "化疗"
+    ]
+   },
+   {
+    "id": "C-S11",
+    "message": "我的身份证过期了正在补办。",
+    "expectKeywords": [
+     "身份证"
+    ]
+   },
+   {
+    "id": "C-S12",
+    "message": "我家里矛盾挺严重的，在考虑搬出去住。",
+    "expectKeywords": [
+     "矛盾"
+    ]
+   },
+   {
+    "id": "C-S13",
+    "message": "我在吃降压药物，一天一片。",
+    "expectKeywords": [
+     "降压"
+    ]
+   },
+   {
+    "id": "C-S14",
+    "message": "我体检诊断出了甲状腺结节。",
+    "expectKeywords": [
+     "甲状腺"
+    ]
+   },
+   {
+    "id": "C-S15",
+    "message": "我在还房贷和消费贷款，每月八千。",
+    "expectKeywords": [
+     "贷款"
+    ]
+   },
+   {
+    "id": "C-S16",
+    "message": "我在网贷平台借了五千。",
+    "expectKeywords": [
+     "网贷"
+    ]
+   },
+   {
+    "id": "C-S17",
+    "message": "我在准备离婚，在走法律程序。",
+    "expectKeywords": [
+     "离婚"
+    ]
+   },
+   {
+    "id": "C-S18",
+    "message": "我爸因为合同纠纷吃了官司。",
+    "expectKeywords": [
+     "官司"
+    ]
+   },
+   {
+    "id": "C-S19",
+    "message": "我在治疗幽门螺旋杆菌，医生开的药物。",
+    "expectKeywords": [
+     "幽门"
+    ]
+   },
+   {
+    "id": "C-S20",
+    "message": "我在服用文拉法辛控制情绪。",
+    "expectKeywords": [
+     "文拉法辛"
+    ]
+   },
+   {
+    "id": "C-S21",
+    "message": "我的支付宝账号被司法冻结了。",
+    "expectKeywords": [
+     "冻结"
+    ]
+   },
+   {
+    "id": "C-S22",
+    "message": "我在复诊情绪问题，每周做心理咨询。",
+    "expectKeywords": [
+     "复诊"
+    ]
+   },
+   {
+    "id": "C-S23",
+    "message": "我买了重疾险，还配了医疗险做补充。",
+    "expectKeywords": [
+     "医疗"
+    ]
+   },
+   {
+    "id": "C-S24",
+    "message": "肝指标不好，我在戒酒，医生让定期复查。",
+    "expectKeywords": [
+     "复查"
+    ]
+   }
+  ],
+  "forget": [
+   {
+    "id": "C-F01",
+    "message": "我的手机号是 13800001111。",
+    "query": "我手机号多少来着",
+    "targetKeyword": "13800001111"
+   },
+   {
+    "id": "C-F02",
+    "message": "我在学烘焙，上周做了个戚风蛋糕。",
+    "query": "我烘焙学得怎么样了",
+    "targetKeyword": "戚风"
+   },
+   {
+    "id": "C-F03",
+    "message": "我的工作邮箱是 dev.co@company.cn。",
+    "query": "我工作邮箱是什么",
+    "targetKeyword": "dev.co"
+   },
+   {
+    "id": "C-F04",
+    "message": "我老家是温州的。",
+    "query": "我老家在哪来着",
+    "targetKeyword": "温州"
+   },
+   {
+    "id": "C-F05",
+    "message": "我最近换了把机械键盘，Keychron K3。",
+    "query": "我用的是什么键盘",
+    "targetKeyword": "Keychron"
+   },
+   {
+    "id": "C-F06",
+    "message": "我家附近有个乐刻健身房，我常去。",
+    "query": "我在哪健身来着",
+    "targetKeyword": "乐刻"
+   },
+   {
+    "id": "C-F07",
+    "message": "我会做饭，拿手菜是红烧肉。",
+    "query": "我拿手菜是什么",
+    "targetKeyword": "红烧肉"
+   },
+   {
+    "id": "C-F08",
+    "message": "我有辆电动车，通勤用的。",
+    "query": "我有辆什么车",
+    "targetKeyword": "电动车"
+   },
+   {
+    "id": "C-F09",
+    "message": "我的备用邮箱是 test.mozart@163.com。",
+    "query": "我备用邮箱是多少来着",
+    "targetKeyword": "test.mozart"
+   },
+   {
+    "id": "C-F10",
+    "message": "我家 WiFi 名叫 TPLINK-Home。",
+    "query": "我家 WiFi 叫什么来着",
+    "targetKeyword": "TPLINK"
+   },
+   {
+    "id": "C-F11",
+    "message": "我在饿了么的会员到本月底到期。",
+    "query": "我外卖会员什么时候到期",
+    "targetKeyword": "饿了么"
+   },
+   {
+    "id": "C-F12",
+    "message": "我的公积金在杭州缴存。",
+    "query": "我的公积金在哪缴存",
+    "targetKeyword": "公积金"
+   },
+   {
+    "id": "C-F13",
+    "message": "我驾照 2027 年到期。",
+    "query": "我驾照什么时候到期",
+    "targetKeyword": "2027"
+   },
+   {
+    "id": "C-F14",
+    "message": "我在得到 app 买了三门课。",
+    "query": "我在哪个平台买过课",
+    "targetKeyword": "得到"
+   },
+   {
+    "id": "C-F15",
+    "message": "我的工牌工号是 A1024。",
+    "query": "我的工号是多少来着",
+    "targetKeyword": "A1024"
+   },
+   {
+    "id": "C-F16",
+    "message": "我常用 keep 记录跑步。",
+    "query": "我用什么记录跑步",
+    "targetKeyword": "keep"
+   },
+   {
+    "id": "C-F17",
+    "message": "我在书旗小说上充了会员。",
+    "query": "我看小说用什么软件",
+    "targetKeyword": "书旗"
+   },
+   {
+    "id": "C-F18",
+    "message": "我家路由器是华硕的。",
+    "query": "我家路由器什么牌子",
+    "targetKeyword": "华硕"
+   }
+  ],
+  "arbitration": [
+   {
+    "id": "C-A01",
+    "first": "我对花生过敏。",
+    "second": "其实我对花生不过敏了，现在能吃了。",
+    "query": "花生能不能吃",
+    "targetKeyword": "能吃"
+   },
+   {
+    "id": "C-A02",
+    "first": "我最喜欢的水果是榴莲。",
+    "second": "我最喜欢的水果变了，现在是西瓜。",
+    "query": "我最喜欢的水果是什么",
+    "targetKeyword": "西瓜"
+   },
+   {
+    "id": "C-A03",
+    "first": "我现在住在杭州。",
+    "second": "我搬家了，现在住在上海。",
+    "query": "我现在住哪个城市",
+    "targetKeyword": "上海"
+   },
+   {
+    "id": "C-A04",
+    "first": "我的工作是前端开发。",
+    "second": "我转行了，现在在做产品经理。",
+    "query": "我现在做什么工作",
+    "targetKeyword": "产品"
+   },
+   {
+    "id": "C-A05",
+    "first": "我的猫叫汤圆。",
+    "second": "猫改名了，现在叫麻薯。",
+    "query": "我的猫叫什么名字",
+    "targetKeyword": "麻薯"
+   },
+   {
+    "id": "C-A06",
+    "first": "我最喜欢的电影是《盗梦空间》。",
+    "second": "我现在最喜欢的电影换成了《星际穿越》。",
+    "query": "你喜欢什么电影",
+    "targetKeyword": "星际穿越"
+   },
+   {
+    "id": "C-A07",
+    "first": "我家住在北京朝阳区。",
+    "second": "我家搬到北京海淀区了。",
+    "query": "你家住在哪个区",
+    "targetKeyword": "海淀"
+   },
+   {
+    "id": "C-A08",
+    "first": "我的宠物狗叫大黄。",
+    "second": "我的狗改叫旺财了。",
+    "query": "你家狗叫什么名字",
+    "targetKeyword": "旺财"
+   },
+   {
+    "id": "C-A09",
+    "first": "我常用的邮箱是 QQ 邮箱。",
+    "second": "我改用 gmail 了。",
+    "query": "你用什么邮箱",
+    "targetKeyword": "gmail"
+   },
+   {
+    "id": "C-A10",
+    "first": "我在学吉他。",
+    "second": "吉他放下了，我在学尤克里里。",
+    "query": "你现在在学什么乐器",
+    "targetKeyword": "尤克里里"
+   },
+   {
+    "id": "C-A11",
+    "first": "我最爱吃的菜是红烧肉。",
+    "second": "现在最爱吃的是糖醋排骨。",
+    "query": "你最爱吃什么菜",
+    "targetKeyword": "糖醋"
+   },
+   {
+    "id": "C-A12",
+    "first": "我每天喝三杯水。",
+    "second": "我现在每天喝八杯水。",
+    "query": "你每天喝多少水",
+    "targetKeyword": "八杯"
+   },
+   {
+    "id": "C-A13",
+    "first": "我的健身卡在乐刻。",
+    "second": "我换了健身房，现在在超级猩猩。",
+    "query": "你在哪家健身房",
+    "targetKeyword": "超级猩猩"
+   },
+   {
+    "id": "C-A14",
+    "first": "我打印机是惠普的。",
+    "second": "打印机换成兄弟的了。",
+    "query": "你家打印机什么牌子",
+    "targetKeyword": "兄弟"
+   },
+   {
+    "id": "C-A15",
+    "first": "我的指甲油是红色的。",
+    "second": "现在涂的是蓝色的。",
+    "query": "你涂什么颜色的指甲油",
+    "targetKeyword": "蓝色"
+   }
+  ],
+  "confirm": [
+   {
+    "id": "C-K01",
+    "message": "我在服用华法林抗凝药。",
+    "query": "我在吃什么药",
+    "targetKeyword": "华法林",
+    "expectKeywords": [
+     "华法林"
+    ]
+   },
+   {
+    "id": "C-K02",
+    "message": "我血糖偏高，在饮食控制。",
+    "query": "我血糖情况怎么样",
+    "targetKeyword": "血糖",
+    "expectKeywords": [
+     "血糖"
+    ]
+   },
+   {
+    "id": "C-K03",
+    "message": "我每天打胰岛素控制。",
+    "query": "胰岛素的事你还记得吗",
+    "targetKeyword": "胰岛素",
+    "expectKeywords": [
+     "胰岛素"
+    ]
+   },
+   {
+    "id": "C-K04",
+    "message": "我确诊了中度抑郁在服药。",
+    "query": "我心理健康方面的情况",
+    "targetKeyword": "抑郁",
+    "expectKeywords": [
+     "抑郁"
+    ]
+   },
+   {
+    "id": "C-K05",
+    "message": "我上个月做了个小手术。",
+    "query": "我手术的事你还记得吗",
+    "targetKeyword": "手术",
+    "expectKeywords": [
+     "手术"
+    ]
+   },
+   {
+    "id": "C-K06",
+    "message": "我在用药控制胃酸，吃的奥美拉唑。",
+    "query": "我在吃什么胃药",
+    "targetKeyword": "奥美拉唑",
+    "expectKeywords": [
+     "奥美拉唑"
+    ]
+   },
+   {
+    "id": "C-K07",
+    "message": "我在做医疗美容，打的玻尿酸。",
+    "query": "我做过什么医美项目",
+    "targetKeyword": "玻尿酸",
+    "expectKeywords": [
+     "玻尿酸"
+    ]
+   },
+   {
+    "id": "C-K08",
+    "message": "我的信用卡账单日是每月五号。",
+    "query": "我的账单日是什么时候",
+    "targetKeyword": "账单日",
+    "expectKeywords": [
+     "账单日"
+    ]
+   },
+   {
+    "id": "C-K09",
+    "message": "我在复诊抑郁症，两周一次心理咨询。",
+    "query": "我有没有在看心理咨询",
+    "targetKeyword": "心理咨询",
+    "expectKeywords": [
+     "心理咨询"
+    ]
+   },
+   {
+    "id": "C-K10",
+    "message": "我在用胰岛素泵控制血糖。",
+    "query": "我血糖是怎么控制的",
+    "targetKeyword": "胰岛素泵",
+    "expectKeywords": [
+     "胰岛素泵"
+    ]
+   },
+   {
+    "id": "C-K11",
+    "message": "我还在还房贷和消费贷款。",
+    "query": "我的贷款还要还多久",
+    "targetKeyword": "贷款",
+    "expectKeywords": [
+     "贷款"
+    ]
+   },
+   {
+    "id": "C-K12",
+    "message": "我在用抗抑郁药物舍曲林。",
+    "query": "我在吃什么药物",
+    "targetKeyword": "舍曲林",
+    "expectKeywords": [
+     "舍曲林"
+    ]
+   },
+   {
+    "id": "C-K13",
+    "message": "我的体检诊断出了幽门螺旋杆菌阳性。",
+    "query": "我体检有什么问题",
+    "targetKeyword": "幽门",
+    "expectKeywords": [
+     "幽门"
+    ]
+   },
+   {
+    "id": "C-K14",
+    "message": "我在网贷还有三千没还清。",
+    "query": "我还有什么没还清",
+    "targetKeyword": "网贷",
+    "expectKeywords": [
+     "网贷"
+    ]
+   },
+   {
+    "id": "C-K15",
+    "message": "我在打离婚官司。",
+    "query": "我官司进展怎么样",
+    "targetKeyword": "离婚",
+    "expectKeywords": [
+     "离婚"
+    ]
+   }
+  ]
+ }
 }
