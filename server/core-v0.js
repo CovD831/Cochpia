@@ -721,9 +721,11 @@ export function createCoreV0TurnService({
       // R-014: snapshot recent user messages AT EVENT TIME (the semantic
       // point of the event) so the async drain can resolve anaphora without
       // time-travel queries. Flag-gated; default off = no metadata change.
+      // The snapshot is already session-scoped: snapshot.messages IS the
+      // session's message array, not a map keyed by session id.
       const contextTurns = Number(process.env.MEMORY_EXTRACT_CONTEXT_TURNS) || 0;
       const contextSnapshot = contextTurns > 0
-        ? (snapshot.messages?.[turn.applicationSessionId] || [])
+        ? (Array.isArray(snapshot.messages) ? snapshot.messages : [])
             .filter(item => item.role === 'user' && item.id !== turn.applicationMessageId && typeof item.content === 'string' && item.content.trim())
             .slice(-contextTurns)
             .map(item => `user: ${item.content.slice(0, 120)}`)

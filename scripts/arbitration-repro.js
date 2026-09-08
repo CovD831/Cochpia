@@ -19,6 +19,7 @@ const context = { tenantId: 'eval-tenant', subjectUserId: 'eval-user', actorType
 
 execFileSync('psql', ['-q', '-d', 'postgres', '-c', `DROP DATABASE IF EXISTS ${DB_NAME}`]);
 execFileSync('psql', ['-q', '-d', 'postgres', '-c', `CREATE DATABASE ${DB_NAME}`]);
+process.env.MEMORY_EXTRACT_CONTEXT_TURNS = process.env.MEMORY_EXTRACT_CONTEXT_TURNS || '4';
 process.env.CORE_V0_MEMORY_PIPELINE_ENABLED = 'true';
 process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS = '30000';
 process.env.MEMORY_HYBRID_RETRIEVAL = 'true';
@@ -44,13 +45,15 @@ try {
     await service.handleTurn({ body: { sessionId: 's-repro', message: first, channel: '默认' }, headerIdempotencyKey: `r-${id}-1-${randomUUID()}` });
     console.log('drain1:', JSON.stringify(await drainExtraction()));
     await service.handleTurn({ body: { sessionId: 's-repro', message: second, channel: '默认' }, headerIdempotencyKey: `r-${id}-2-${randomUUID()}` });
+    const ev2 = (await pool.query("SELECT metadata FROM raw_events WHERE content LIKE $1 ORDER BY occurred_at DESC LIMIT 1", [`%${second.slice(3, 8)}%`])).rows[0];
+    console.log('event2 metadata:', JSON.stringify(ev2?.metadata).slice(0, 300));
     console.log('drain2:', JSON.stringify(await drainExtraction()));
     const rows = (await pool.query(`
       SELECT a.status, a.canonical_key, v.content, v.created_at
       FROM memory_assertions a LEFT JOIN assertion_versions v ON v.id = a.current_version_id
       ORDER BY v.created_at`)).rows;
     for (const row of rows) console.log(`  [${row.status}] ${String(row.content).slice(0, 44)}`);
-    const events = (await pool.query(`SELECT action, left(coalesce(detail,''),160) AS d, created_at FROM memory_audit_events ORDER BY created_at`)).rows;
+    const events = (await pool.query(`SELECT action, left(coalesce(details::text,''),200) AS d, created_at FROM memory_audit_events ORDER BY created_at`)).rows;
     for (const e of events.slice(-6)) console.log(`  audit: ${e.action} ${e.d}`);
   }
 } catch (error) {

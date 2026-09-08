@@ -135,8 +135,34 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
     return { ...config, async generate() { throw new Error(config.error); }, async *stream() { throw new Error(config.error); } };
   }
 
-  const generate = async ({ message, recalled = [], runtimeContext = null, signal: externalSignal } = {}) => {
+  const generate = async ({ message, recalled = [], runtimeContext = null, signal: externalSignal, raw = false } = {}) => {
     if (!config.ready) throw new Error(config.error);
+    // raw mode: deterministic infrastructure calls (memory extraction, AUDN
+    // arbitration) must not wear the companion persona or ride on
+    // temperature 0.7 - a judging prompt wrapped in "你是 Cochpia..." with
+    // creative temperature produced verdicts that disagree with the same
+    // prompt run bare (R-014 finding). raw = no system prompt, temp 0.
+    if (raw) {
+      const rawController = new AbortController();
+      const rawTimeout = setTimeout(() => rawController.abort(), Number(process.env.MODEL_TIMEOUT_MS || 30000));
+      const rawSignal = externalSignal || rawController.signal;
+      let rawResponse;
+      try {
+        if (config.protocol === 'openai-compatible') {
+          rawResponse = await fetch(config.apiURL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
+            body: JSON.stringify({ model: config.model, stream: false, temperature: 0, messages: [{ role: 'user', content: message }] }), signal: rawSignal
+          });
+          const rawPayload = await rawResponse.json();
+          if (!rawResponse.ok) throw modelRequestError(rawResponse, rawPayload);
+          return readTextContent(rawPayload?.choices?.[0]?.message?.content);
+        }
+        throw new Error(`raw generate is not supported for protocol ${config.protocol}`);
+      } finally {
+        clearTimeout(rawTimeout);
+      }
+    }
     const { system, user } = composePrompts({ message, recalled, runtimeContext });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Number(process.env.MODEL_TIMEOUT_MS || 30000));
