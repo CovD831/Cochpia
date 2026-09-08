@@ -306,6 +306,27 @@ test('model extractor demands the fixed JSON schema', async () => {
     /MEMORY_EXTRACTION_MALFORMED_OUTPUT/);
 });
 
+test('R-014 context snapshot: flag off ignores metadata, flag on lets the model see the antecedent', async () => {
+  let seenPrompt = '';
+  const model = { generate: async ({ message }) => { seenPrompt = message; return '{"candidates":[{"content":"用户的指甲油是蓝色的","key":"nail_color","memoryType":"fact","assertionType":"observed_fact"}]}'; } };
+  const event = {
+    content: '现在涂的是蓝色的',
+    metadata: { context_snapshot: ['user: 我的指甲油是红色的。'] }
+  };
+  // Flag off (default): the context block must NOT enter the prompt even
+  // when the event carries a snapshot.
+  await createModelExtractor(model, { contextTurns: 0 })(event);
+  assert.ok(!seenPrompt.includes('对话上下文'), 'flag off must keep the prompt context-free');
+  // Flag on: the snapshot lines reach the prompt, marked reference-only.
+  await createModelExtractor(model, { contextTurns: 2 })(event);
+  assert.ok(seenPrompt.includes('对话上下文'), 'flag on adds the context block');
+  assert.ok(seenPrompt.includes('我的指甲油是红色的'), 'the antecedent line is visible to the model');
+  assert.ok(seenPrompt.includes('不要从中提取事实'), 'context is marked reference-only');
+  // An event without a snapshot stays clean under the flag.
+  await createModelExtractor(model, { contextTurns: 2 })({ content: '现在涂的是蓝色的' });
+  assert.ok(!seenPrompt.includes('对话上下文'), 'missing snapshot degrades to the context-free prompt');
+});
+
 test('Core message deletion persists across hydration and keeps the turn', async () => {
   const { createCoreV0PostgresFixture } = await import('./core-v0-postgres-fixture.js');
   const { CORE_V0_PRODUCTION_TABLES, MEMORY_PRODUCTION_TABLES, CORE_V0_PRODUCTION_REQUIRED_COLUMNS, MEMORY_PRODUCTION_REQUIRED_COLUMNS } =

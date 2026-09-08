@@ -96,8 +96,15 @@ export function createDeterministicExtractor({ keywords = ['过敏', '记住', '
 // health/finance facts about the user themself are explicitly in scope -
 // the R-010 probe showed the model sporadically refuses those (returns
 // {"candidates":[]}) when the prompt leaves their memorability ambiguous.
-export function createModelExtractor(model) {
+export function createModelExtractor(model, { contextTurns = 0 } = {}) {
   return async function extract(rawEvent) {
+    // R-014: anaphoric updates ("现在涂的是蓝色的") carry no stable fact
+    // without their antecedent. When enabled and the event carries a
+    // turn-time context snapshot, let the model see it for reference ONLY -
+    // candidates still come from the message itself.
+    const snapshot = contextTurns > 0
+      ? (Array.isArray(rawEvent?.metadata?.context_snapshot) ? rawEvent.metadata.context_snapshot : []).slice(-contextTurns).filter(line => typeof line === 'string' && line.trim())
+      : [];
     const prompt = [
       '从下面的用户消息中提取 0 到 3 条值得长期记住的稳定事实，只输出 JSON。',
       '值得记住：身份、长期偏好、健康与用药、财务与证件、重要关系、关键经历。用户本人的健康/财务/证件信息属于用户自己的记忆，系统有分级治理流程保护，必须正常提取，不要因话题敏感而返回空。',
@@ -107,6 +114,7 @@ export function createModelExtractor(model) {
       '示例输入「我对花生过敏」→ {"candidates":[{"content":"用户对花生过敏","key":"allergy_peanut","memoryType":"fact","assertionType":"observed_fact"}]}',
       '示例输入「我最近确诊了中度抑郁，在服药」→ {"candidates":[{"content":"用户确诊中度抑郁，正在服药","key":"health_depression","memoryType":"fact","assertionType":"observed_fact"}]}',
       '示例输入「今天天气真不错啊」→ {"candidates":[]}',
+      ...(snapshot.length ? ['对话上下文（仅用于理解指代和省略，不要从中提取事实）：', ...snapshot] : []),
       '不要输出任何其他文字。',
       `用户消息: ${String(rawEvent.content || '').slice(0, 500)}`
     ].join('\n');

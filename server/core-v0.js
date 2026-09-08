@@ -718,6 +718,16 @@ export function createCoreV0TurnService({
       if (reconciled?.status === 'failed') {
         throw new CoreV0Error(reconciled.code || 'MEMORY_RAW_EVENT_FAILED', 'Memory raw event append failed', { status: reconciled.httpStatus || 503, retryable: true, unknown: Boolean(reconciled.unknown) });
       }
+      // R-014: snapshot recent user messages AT EVENT TIME (the semantic
+      // point of the event) so the async drain can resolve anaphora without
+      // time-travel queries. Flag-gated; default off = no metadata change.
+      const contextTurns = Number(process.env.MEMORY_EXTRACT_CONTEXT_TURNS) || 0;
+      const contextSnapshot = contextTurns > 0
+        ? (snapshot.messages?.[turn.applicationSessionId] || [])
+            .filter(item => item.role === 'user' && item.id !== turn.applicationMessageId && typeof item.content === 'string' && item.content.trim())
+            .slice(-contextTurns)
+            .map(item => `user: ${item.content.slice(0, 120)}`)
+        : undefined;
       const result = await memoryPort.appendRawEvent({
         context,
         memorySessionId: turn.memorySessionId,
@@ -735,7 +745,8 @@ export function createCoreV0TurnService({
             producer: 'companion-core',
             correlation_id: context.correlationId || turn.turnId,
             turn_id: turn.turnId,
-            channel: turn.channel
+            channel: turn.channel,
+            ...(contextSnapshot ? { context_snapshot: contextSnapshot } : {})
           }
         }
       });

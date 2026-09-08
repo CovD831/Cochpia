@@ -341,7 +341,7 @@ export async function createCoreV0ProductionAdapter({
   const memoryPort = createPostgresMemoryPort({ repository, context, retryAttempts, moduleOptions: effectiveModuleOptions });
   // Extraction injection point: an explicit extractor wins; production falls
   // back to the model-backed extractor and skips silently on mock providers.
-  const effectiveExtractor = extractor || (provider === 'mock' ? null : createModelExtractor(model));
+  const effectiveExtractor = extractor || (provider === 'mock' ? null : createModelExtractor(model, { contextTurns: Number(process.env.MEMORY_EXTRACT_CONTEXT_TURNS) || 0 }));
   // R-007a AUDN injection point: same pattern. Null auditor = ADD-only legacy
   // behavior (flag parity preserved for existing tests and the proof).
   const effectiveAuditor = auditor || (provider === 'mock' ? null : createModelAuditor(model));
