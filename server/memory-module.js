@@ -168,9 +168,21 @@ function detectS2(content) {
 function sanitizeMetadata(metadata) {
   if (metadata == null) return {};
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new MemoryModuleError('INVALID_METADATA', 'metadata must be an object');
-  const allowed = new Set(['language', 'channel', 'source_label', 'client_revision', 'turn_id', 'sequence_no', 'producer', 'correlation_id']);
+  const allowed = new Set(['language', 'channel', 'source_label', 'client_revision', 'turn_id', 'sequence_no', 'producer', 'correlation_id', 'context_snapshot']);
   if (Object.keys(metadata).some(key => !allowed.has(key))) throw new MemoryModuleError('INVALID_METADATA', 'metadata contains unsupported fields');
-  return Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, normalizeText(value, 200)]));
+  return Object.fromEntries(Object.entries(metadata).map(([key, value]) => {
+    // R-014: the turn-time context snapshot is the one array-valued metadata
+    // field - validated (bounded count, strings, bounded length) but kept
+    // structured so the extraction drain can render it for anaphora
+    // resolution. Stored in the metadata jsonb column; no schema change.
+    if (key === 'context_snapshot') {
+      if (!Array.isArray(value) || value.length > 8 || value.some(line => typeof line !== 'string' || !line.trim() || line.length > 200)) {
+        throw new MemoryModuleError('INVALID_METADATA', 'metadata.context_snapshot must be at most 8 non-empty strings of 200 characters');
+      }
+      return [key, value];
+    }
+    return [key, normalizeText(value, 200)];
+  }));
 }
 
 function maxSensitivity(a, b) {
