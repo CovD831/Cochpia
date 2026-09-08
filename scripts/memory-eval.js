@@ -13,8 +13,16 @@ import {
 } from '../server/core-v0-production.js';
 import { createMemoryModule } from '../server/memory-module.js';
 
+// The ambient shell may not export USER (pg defaults its user from it), so
+// resolve the PG user the same way libpq does instead of trusting the env.
+const resolvePgUser = () => {
+  if (process.env.PGUSER) return process.env.PGUSER;
+  return execFileSync('psql', ['-qtAc', 'select current_user', '-d', 'postgres'], { encoding: 'utf8' }).trim();
+};
+
+
 const DB_NAME = 'cochpia_memory_eval';
-const CONNECTION = `postgresql://localhost:5432/${DB_NAME}`;
+const CONNECTION = `postgresql://${resolvePgUser()}@localhost:5432/${DB_NAME}`;
 const cases = JSON.parse(readFileSync(new URL('./eval/eval-cases.json', import.meta.url), 'utf8'));
 
 const context = {
@@ -27,6 +35,7 @@ const context = {
 };
 
 const evidence = { startedAt: new Date().toISOString(), cases: cases.meta, metrics: {}, failures: [] };
+let evalAborted = false;
 const fail = (caseId, check, detail) => evidence.failures.push({ caseId, check, detail });
 // R-011 harness fix: metrics must count failing cases by CHECK, not by caseId
 // prefix (the R-010 version matched `caseId.startsWith('s2_')` against ids
@@ -327,6 +336,13 @@ try {
   }
   evidence.metrics.confirm_visibility = fmt(cases.groupC.confirm.length - failedCasesFor('confirm_'), cases.groupC.confirm.length);
   console.log(`[组C 治理] confirm=${evidence.metrics.confirm_visibility}`);
+} catch (error) {
+  // The finally below calls process.exit, which would otherwise swallow the
+  // thrown error and report a fake "0 failures" green run (this actually
+  // happened: a PG auth failure surfaced as an empty-metrics summary).
+  evalAborted = true;
+  evidence.abortReason = String(error?.stack || error);
+  console.error(`[eval] ABORTED: ${evidence.abortReason}`);
 } finally {
   clearInterval(watchdog);
   logPhase('finally');
@@ -354,5 +370,5 @@ try {
   } catch (error) {
     console.log(`评测库清理失败（可手动 DROP DATABASE ${DB_NAME}）: ${error?.message}`);
   }
-  process.exit(0);
+  process.exit(evalAborted ? 1 : 0);
 }

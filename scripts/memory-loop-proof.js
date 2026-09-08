@@ -32,8 +32,16 @@ import {
 import { createDeterministicExtractor } from '../server/memory-extraction.js';
 import { loadCoreV0SessionMessages } from '../server/core-v0-postgres.js';
 
+// The ambient shell may not export USER (pg defaults its user from it), so
+// resolve the PG user the same way libpq does instead of trusting the env.
+const resolvePgUser = () => {
+  if (process.env.PGUSER) return process.env.PGUSER;
+  return execFileSync('psql', ['-qtAc', 'select current_user', '-d', 'postgres'], { encoding: 'utf8' }).trim();
+};
+
+
 const DB_NAME = 'cochpia_loop_proof';
-const CONNECTION = `postgresql://localhost:5432/${DB_NAME}`;
+const CONNECTION = `postgresql://${resolvePgUser()}@localhost:5432/${DB_NAME}`;
 const context = {
   tenantId: 'loop-proof-tenant',
   subjectUserId: 'loop-proof-user',
