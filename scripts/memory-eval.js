@@ -74,7 +74,7 @@ execFileSync('psql', ['-q', '-d', 'postgres', '-c', `DROP DATABASE IF EXISTS ${D
 execFileSync('psql', ['-q', '-d', 'postgres', '-c', `CREATE DATABASE ${DB_NAME}`]);
 
 process.env.CORE_V0_MEMORY_PIPELINE_ENABLED = 'true';
-process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS = '12000';
+process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS = '30000';
 process.env.MEMORY_HYBRID_RETRIEVAL = 'true';
 // R-011: the eval judges R-008 latest-wins arbitration, which is flag-gated -
 // without this the arbitration cases can only ever report conflict.
@@ -181,7 +181,8 @@ try {
     featureFlags: { hybridRetrieval: true, conflictLatestWins: true },
     embeddingGateway: probeGateway,
     embeddingTimeoutMs: 2000,
-    vectorMinScore: Number(process.env.MEMORY_VECTOR_MIN_SCORE) || 0.55
+    vectorMinScore: Number(process.env.MEMORY_VECTOR_MIN_SCORE) || 0.55,
+    lexicalFloorRatio: Number(process.env.MEMORY_LEXICAL_FLOOR_RATIO) || 0.5
   });
   const rawRetrieve = async query => {
     const result = await probeMemory.retrieveAsync(context, { query, purpose: 'answer_user_query' });

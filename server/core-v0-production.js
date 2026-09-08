@@ -328,7 +328,15 @@ export async function createCoreV0ProductionAdapter({
     // R-011 precision floor for the vector leg of hybrid retrieval. The
     // calibrated bge-m3 noise floor is 0.55 (unrelated query pairs max out at
     // 0.546); 0 keeps legacy behavior when unset.
-    vectorMinScore: parseScoreThreshold(process.env.MEMORY_VECTOR_MIN_SCORE, 0.55)
+    vectorMinScore: parseScoreThreshold(process.env.MEMORY_VECTOR_MIN_SCORE, 0.55),
+    // R-012c lexical relative floor: long-tail bigram coincidences below 30%
+    // of the top BM25 score are dropped before fusion (phase3b showed the
+    // lexical channel saturating the fused ranking at depth).
+    lexicalFloorRatio: parseScoreThreshold(process.env.MEMORY_LEXICAL_FLOOR_RATIO, 0.5),
+    // R-012c decay re-weight: flag-gated OFF by default. 3b measured ranking
+    // as depth-stable (needle hit@1=100% at 2000), so decay only becomes
+    // valuable once per-memory access tracking exists.
+    decay: { enabled: isTruthy(process.env.MEMORY_DECAY_REWEIGHT), halfLifeDays: 14, weight: 0.3 }
   };
   const memoryPort = createPostgresMemoryPort({ repository, context, retryAttempts, moduleOptions: effectiveModuleOptions });
   // Extraction injection point: an explicit extractor wins; production falls
@@ -337,7 +345,11 @@ export async function createCoreV0ProductionAdapter({
   // R-007a AUDN injection point: same pattern. Null auditor = ADD-only legacy
   // behavior (flag parity preserved for existing tests and the proof).
   const effectiveAuditor = auditor || (provider === 'mock' ? null : createModelAuditor(model));
-  const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 2000;
+  // R-013c: the few-shot extractor needs well over 2s on DeepSeek; a starved
+// budget made one slow event time out its whole batch and cascade (dedup
+// failures were downstream symptoms). The drain is async - latency here does
+// not touch the user-facing turn.
+const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 30_000;
   const drainExtraction = memoryPipelineEnabled
     ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, embeddingGateway, embeddingModel, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs })
     : null;

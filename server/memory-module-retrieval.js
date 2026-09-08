@@ -14,7 +14,7 @@ export function tokenize(value) {
   return result;
 }
 
-export function bm25Search(documents, query, { k1 = 1.2, b = 0.75, limit = 50 } = {}) {
+export function bm25Search(documents, query, { k1 = 1.2, b = 0.75, limit = 50, floorRatio = 0 } = {}) {
   const queryTokens = tokenize(query);
   if (!queryTokens.length || !documents.length) return [];
   const prepared = documents.map(document => ({ ...document, tokens: tokenize(document.text) }));
@@ -23,7 +23,7 @@ export function bm25Search(documents, query, { k1 = 1.2, b = 0.75, limit = 50 } 
   const averageLength = prepared.reduce((sum, document) => sum + document.tokens.length, 0) / prepared.length || 1;
   const queryFrequency = new Map();
   for (const token of queryTokens) queryFrequency.set(token, (queryFrequency.get(token) || 0) + 1);
-  return prepared.map(document => {
+  const ranked = prepared.map(document => {
     const frequencies = new Map();
     for (const token of document.tokens) frequencies.set(token, (frequencies.get(token) || 0) + 1);
     let score = 0;
@@ -36,7 +36,15 @@ export function bm25Search(documents, query, { k1 = 1.2, b = 0.75, limit = 50 } 
       score += idf * ((frequency * (k1 + 1)) / (frequency + k1 * normalizedLength)) * (1 + Math.log1p(queryCount));
     }
     return { ...document, score };
-  }).filter(document => document.score > 0).sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id))).slice(0, limit);
+  }).filter(document => document.score > 0).sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
+  // R-012c lexical relative floor: at depth the lexical channel fills the
+  // fused ranking with long-tail bigram coincidences (phase3b: a noise query
+  // pulled ~37 filler memories). Scores are unbounded, so the floor is
+  // RELATIVE to the top hit - long-tail matches below floorRatio of the best
+  // are dropped before fusion.
+  const topScore = ranked.length ? ranked[0].score : 0;
+  const kept = topScore > 0 && floorRatio > 0 ? ranked.filter(document => document.score >= topScore * floorRatio) : ranked;
+  return kept.slice(0, limit);
 }
 
 export function reciprocalRankFusion(rankedLists, { k = 60, limit = 50 } = {}) {
@@ -93,8 +101,8 @@ export async function vectorSearch(documents, query, embed, { limit = 50, timeou
   }
 }
 
-export async function hybridSearch(documents, query, { embed = null, limit = 50, timeoutMs = 150, minScore = 0 } = {}) {
-  const lexical = bm25Search(documents, query, { limit });
+export async function hybridSearch(documents, query, { embed = null, limit = 50, timeoutMs = 150, minScore = 0, floorRatio = 0 } = {}) {
+  const lexical = bm25Search(documents, query, { limit, floorRatio });
   const vector = await vectorSearch(documents, query, embed, { limit, timeoutMs, minScore });
   const fused = vector.items.length ? reciprocalRankFusion([lexical, vector.items], { limit }) : lexical;
   return { mode: vector.items.length ? 'hybrid_rrf' : `bm25_${vector.mode}`, items: fused };

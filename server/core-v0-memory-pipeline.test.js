@@ -664,7 +664,48 @@ test('R-012b gate merge: a confirmed S2 memory answers direct queries', async ()
   assert.equal(after.blocks.length, 0, 'no access-confirmation block remains');
 });
 
-test('R-013 S2 classification covers the raw message when the rephrase drops the trigger word', async () => {
+test('R-012c-g: the lexical relative floor drops long-tail bigram coincidences', async () => {
+  const { bm25Search } = await import('./memory-module-retrieval.js');
+  const documents = [
+    { id: 'top', text: '空气炸锅食谱大全' },
+    { id: 'near', text: '空气炸锅清洁方法' },
+    { id: 'far-a', text: '今天空气湿度不错' },
+    { id: 'far-b', text: '空气质量预报说了什么' }
+  ];
+  const all = bm25Search(documents, '空气炸锅怎么选', { floorRatio: 0 });
+  const floored = bm25Search(documents, '空气炸锅怎么选', { floorRatio: 0.5 });
+  assert.ok(all.length > floored.length, `floor trims long tail (${all.length} -> ${floored.length})`);
+  assert.ok(all.length >= 4);
+  assert.deepEqual([...floored.map(item => item.id)].sort(), ['near', 'top'], 'strong matches survive: ' + JSON.stringify(floored.map(item => item.id)));
+});
+
+test('R-012c-h: decay re-weight ranks recency when flag-gated on', async () => {
+  const now = Date.now();
+  const build = async decayEnabled => {
+    const state = memoryFixture({ rawEvents: [rawEvent('re-1', '请记住：我养了一只鹦鹉')] });
+    const memory = createMemoryModule(state, async () => {}, { projectionEnabled: false });
+    for (const [index, content] of [['stale', '用户养了一只鹦鹉，已经很熟了。'], ['fresh', '用户养了一只仓鼠，刚到家。']]) {
+      state.rawEvents.push(rawEvent('re-x' + index, '我养了小动物', index + 2));
+      const sourceEvent = state.rawEvents[state.rawEvents.length - 1];
+      const candidate = await memory.createCandidate(CTX, {
+        sourceEventId: sourceEvent.id, content, memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'user'
+      });
+      await memory.promoteCandidate(CTX, candidate.memory.memoryId, { resourceRevision: candidate.memory.resourceRevision });
+    }
+    state.assertions[0].updatedAt = new Date(now - 60 * 86400000).toISOString();
+    state.assertions[1].updatedAt = new Date(now).toISOString();
+    const decayMemory = decayEnabled
+      ? createMemoryModule(state, async () => {}, { projectionEnabled: false, decay: { enabled: true, halfLifeDays: 14, weight: 0.3 } })
+      : memory;
+    return decayMemory.retrieve(CTX, { query: '我养的小动物', purpose: 'answer_user_query' });
+  };
+  const plain = await build(false);
+  const decayed = await build(true);
+  assert.equal(plain.items.length, 2);
+  const ids = result => result.items.map(item => String(item.memoryId)).join(',');
+  assert.notEqual(ids(decayed), ids(plain), 'decay reorders recency vs stale: ' + ids(plain) + ' -> ' + ids(decayed));
+  assert.equal(decayed.items[0].content.includes('仓鼠'), true, 'the freshly written memory ranks first under decay');
+});test('R-013 S2 classification covers the raw message when the rephrase drops the trigger word', async () => {
   const state = memoryFixture({ rawEvents: [rawEvent('re-1', '我家里矛盾挺严重的，在考虑搬出去住')] });
   const { pool, repository } = mockRepository(state);
   const drain = createMemoryExtractionDrain({

@@ -588,6 +588,33 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   const vectorMinScore = Number.isFinite(Number(options.vectorMinScore)) && Number(options.vectorMinScore) >= 0 && Number(options.vectorMinScore) <= 1
     ? Number(options.vectorMinScore)
     : 0;
+  // R-012c: lexical relative floor (fraction of the top BM25 score below
+  // which long-tail bigram coincidences are dropped before fusion). Default 0
+  // keeps legacy behavior for callers that have not opted in.
+  const lexicalFloorRatio = Number.isFinite(Number(options.lexicalFloorRatio)) && Number(options.lexicalFloorRatio) >= 0 && Number(options.lexicalFloorRatio) <= 1
+    ? Number(options.lexicalFloorRatio)
+    : 0;
+  // R-012c decay re-weight (flag-gated, default off): after fusion, re-score
+  // items by recency of the assertion's last write. weight=0.3 means a fresh
+  // memory keeps its fused score while a memory one half-life old loses up to
+  // 15% of it. The 3b baseline showed depth-stable ranking, so this stays off
+  // until per-memory access tracking exists to justify it.
+  const decay = options.decay && options.decay.enabled === true
+    ? {
+      halfLifeDays: Number.isFinite(Number(options.decay.halfLifeDays)) && Number(options.decay.halfLifeDays) > 0 ? Number(options.decay.halfLifeDays) : 14,
+      weight: Number.isFinite(Number(options.decay.weight)) && Number(options.decay.weight) >= 0 && Number(options.decay.weight) <= 1 ? Number(options.decay.weight) : 0.3,
+      now: Date.now()
+    }
+    : null;
+  const applyDecayWeight = items => {
+    if (!decay) return items;
+    return items.map(item => {
+      const updatedAt = item.assertion?.updatedAt;
+      const ageDays = updatedAt ? Math.max(0, (decay.now - new Date(updatedAt).getTime()) / 86_400_000) : 0;
+      const recency = Math.pow(0.5, ageDays / decay.halfLifeDays);
+      return { ...item, score: Number(item.score ?? 0) * (1 - decay.weight + decay.weight * recency) };
+    }).sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
+  };
   const retrievedOverride = Symbol('retrieved_override');
   const mutationLocks = new Map();
   let persistenceSuppressed = 0;
@@ -1222,10 +1249,10 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const vectorEnabled = featureFlags.vectorRetrieval === true;
     let result;
     const embed = typeof embeddingGateway === 'function' ? embeddingGateway : embeddingGateway?.embed;
-    if (!hybridEnabled && !vectorEnabled) result = finalizeRetrieve(context, { ...input, queryRoute }, bm25Search(documents, query, { limit: 50 }), 'bm25');
+    if (!hybridEnabled && !vectorEnabled) result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(bm25Search(documents, query, { limit: 50 })), 'bm25');
     else if (hybridEnabled) {
-      const hybrid = await hybridSearch(documents, query, { embed, limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore });
-      result = finalizeRetrieve(context, { ...input, queryRoute }, hybrid.items, hybrid.mode);
+      const hybrid = await hybridSearch(documents, query, { embed, limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore, floorRatio: lexicalFloorRatio });
+      result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(hybrid.items), hybrid.mode);
     } else {
       const vector = await vectorSearch(documents, query, embed, { limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore });
       const lexical = bm25Search(documents, query, { limit: 50 });
