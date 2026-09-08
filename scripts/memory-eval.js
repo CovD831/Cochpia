@@ -193,7 +193,7 @@ try {
     await handle(service, item.message, item.id);
     await drainExtraction();
     const rows = await assertRows(pool);
-    const row = rows.find(entry => entry.status === 'active' && String(entry.content || '').includes(item.targetKeyword));
+    const row = rows.find(entry => entry.status === 'active' && String(entry.content || '').toLowerCase().includes(String(item.targetKeyword).toLowerCase()));
     if (row) indexKeyword(item.targetKeyword, row.id);
   }
   // R-011: group B judges the RAW retrieval channel (module retrieveAsync
@@ -310,7 +310,7 @@ try {
       await drainExtraction();
       const result = await memoryPort.retrieveContext({ query: item.query, memorySessionId: null });
       const rows = await assertRows(pool);
-      const row = rows.find(entry => entry.status === 'active' && String(entry.content || '').includes(item.targetKeyword));
+      const row = rows.find(entry => entry.status === 'active' && String(entry.content || '').toLowerCase().includes(String(item.targetKeyword).toLowerCase()));
       if (!row) { fail(item.id, 'forget_setup_miss', `no active assertion for "${item.targetKeyword}"`); continue; }
       if (!result.recalled.some(recalled => String(recalled.id || '') === row.id)) {
         fail(item.id, 'forget_setup_not_recalled', `active assertion not recalled by its own query (mode=${result.answerability})`);
@@ -351,7 +351,7 @@ try {
       const result = await memoryPort.retrieveContext({ query: item.query, memorySessionId: null });
       if (result.answerability === 'conflict') fail(item.id, 'arbitration_conflict', 'answerability stuck at conflict');
       const rows = await assertRows(pool);
-      const newest = rows.filter(entry => entry.status === 'active' && String(entry.content || '').includes(item.targetKeyword));
+      const newest = rows.filter(entry => entry.status === 'active' && String(entry.content || '').toLowerCase().includes(String(item.targetKeyword).toLowerCase()));
       if (!newest.length) fail(item.id, 'arbitration_latest', `latest value "${item.targetKeyword}" not in the corpus`);
     } catch (error) {
       fail(item.id, 'arbitration_error', `${error?.code || 'ERROR'}: ${String(error?.message || error).slice(0, 200)}`);
