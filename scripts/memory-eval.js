@@ -97,6 +97,29 @@ evidence.config = {
   vectorMinScore: Number(process.env.MEMORY_VECTOR_MIN_SCORE),
   embeddingModel: process.env.MEMORY_EMBEDDING_MODEL || 'bge-m3'
 };
+// Preflight: with hybrid retrieval enabled the whole eval silently degrades
+// to lexical-only if the embedding gateway is down (observed 2026-09-08: an
+// Ollama killed by a reboot turned the 3c rerun into a fake "no improvement"
+// baseline). Fail fast instead of measuring a crippled mode.
+if (process.env.MEMORY_HYBRID_RETRIEVAL === 'true') {
+  const embedUrl = process.env.MEMORY_EMBEDDING_URL || 'http://127.0.0.1:11434/api/embeddings';
+  const embedModel = process.env.MEMORY_EMBEDDING_MODEL || 'bge-m3';
+  try {
+    const probe = await fetch(embedUrl.replace(/\/api\/embeddings$/, '/api/tags'), { signal: AbortSignal.timeout(3000) });
+    if (!probe.ok) throw new Error(`HTTP ${probe.status}`);
+    const models = await probe.json();
+    const names = (models.models || []).map(m => String(m.name || ''));
+    if (names.length && !names.some(n => n === embedModel || n.split(':')[0] === embedModel)) {
+      throw new Error(`model ${embedModel} not loaded (have: ${names.join(', ')})`);
+    }
+    console.log(`embedding gateway ready: ${embedUrl} [${embedModel}]`);
+  } catch (error) {
+    console.error(`FATAL: embedding gateway unavailable (${embedUrl}): ${error?.message}`);
+    console.error('Refusing to run a hybrid-retrieval eval against a dead vector channel.');
+    process.exit(2);
+  }
+}
+
 const pool = new pg.Pool({ connectionString: CONNECTION, max: 50 });
 resetCoreV0ProductionSchemaCache();
 
