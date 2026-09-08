@@ -59,3 +59,49 @@ BM25 分数无上界，绝对阈值不可行；改为**相对下限**：低于�
 代码完成并提交（`2789d2d`），全套 326/326 绿。**E-3 被磁盘阻塞**：
 数据卷 99% 满（185Gi 已用 / 剩 2.4Gi），PostgreSQL initdb 报
 ENOSPC。清理方案待老板确认后执行三连跑。
+
+## 7. E-3 结果（2026-09-08，n=2/3）
+
+### 7.0 两次假绿的教训（写入流程）
+
+E-3 做了三轮才拿到有效数据，前两轮都被静默降级骗过：
+
+1. 第一轮 15s 假绿：finally 里 `process.exit(0)` 吞异常 + shell USER 为空
+   导致 PG 连接失败被包装成"0 失败"。修复：catch 打印 abortReason +
+   非零退出；连接串显式解析 PG 用户（`070a735`）。
+2. 第二轮 5 次跑（3 连跑 + 2 对照）全部在 Ollama 死亡（重启未自启）的
+   纯词法退化模式下测量：paraphrase"回归"6.7pp、dedup"无改善"、
+   floor/budget 两对照全持平——共享依赖（embedding 端点）死亡时所有
+   对照一起失效。修复：embedding preflight，端点死直接 exit 2（`9268149`）。
+
+### 7.1 有效数据（phase3c-v3-run1/2，向量通道存活）
+
+| 指标 | 3a 基线均值 | 3c-v3 均值 | delta |
+|---|---|---|---|
+| dedup_effective | 20.0% (10/30/20) | **100%** (100/100) | **+80pp** |
+| paraphrase_hit_rate | 62.2% | **76.7%** (80/73) | **+14.4pp** |
+| lexical_hit_rate | 62.7% | **92.0%** | **+29.3pp** |
+| forget_no_resurrection | 63.0% | 72.2% | +9.3pp |
+| arbitration_latest_wins | 80.0% | 83.3% | +3.3pp |
+| s2_accuracy | 88.9% | 91.7% | +2.8pp |
+| fact_recall | 87.5% | 87.5% | 持平 |
+| chit_chat_leak | 100% | 100% | 持平 |
+| precision_noise | 94.7% | 92.0% | −2.7pp |
+| confirm_visibility | 97.8% | 90.0%* | 见下 |
+
+*confirm 回归主要污染源：run3 被 `MODEL_INSUFFICIENT_BALANCE` 中断，
+run2 尾部也吃了一个余额错误；C-K12 为单次提取空转（extracted:0）。
+需余额恢复后补测。
+
+### 7.2 归因与保留意见（诚实边界）
+
+- **dedup 100% 与昨日 15/15 确定性审计探针一致**：预算修复让候选稳定
+  入库，向量通道让相似度可用，审计器本身无缺陷。但 100% 完美到需要
+  怀疑评测区分度，不能宣布 dedup 问题终结。
+- **3a 基线本身可能被环境污染压低**：3a 是在磁盘 99% 满、机器高负载
+  下测的；lexical +29pp 的改善幅度里有多少是 3c 修复、多少是环境恢复，
+  需要在干净环境重测 3a 配置对照（budget12+floor0+向量存活）才能拆分。
+- **n=2 而非 n=3**：DeepSeek 余额耗尽（MODEL_INSUFFICIENT_BALANCE），
+  run3 在 C 组中断。第三跑与归因对照都等余额恢复后补。
+- 归因拆分待办：dedup 提升在多大程度上属于预算修复 vs 向量通道恢复，
+  需一次 budget12+floor0 的干净对照。
