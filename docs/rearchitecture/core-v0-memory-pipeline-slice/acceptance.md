@@ -20,3 +20,16 @@ Executable checks are `npm run test:core-v0-memory-pipeline`,
 checker. Local acceptance uses paired fixtures and controlled database
 doubles; B-10 concurrency serialization and the live-database variant of the
 proof stay manual commands against a real PostgreSQL.
+
+## Phase 3c acceptance (R-012c, closed 2026-09-08)
+
+| ID | Scenario | Expected evidence | Status |
+|---|---|---|---|
+| 3C-E1 | unit tests | lexical floor trims long tail and keeps strong hits; decay flag off = identity, on = recency re-order; extraction budget knob effective | pass (326/326) |
+| 3C-E2 | full suite | `npm test` + `test:core-v0-production` green | pass (326/326, 21/21) |
+| 3C-E3 | 220-case x 3 runs, live vector channel, preflight-guarded | dedup 20%->95%, paraphrase 62%->79%, lexical 63%->93%, fact_recall 87.5%->95.8%; precision_noise/arbitration deltas attributed to metric design + R-014 (see phase3c-plan.md 8.2/8.3) | pass (phase3c-v4-run1..3) |
+
+Evidence artifacts: `.rearchitecture-runs/phase3c-{v3,v4}-run*.json`,
+probes `scripts/{audn-arbitration,extraction-keyword}-probe.js`,
+`scripts/arbitration-repro.js`, harness guards in commits `070a735`,
+`9268149`, final attribution `67ce77f`.

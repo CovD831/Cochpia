@@ -1,10 +1,176 @@
 [
-  {"finding_id": "R5-AR-001", "severity": "blocking", "decision": "consumed", "consumer": {"path": "04-l2-contracts.md", "anchor": "Extraction drain — established (consumes R5-AR-001)"}, "owner": "WorkBuddy", "evidence": "per-subject advisory transaction lock + concurrent-drain acceptance B-10", "status": "closed"},
-  {"finding_id": "R5-AR-002", "severity": "blocking", "decision": "consumed", "consumer": {"path": "07-l3-task-contract.md", "anchor": "Concurrency and budget"}, "owner": "WorkBuddy", "evidence": "hard 2s budget, per-event timeout, circuit breaker (5 failures / 5 min cooldown), audit-event retention cap", "status": "closed"},
-  {"finding_id": "R5-AR-003", "severity": "blocking", "decision": "consumed", "consumer": {"path": "05-adr.md", "anchor": "ADR-005-03 (consumes R5-AR-003)"}, "owner": "WorkBuddy", "evidence": "explicit extractor injection point; automated proof injects the deterministic double; mock skip is a production-only behavior", "status": "closed"},
-  {"finding_id": "R5-AR-004", "severity": "major", "decision": "consumed", "consumer": {"path": "04-l2-contracts.md", "anchor": "Projection side effect — established (consumes R5-AR-004)"}, "owner": "WorkBuddy", "evidence": "all activation routes share one projection implementation; acceptance B-12 covers the confirmation route", "status": "closed"},
-  {"finding_id": "R5-AR-005", "severity": "major", "decision": "consumed", "consumer": {"path": "07-l3-task-contract.md", "anchor": "Flag and injection"}, "owner": "WorkBuddy", "evidence": "flag reaches the Module as the projectionEnabled construction option; routes never read the environment for it", "status": "closed"},
-  {"finding_id": "R5-AR-006", "severity": "advisory", "decision": "consumed", "consumer": {"path": "04-l2-contracts.md", "anchor": "Extractor — established (consumes R5-AR-006)"}, "owner": "WorkBuddy", "evidence": "fixed JSON candidate schema with per-event cap; malformed output follows the failure path", "status": "closed"},
-  {"finding_id": "R5-AR-007", "severity": "advisory", "decision": "consumed", "consumer": {"path": "04-l2-contracts.md", "anchor": "Projection side effect — established (consumes R5-AR-007)"}, "owner": "WorkBuddy", "evidence": "audit events for projection batches and extraction skip/failure per Module conventions", "status": "closed"},
-  {"finding_id": "R5-AR-008", "severity": "note", "decision": "consumed", "consumer": {"path": "07-l3-task-contract.md", "anchor": "Concurrency and budget"}, "owner": "WorkBuddy", "evidence": "consume-time correction: failure records go to the Memory audit trail, not Core repair rows, because the drain never writes Core tables (L1 boundary)", "status": "closed"}
+  {
+    "finding_id": "R5-AR-001",
+    "severity": "blocking",
+    "decision": "consumed",
+    "consumer": {
+      "path": "04-l2-contracts.md",
+      "anchor": "Extraction drain — established (consumes R5-AR-001)"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "per-subject advisory transaction lock + concurrent-drain acceptance B-10",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R5-AR-002",
+    "severity": "blocking",
+    "decision": "consumed",
+    "consumer": {
+      "path": "07-l3-task-contract.md",
+      "anchor": "Concurrency and budget"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "hard 2s budget, per-event timeout, circuit breaker (5 failures / 5 min cooldown), audit-event retention cap",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R5-AR-003",
+    "severity": "blocking",
+    "decision": "consumed",
+    "consumer": {
+      "path": "05-adr.md",
+      "anchor": "ADR-005-03 (consumes R5-AR-003)"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "explicit extractor injection point; automated proof injects the deterministic double; mock skip is a production-only behavior",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R5-AR-004",
+    "severity": "major",
+    "decision": "consumed",
+    "consumer": {
+      "path": "04-l2-contracts.md",
+      "anchor": "Projection side effect — established (consumes R5-AR-004)"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "all activation routes share one projection implementation; acceptance B-12 covers the confirmation route",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R5-AR-005",
+    "severity": "major",
+    "decision": "consumed",
+    "consumer": {
+      "path": "07-l3-task-contract.md",
+      "anchor": "Flag and injection"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "flag reaches the Module as the projectionEnabled construction option; routes never read the environment for it",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R5-AR-006",
+    "severity": "advisory",
+    "decision": "consumed",
+    "consumer": {
+      "path": "04-l2-contracts.md",
+      "anchor": "Extractor — established (consumes R5-AR-006)"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "fixed JSON candidate schema with per-event cap; malformed output follows the failure path",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R5-AR-007",
+    "severity": "advisory",
+    "decision": "consumed",
+    "consumer": {
+      "path": "04-l2-contracts.md",
+      "anchor": "Projection side effect — established (consumes R5-AR-007)"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "audit events for projection batches and extraction skip/failure per Module conventions",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R5-AR-008",
+    "severity": "note",
+    "decision": "consumed",
+    "consumer": {
+      "path": "07-l3-task-contract.md",
+      "anchor": "Concurrency and budget"
+    },
+    "owner": "WorkBuddy",
+    "evidence": "consume-time correction: failure records go to the Memory audit trail, not Core repair rows, because the drain never writes Core tables (L1 boundary)",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R3C-001",
+    "severity": "blocking",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "dedup 20% 根因：MEMORY_EXTRACTION_TIMEOUT 级联——提取预算（2s/12s）低于 few-shot 后的模型延迟，一条慢提取饿死整批，改述候选相似度 0 → 误 ADD",
+    "consumer": {
+      "path": "server/core-v0-production.js",
+      "anchor": "extraction budget default 30s + eval explicit budget"
+    },
+    "evidence": "隔离复现 + E-3 终版 dedup 20%->95%（n=3，phase3c-v4）+ 15/15 审计探针",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R3C-002",
+    "severity": "blocking",
+    "decision": "rejected",
+    "owner": "WorkBuddy",
+    "statement": "原计划 AUDN 相似度短路（cos>=0.88 直接 NOOP）被校准否决：换值 cos 0.9092 高于部分改述 0.9002，阈值无法区分，会静默丢失换值更新",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/phase3c-plan.md",
+      "anchor": "4. 诚实负结果"
+    },
+    "evidence": "本地 bge-m3 校准表（榴莲->西瓜 0.9092 vs A-D12 改述 0.9002）",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R3C-003",
+    "severity": "blocking",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "eval harness 三次假绿：finally 内 process.exit(0) 吞异常；pg 默认用户依赖 process.env.USER（shell 环境漂移后为空）；embedding 网关死亡时 hybrid 评测静默降级为纯词法且全部对照一起失效",
+    "consumer": {
+      "path": "scripts/memory-eval.js",
+      "anchor": "abortReason catch + resolvePgUser + embedding preflight (070a735, 9268149)"
+    },
+    "evidence": "三次假绿的根因定位记录（phase3c-plan.md 7.0）",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R3C-004",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "precision_noise 零容忍判据（retrieved.length>0 即 fail）惩罚健康语料：提取修复使词表变富，无关查询开始撞词，82.7% 是判据伪影而非回归",
+    "consumer": {
+      "path": "scripts/memory-eval.js",
+      "anchor": "noise check score-weighted rework + noise_any_rate informational metric"
+    },
+    "evidence": "v4 失败明细分数两簇（RRF 0.016 / BM25 2.6-10.6）+ 3a 94.7% 系提取饥饿语料的伪低基线",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R3C-005",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "无上下文提取无法消解指代（C-A14/C-A15：打印机换成兄弟的了/现在涂的是蓝色的 -> 0 候选），arbitration 天花板 ~80-87%",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r014-plan.md",
+      "anchor": "R-014 context-aware extraction design freeze"
+    },
+    "evidence": "extraction-keyword-probe 实测 keyword 存活 11/15；audn-arbitration-probe 15/15 证明审计器无罪",
+    "status": "open"
+  },
+  {
+    "finding_id": "R3C-006",
+    "severity": "note",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "词法相对下限 0.3 在当前语料规模中性（floor0 对照与 0.5 全持平），保留作为库深增长保险；decay 重排默认关（3b 深度稳定 + 无访问追踪）",
+    "consumer": {
+      "path": "server/memory-module-retrieval.js",
+      "anchor": "bm25Search floorRatio + MEMORY_DECAY_REWEIGHT flag"
+    },
+    "evidence": "phase3c-floor0 对照 + phase3b needle hit@1=100% @2000",
+    "status": "closed"
+  }
 ]

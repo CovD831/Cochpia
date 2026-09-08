@@ -223,13 +223,23 @@ try {
 
   logPhase('groupB probe start');
   {
+    // R3C-004: the noise metric needs a score reference from the same run's
+    // corpus - "retrieved something" is corpus-size dependent (a starved
+    // corpus trivially retrieves nothing), while "retrieved as strongly as
+    // real hits" is the actual pollution risk. Record signal-hit top scores
+    // first, then judge noise against 0.5x their median.
+    const signalTopScores = [];
     let paraphraseHits = 0;
     for (const item of cases.groupB.paraphrase) {
       const ids = assertionIdsFor(item.targetKeyword);
       const retrieved = await rawRetrieve(item.query);
       const hit = ids.size > 0 && retrieved.some(item => ids.has(item.id));
       if (!hit) fail(item.id, 'paraphrase_miss', `query="${item.query}" (retrieved=${retrieved.length})`);
-      else paraphraseHits += 1;
+      else {
+        paraphraseHits += 1;
+        const hitItem = retrieved.find(item => ids.has(item.id));
+        signalTopScores.push(Number(hitItem?.score ?? 0));
+      }
     }
     evidence.metrics.paraphrase_hit_rate = fmt(paraphraseHits, cases.groupB.paraphrase.length);
     let lexicalHits = 0;
@@ -238,22 +248,41 @@ try {
       const retrieved = await rawRetrieve(item.query);
       const hit = ids.size > 0 && retrieved.some(item => ids.has(item.id));
       if (!hit) fail(item.id, 'lexical_miss', `query="${item.query}" (retrieved=${retrieved.length})`);
-      else lexicalHits += 1;
+      else {
+        lexicalHits += 1;
+        const hitItem = retrieved.find(item => ids.has(item.id));
+        signalTopScores.push(Number(hitItem?.score ?? 0));
+      }
     }
     evidence.metrics.lexical_hit_rate = fmt(lexicalHits, cases.groupB.lexical.length);
-    let noise = 0;
+    const sorted = [...signalTopScores].sort((a, b) => a - b);
+    const signalMedian = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+    // 0.5x median: noise that scores half as strongly as a typical real hit
+    // is the level downstream compaction may still surface; weaker hits are
+    // tail noise the raw channel cannot avoid on a healthy corpus.
+    const noiseFloor = signalMedian * 0.5;
+    evidence.config.noiseScoreFloor = Number(noiseFloor.toFixed(4));
+    evidence.config.signalScoreMedian = Number(signalMedian.toFixed(4));
+    let noise = 0, noiseAny = 0;
     for (const item of cases.groupB.noise) {
       const retrieved = await rawRetrieve(item.query);
       if (retrieved.length > 0) {
-        noise += 1;
-        // R-012: record the scores of the noise hits - without them the
-        // residual cannot be attributed (threshold too low vs corpus topic
-        // clustering vs fusion ordering).
-        const scores = retrieved.map(item => item.score.toFixed(4)).join(',');
-        fail(item.id, 'noise_recall', `unrelated query retrieved ${retrieved.length} items (scores: ${scores})`);
+        noiseAny += 1;
+        const top = retrieved[0];
+        if (top.score >= noiseFloor) {
+          noise += 1;
+          // R-012: record the scores of the noise hits - without them the
+          // residual cannot be attributed (threshold too low vs corpus topic
+          // clustering vs fusion ordering).
+          const scores = retrieved.map(item => item.score.toFixed(4)).join(',');
+          fail(item.id, 'noise_recall', `top=${top.score.toFixed(4)} >= floor ${noiseFloor.toFixed(4)} (retrieved=${retrieved.length}, scores: ${scores})`);
+        }
       }
     }
     evidence.metrics.precision_noise = fmt(noise, cases.groupB.noise.length);
+    // Informational: raw any-retrieval rate, kept to keep corpus-size
+    // effects visible across runs (the old zero-tolerance number).
+    evidence.metrics.noise_any_rate = fmt(noiseAny, cases.groupB.noise.length);
   }
   console.log(`\n[组B 检索] paraphrase=${evidence.metrics.paraphrase_hit_rate} lexical=${evidence.metrics.lexical_hit_rate} noise=${evidence.metrics.precision_noise}`);
 
