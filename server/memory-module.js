@@ -606,6 +606,9 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   const lexicalFloorRatio = Number.isFinite(Number(options.lexicalFloorRatio)) && Number(options.lexicalFloorRatio) >= 0 && Number(options.lexicalFloorRatio) <= 1
     ? Number(options.lexicalFloorRatio)
     : 0;
+  // R-015: suppress the lexical fallback when the embedding channel ran
+  // healthy and found nothing above minScore (default off keeps legacy).
+  const suppressLexicalFallback = options.suppressLexicalFallback === true;
   // R-012c decay re-weight (flag-gated, default off): after fusion, re-score
   // items by recency of the assertion's last write. weight=0.3 means a fresh
   // memory keeps its fused score while a memory one half-life old loses up to
@@ -1263,7 +1266,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const embed = typeof embeddingGateway === 'function' ? embeddingGateway : embeddingGateway?.embed;
     if (!hybridEnabled && !vectorEnabled) result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(bm25Search(documents, query, { limit: 50 })), 'bm25');
     else if (hybridEnabled) {
-      const hybrid = await hybridSearch(documents, query, { embed, limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore, floorRatio: lexicalFloorRatio });
+      const hybrid = await hybridSearch(documents, query, { embed, limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore, floorRatio: lexicalFloorRatio, suppressLexicalFallback });
       result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(hybrid.items), hybrid.mode);
     } else {
       const vector = await vectorSearch(documents, query, embed, { limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore });

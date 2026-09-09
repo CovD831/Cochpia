@@ -101,9 +101,17 @@ export async function vectorSearch(documents, query, embed, { limit = 50, timeou
   }
 }
 
-export async function hybridSearch(documents, query, { embed = null, limit = 50, timeoutMs = 150, minScore = 0, floorRatio = 0 } = {}) {
+export async function hybridSearch(documents, query, { embed = null, limit = 50, timeoutMs = 150, minScore = 0, floorRatio = 0, suppressLexicalFallback = false } = {}) {
   const lexical = bm25Search(documents, query, { limit, floorRatio });
   const vector = await vectorSearch(documents, query, embed, { limit, timeoutMs, minScore });
+  // R-015: when the embedding channel ran healthy and found NOTHING above
+  // minScore, the lexical fallback is an uncorroborated bigram coincidence -
+  // suppress it instead of surfacing high-scored junk for unrelated queries.
+  // Disabled/timeout/error modes keep the lexical fallback (graceful
+  // degradation beats going blind).
+  if (suppressLexicalFallback && vector.mode === 'vector' && !vector.items.length) {
+    return { mode: 'lexical_suppressed', items: [] };
+  }
   const fused = vector.items.length ? reciprocalRankFusion([lexical, vector.items], { limit }) : lexical;
   return { mode: vector.items.length ? 'hybrid_rrf' : `bm25_${vector.mode}`, items: fused };
 }
