@@ -198,5 +198,18 @@
     },
     "evidence": "r015-run2 (2026-09-09)",
     "status": "closed"
+  },
+  {
+    "finding_id": "R3C-009",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "R-016 同 key 注入 E-3 达标：dedup 86.7%->95%（19/20）、arbitration 14/15、precision_noise 88% 保持，总失败 26 条历史最优。三 flag 生产默认值待拍板（建议：SUPPRESS on、KEY_INJECT on、CONTEXT_TURNS 先 0 后观察）",
+    "consumer": {
+      "path": "server/memory-extraction.js",
+      "anchor": "injectKeyMatches + MEMORY_AUDN_KEY_INJECT"
+    },
+    "evidence": "r016-run1 (2026-09-09, 三 flag 同开)",
+    "status": "closed"
   }
 ]
