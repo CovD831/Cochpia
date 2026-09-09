@@ -214,7 +214,8 @@ try {
     embeddingGateway: probeGateway,
     embeddingTimeoutMs: 2000,
     vectorMinScore: Number(process.env.MEMORY_VECTOR_MIN_SCORE) || 0.55,
-    lexicalFloorRatio: Number(process.env.MEMORY_LEXICAL_FLOOR_RATIO) || 0.5
+    lexicalFloorRatio: Number(process.env.MEMORY_LEXICAL_FLOOR_RATIO) || 0.5,
+    suppressLexicalFallback: process.env.MEMORY_LEXICAL_SUPPRESS === 'true'
   });
   const rawRetrieve = async query => {
     const result = await probeMemory.retrieveAsync(context, { query, purpose: 'answer_user_query' });
