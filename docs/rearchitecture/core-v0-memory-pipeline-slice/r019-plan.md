@@ -137,3 +137,48 @@
 - [x] v2 合并设计（老板方向）
 - [ ] 老板确认 → 模板库起草 → P-1 质量评审
 - [ ] 实现 + E-2/E-3
+
+## 8. v3 修订：Agent 生命 = 关系域记忆 + 冷启动种子（2026-09-09，老板方向）
+
+### 8.1 现状盘点（代码事实）
+
+| 组件 | 现状 |
+|---|---|
+| 统一 memory 接口 | `memory-module-api.js` HTTP 路由 + `memory-module-http-gateway.js`——**任意模块（含游戏）经此接入同一 memory**（老板此前统一的接口面） |
+| Agent 身份 | `callerAgentId` 贯穿 context；`scopeGrants`（granteeType='agent'，'contextualize' 权限）；`relationshipAgentId` 33 处引用 |
+| 关系域记忆 | scopeType='relationship' 全链支持（检索过滤、独立投影、episodes scope），**产品路径零使用** |
+| Agent 创建种子 | `persona`(2000)/`relationship`(朋友…)/`role`/`tone`/**`memoryNotes`(3000，预置记忆描述)**——创建时已收集，**但 memoryNotes 是死字段**（无任何消费者） |
+| 群聊 agent | index.js:1027 群聊循环 `recalled: []`——**群聊 agent 连记忆召回都没有** |
+| 伴侣模块 | mode='companion' + companionIntent 五档 + atmosphere + persona；Cochpia 自身 callerAgentId='cochpia' |
+
+### 8.2 设计映射（老板命题 → 架构）
+
+**Agent 应该有自己的生活，冷启动种子 = 创建时用户对 agent 的描述。**
+
+- **冷启动播种**：创建/更新 agent 时，`persona + relationship + role +
+  tone + memoryNotes` 经一次提取播种为 **relationship 域记忆**（agent
+  自己的背景故事、性格记忆、与用户的关系记忆——全部走既有治理面）；
+  同步生成初始生活状态（mood 基线 + 日常纹理模板，种子=persona 里的
+  生活方式描述）；
+- **生活演化**：日常纹理从种子的兴趣/作息出发生成（R-019 v2 的
+  dailyTexture 模板，参数化到 agent），交互历史经 episodes 沉淀为
+  agent 的经历；
+- **统一接口**：游戏模块与伴侣走同一个 relationship 域——agent 的
+  生活状态投影（mood/纹理/近期经历）通过既有 memory 接口可被任意
+  接入模块读取；
+- **主动提及**：消费面不变（生活事件 × 记忆配对），但素材源扩展为
+  agent 自己的经历 + 与用户的共同经历。
+
+### 8.3 实现拆分（P-1 之前的三小块）
+
+1. 播种器：agent 创建/更新 → 关系域记忆播种（复用确定性提取器 +
+   治理面，幂等）；
+2. 生命投影：relationship 域的 stable profile 扩展（mood/纹理），
+   复活 projectStableProfile；
+3. 群聊召回：`recalled: []` 接上 memory（顺手的存量修复）。
+
+### 8.4 状态
+
+- [x] v3 设计修订（Agent 生命 = 关系域记忆 + 种子）
+- [ ] 播种器 → 生命投影 → 群聊召回（P-1：老板审种子→记忆→生活
+  状态的端到端样例）
