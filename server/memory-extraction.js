@@ -207,7 +207,12 @@ export function createMemoryExtractionDrain({
   audnSimilarMinScore = parseThreshold(process.env.MEMORY_AUDN_SIMILAR_MIN_SCORE, DEFAULT_AUDN_SIMILAR_MIN_SCORE),
   audnKeyInject = process.env.MEMORY_AUDN_KEY_INJECT === 'true',
   retentionSweep = process.env.MEMORY_RETENTION_SWEEP !== 'false',
-  retentionSweepIntervalMs = Number(process.env.MEMORY_RETENTION_SWEEP_INTERVAL_MS) || 3_600_000
+  retentionSweepIntervalMs = (() => {
+    // Zero is a legal value (sweep every drain); `|| 3_600_000` would
+    // silently discard it.
+    const parsed = Number(process.env.MEMORY_RETENTION_SWEEP_INTERVAL_MS);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3_600_000;
+  })()
 } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('Memory extraction drain requires a pool');
   if (!repository || typeof repository.load !== 'function' || typeof repository.save !== 'function') {
@@ -270,6 +275,35 @@ export function createMemoryExtractionDrain({
         .filter(entry => entry.action === 'memory_extraction_exhausted')
         .map(entry => entry.details?.sourceEventId)
         .filter(Boolean));
+      // R-017: the lifecycle sweep runs BEFORE the idle short-circuit - a
+      // subject that chatted once and never came back is exactly the
+      // accumulation case the sweep exists for, so idle drains must still
+      // sweep. Sweep-first ordering also keeps expired raw events (their
+      // 35-day deleteAfter has passed) out of the extraction batch.
+      const memory = createMemoryModule(state, () => repository.save(context, state), moduleOptions);
+      if (retentionSweep) {
+        const now = Date.now();
+        const last = lastRetentionSweepAt.get(subjectKey) || 0;
+        if (now - last >= retentionSweepIntervalMs) {
+          try {
+            const stats = await memory.sweepRetention(context, { now: new Date(now).toISOString(), limit: 200 });
+            lastRetentionSweepAt.set(subjectKey, now);
+            const touched = Object.values(stats).reduce((sum, n) => sum + (Number(n) || 0), 0);
+            summary.retention = stats;
+            if (touched > 0) {
+              auditEvent(memory.state, context, 'memory_retention_swept', { stats, triggeredBy: 'drain' });
+              await repository.save(context, memory.state);
+            }
+          } catch (error) {
+            // A failed sweep costs nothing: the next drain after the interval
+            // retries it, and extraction results are unaffected.
+            auditEvent(memory.state, context, 'memory_retention_sweep_failed', {
+              errorCode: error?.code || error?.message || 'RETENTION_SWEEP_FAILED'
+            });
+          }
+        }
+      }
+
       const pendingEvents = (state.rawEvents || [])
         .filter(event => event.eventRole === 'user' && event.contentType === 'plain_text' && event.content)
         .filter(event => !extractedSourceIds.has(event.id) && !exhaustedEventIds.has(event.id))
@@ -280,8 +314,6 @@ export function createMemoryExtractionDrain({
       if (!pendingEvents.length) {
         return { ...summary, status: 'idle' };
       }
-
-      const memory = createMemoryModule(state, () => repository.save(context, state), moduleOptions);
 
       // Dedup gate seeds: every active assertion's current content hash.
       const seenHashes = new Set();
@@ -558,32 +590,6 @@ export function createMemoryExtractionDrain({
           // Lost markers/index docs mean reprocessed events or a lexical-only
           // corpus next drain; correctness is unaffected and the audit loss is
           // acceptable against corrupting a canonical save.
-        }
-      }
-      // R-017: lifecycle sweep, time-gated per subject. sweepRetention only
-      // downgrades (expired statuses, invalidated versions) and physically
-      // removes raw events past their designed 35-day deleteAfter - the
-      // semantics the schema has promised since day one but nothing executed.
-      if (retentionSweep) {
-        const now = Date.now();
-        const last = lastRetentionSweepAt.get(subjectKey) || 0;
-        if (now - last >= retentionSweepIntervalMs) {
-          try {
-            const stats = await memory.sweepRetention(context, { now: new Date(now).toISOString(), limit: 200 });
-            lastRetentionSweepAt.set(subjectKey, now);
-            const touched = Object.values(stats).reduce((sum, n) => sum + (Number(n) || 0), 0);
-            summary.retention = stats;
-            if (touched > 0) {
-              auditEvent(memory.state, context, 'memory_retention_swept', { stats, triggeredBy: 'drain' });
-              await repository.save(context, memory.state);
-            }
-          } catch (error) {
-            // A failed sweep costs nothing: the next drain after the interval
-            // retries it, and extraction results above are already persisted.
-            auditEvent(memory.state, context, 'memory_retention_sweep_failed', {
-              errorCode: error?.code || error?.message || 'RETENTION_SWEEP_FAILED'
-            });
-          }
         }
       }
       return summary;
