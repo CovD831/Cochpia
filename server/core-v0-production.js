@@ -359,7 +359,7 @@ export async function createCoreV0ProductionAdapter({
 // not touch the user-facing turn.
 const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 30_000;
   const drainExtraction = memoryPipelineEnabled
-    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, embeddingGateway, embeddingModel, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs })
+    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, embeddingGateway, embeddingModel, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs, audnKeyInject: isTruthy(process.env.MEMORY_AUDN_KEY_INJECT) })
     : null;
   const service = createCoreV0TurnService({
     state: store.state,

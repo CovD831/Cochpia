@@ -327,6 +327,25 @@ test('R-014 context snapshot: flag off ignores metadata, flag on lets the model 
   assert.ok(!seenPrompt.includes('对话上下文'), 'missing snapshot degrades to the context-free prompt');
 });
 
+test('R-016 key injection: same-key memories reach the auditor despite a below-threshold embedding', async () => {
+  const { injectKeyMatches } = await import('./memory-extraction.js');
+  const docs = [
+    { id: 'a1', canonicalKey: 'favorite_movie', similarity: 0.42 },
+    { id: 'a2', canonicalKey: 'home_city', similarity: 0.91 }
+  ];
+  const proposal = { key: 'favorite_movie' };
+  // Flag off: the below-threshold same-key memory stays filtered out.
+  const legacy = injectKeyMatches(docs, proposal, { enabled: false, minScore: 0.6 }).filter(d => d.similarity >= 0.6);
+  assert.deepEqual(legacy.map(d => d.id), ['a2']);
+  // Flag on: the same-key memory is boosted to the threshold and survives.
+  const injected = injectKeyMatches(docs, proposal, { enabled: true, minScore: 0.6 }).filter(d => d.similarity >= 0.6);
+  assert.deepEqual(injected.map(d => d.id), ['a1', 'a2']);
+  assert.equal(injected[0].similarity, 0.6);
+  // No key on the proposal: no injection either way.
+  const noKey = injectKeyMatches(docs, { key: null }, { enabled: true, minScore: 0.6 }).filter(d => d.similarity >= 0.6);
+  assert.deepEqual(noKey.map(d => d.id), ['a2']);
+});
+
 test('Core message deletion persists across hydration and keeps the turn', async () => {
   const { createCoreV0PostgresFixture } = await import('./core-v0-postgres-fixture.js');
   const { CORE_V0_PRODUCTION_TABLES, MEMORY_PRODUCTION_TABLES, CORE_V0_PRODUCTION_REQUIRED_COLUMNS, MEMORY_PRODUCTION_REQUIRED_COLUMNS } =

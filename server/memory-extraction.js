@@ -144,6 +144,20 @@ export function createModelExtractor(model, { contextTurns = 0 } = {}) {
   };
 }
 
+// R-016: the candidate's semantic key is a stronger same-fact signal than
+// embedding similarity - a value change (榴莲 -> 西瓜) routinely embeds
+// below the AUDN threshold, so the same-key memory gets filtered out of
+// `similar` and the candidate degrades to ADD (dedup loss + stale value).
+// Key-matched memories are the same fact topic BY CONSTRUCTION (R-011's
+// extractor contract), so they must reach the auditor regardless of their
+// embedding score.
+export function injectKeyMatches(docs, proposal, { enabled, minScore }) {
+  if (!enabled || !proposal?.key) return docs;
+  return docs.map(doc => doc.canonicalKey && doc.canonicalKey === proposal.key
+    ? { ...doc, similarity: Math.max(Number(doc.similarity) || 0, minScore) }
+    : doc);
+}
+
 // AUDN decision maker (R-007a, after Mem0's write-time arbitration): given a
 // candidate and the numbered similar memories, choose ADD / UPDATE / DELETE /
 // NOOP. Malformed output degrades to ADD so a stated fact is never lost.
@@ -190,7 +204,8 @@ export function createMemoryExtractionDrain({
   moduleOptions = {},
   batch = DEFAULT_BATCH,
   timeBudgetMs = DEFAULT_TIME_BUDGET_MS,
-  audnSimilarMinScore = parseThreshold(process.env.MEMORY_AUDN_SIMILAR_MIN_SCORE, DEFAULT_AUDN_SIMILAR_MIN_SCORE)
+  audnSimilarMinScore = parseThreshold(process.env.MEMORY_AUDN_SIMILAR_MIN_SCORE, DEFAULT_AUDN_SIMILAR_MIN_SCORE),
+  audnKeyInject = process.env.MEMORY_AUDN_KEY_INJECT === 'true'
 } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('Memory extraction drain requires a pool');
   if (!repository || typeof repository.load !== 'function' || typeof repository.save !== 'function') {
@@ -295,6 +310,7 @@ export function createMemoryExtractionDrain({
                   id: assertion.id,
                   embedding: indexDocument.embedding,
                   content: version.content,
+                  canonicalKey: assertion.canonicalKey || null,
                   resourceRevision: assertion.resourceRevision,
                   // R-009: give the auditor the bi-temporal context so it can
                   // reason about "what was true when" before choosing UPDATE.
@@ -311,9 +327,11 @@ export function createMemoryExtractionDrain({
             Math.max(200, Math.min(remaining(), 10_000))
           );
           if (!Array.isArray(vector) || !vector.length) return [];
-          return docs
-            .map(doc => ({ ...doc, similarity: cosineSimilarity(vector, doc.embedding) }))
-            .filter(doc => doc.similarity >= audnSimilarMinScore)
+          return injectKeyMatches(
+            docs.map(doc => ({ ...doc, similarity: cosineSimilarity(vector, doc.embedding) })),
+            proposal,
+            { enabled: audnKeyInject === true, minScore: audnSimilarMinScore }
+          ).filter(doc => doc.similarity >= audnSimilarMinScore)
             .sort((left, right) => right.similarity - left.similarity)
             .slice(0, AUDN_SIMILAR_LIMIT)
             .map(doc => ({
