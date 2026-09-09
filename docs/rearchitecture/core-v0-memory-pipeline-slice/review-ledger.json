@@ -315,5 +315,18 @@
     },
     "evidence": "eval-cases.json 实体相关 case 仅 3 条且均为类别代词型",
     "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-008",
+    "severity": "blocking",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "P-1 止损：跨轮 norm 一致率 18/21（85.7%）< 90% 门线。3 个失败（健身卡/健身房、直属领导/部门领导、日语/五十音图）均为语义上不同的实体——前缀词干桥接会制造错误链接（false-bridge）。诚实记录：抽取命中率与一跳桥接（配 tagger 提示词后 3/4）本身可用，卡死在无语义链接时的跨轮归一。R-018 搁置，实体语义链接归 future work 立项",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§7.3 门线触发，R-018 搁置"
+    },
+    "evidence": "scripts/entity-probe.js 两轮运行（第一轮度量含实现错误已修正：换值对按计划 §7.3 排除；修正后仍不过线）",
+    "status": "closed"
   }
 ]
