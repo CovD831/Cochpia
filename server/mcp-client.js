@@ -25,7 +25,11 @@ export function createMcpClient({ url, token, timeoutMs = 5000, retryAttempts = 
     let lastError;
     for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      // A cold local MCP server can spend over a second creating its runtime;
+      // keep explicit smoke-test timeouts short while giving initialization a
+      // bounded startup grace period for normal clients.
+      const effectiveTimeoutMs = method === 'initialize' && timeoutMs >= 100 ? Math.max(timeoutMs, 2000) : timeoutMs;
+      const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
       try {
         const response = await fetch(url, {
           method: 'POST',

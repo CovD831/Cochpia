@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>cochpia / a small aquarium for thoughts</title>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    :root {
+      --ink: #eef7f4;
+      --muted: #a7c0bd;
+      --deep: #172c32;
+      --deep-2: #28454a;
+      --line: rgba(232, 248, 240, .18);
+      --glass: rgba(38, 72, 75, .58);
+      --aqua: #b8e3d5;
+      --cyan: #9dcbd0;
+      --coral: #e8a98c;
+      --sand: #f0d2a8;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 63% 1%, rgba(207, 242, 221, .24), transparent 31%),
+        radial-gradient(circle at 9% 82%, rgba(166, 207, 205, .18), transparent 32%),
+        var(--deep);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    body::before { content: ""; position: fixed; inset: 0; z-index: 20; pointer-events: none; opacity: .12; mix-blend-mode: screen; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.95' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.42'/%3E%3C/svg%3E"); }
+    body::after { content: ""; position: fixed; inset: 0; z-index: 19; pointer-events: none; background: radial-gradient(ellipse at center, transparent 48%, rgba(1, 18, 21, .34) 100%); }
+    }
+
+    button { font: inherit; color: inherit; cursor: pointer; }
+    .shell { min-height: 100vh; display: grid; grid-template-columns: 164px minmax(0, 1fr); }
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 30px 16px;
+      background: rgba(13, 31, 35, .34);
+      display: flex;
+      flex-direction: column;
+      gap: 26px;
+    }
+    .brand { display: flex; align-items: center; gap: 9px; padding: 0 7px; }
+    .brand-mark { width: 24px; height: 24px; border: 1px solid var(--aqua); border-radius: 50%; position: relative; box-shadow: 0 0 22px rgba(117,232,225,.3); }
+    .brand-mark::after { content: ""; position: absolute; left: 5px; right: 5px; top: 12px; height: 1px; background: var(--aqua); transform: rotate(-24deg); }
+    .brand strong { font-size: 17px; letter-spacing: .08em; font-weight: 650; font-family: Georgia, "Times New Roman", serif; }
+    .eyebrow { color: var(--aqua); text-transform: uppercase; font-size: 10px; letter-spacing: .16em; font-weight: 700; }
+    .nav-label { padding: 0 12px; color: #628d96; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; }
+    .nav { display: grid; gap: 5px; }
+    .nav button, .scene-button {
+      border: 0; background: transparent; border-radius: 0; min-height: 43px; padding: 0 8px;
+      display: flex; align-items: center; gap: 12px; text-align: left; color: var(--muted);
+    }
+    .nav button:hover, .nav button.active, .scene-button:hover { color: var(--ink); }
+    .nav button.active { box-shadow: inset 1px 0 var(--aqua); padding-left: 15px; }
+    .nav svg { width: 17px; height: 17px; }
+    .side-footer { margin-top: auto; padding: 14px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--aqua); margin-right: 7px; box-shadow: 0 0 10px var(--aqua); }
+
+    main { min-width: 0; padding: 0 42px 42px; }
+    .topbar { height: 78px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+    .crumbs { color: var(--muted); font-size: 13px; }
+    .crumbs b { color: var(--ink); font-weight: 550; }
+    .top-actions { display: flex; gap: 8px; }
+    .icon-btn { width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 50%; background: rgba(8, 32, 42, .7); display: grid; place-items: center; }
+    .icon-btn:hover { border-color: var(--aqua); color: var(--aqua); }
+    .content { max-width: 1280px; margin: 0 auto; }
+    .intro { padding: 38px 0 25px; display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+    h1 { margin: 8px 0 8px; max-width: 680px; font-size: clamp(30px, 4vw, 54px); line-height: .98; letter-spacing: -.04em; font-weight: 500; font-family: Georgia, "Songti SC", "STSong", serif; }
+    .intro p { margin: 0; max-width: 520px; color: var(--muted); font-size: 14px; line-height: 1.7; }
+    .live-pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(117,232,225,.28); background: rgba(117,232,225,.07); color: var(--aqua); border-radius: 999px; padding: 8px 12px; font-size: 11px; white-space: nowrap; }
+
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(245px, .55fr); gap: 38px; align-items: start; }
+    .tank-card { min-height: 540px; overflow: hidden; position: relative; border: 0; border-radius: 1px; box-shadow: 0 24px 80px rgba(0,0,0,.24); }
+    .tank-toolbar { position: absolute; z-index: 4; inset: 22px 24px auto; display: flex; justify-content: space-between; align-items: center; }
+    .tank-label { display: flex; align-items: center; gap: 9px; font-size: 11px; color: var(--muted); }
+    .tank-label strong { color: var(--ink); font-weight: 550; }
+    .tank-tools { display: flex; gap: 7px; }
+    .tank-tools button { border: 0; border-bottom: 1px solid transparent; background: transparent; padding: 6px 4px; color: var(--muted); }
+    .tank-tools button:hover, .tank-tools button.selected { color: var(--aqua); border-color: var(--aqua); }
+    .water { position: absolute; inset: 0; overflow: hidden; background: linear-gradient(160deg, #6e9fa0 0%, #3e747a 42%, #183d47 100%); }
+    .water::before { content:""; position:absolute; inset:-20% -8%; background: repeating-linear-gradient(114deg, transparent 0 58px, rgba(128,239,237,.07) 59px 61px, transparent 62px 119px); transform: rotate(-4deg); opacity: .7; }
+    .water::after { content:""; position:absolute; inset: 0; background: radial-gradient(ellipse at 48% 0%, rgba(255,244,216,.42), transparent 37%), linear-gradient(0deg, rgba(1,11,18,.28), transparent 55%); }
+    .bubble { position: absolute; border: 1px solid rgba(205,255,252,.42); border-radius: 50%; opacity: .6; animation: rise 7s infinite ease-in; z-index: 2; }
+    .b1 { width: 9px; height: 9px; left: 13%; bottom: 14%; animation-delay: 1s; } .b2 { width: 5px; height: 5px; left: 33%; bottom: 6%; animation-delay: 3s; } .b3 { width: 12px; height: 12px; right: 28%; bottom: 10%; animation-delay: 0s; } .b4 { width: 6px; height: 6px; right: 11%; bottom: 23%; animation-delay: 4s; }
+    @keyframes rise { from { transform: translateY(30px); opacity: 0; } 15% { opacity: .6; } to { transform: translateY(-470px); opacity: 0; } }
+    .fish { position: absolute; z-index: 3; width: 74px; height: 38px; border-radius: 55% 48% 48% 55%; background: var(--coral); box-shadow: 0 7px 20px rgba(0,0,0,.16); animation: swim 15s infinite ease-in-out; }
+    .fish::before { content:""; position:absolute; left: 11px; top: 10px; width: 7px; height: 7px; background:#07252d; border-radius: 50%; box-shadow: 0 0 0 2px rgba(255,255,255,.65); }
+    .fish::after { content:""; position:absolute; right:-19px; top: 4px; border-left: 24px solid var(--coral); border-top: 15px solid transparent; border-bottom: 15px solid transparent; }
+    .fish.one { left: 19%; top: 34%; } .fish.two { width: 54px; height: 28px; left: 62%; top: 24%; background: var(--sand); animation-delay: -6s; transform: scale(.8); } .fish.two::after { border-left-color: var(--sand); } .fish.three { width: 40px; height: 22px; left: 71%; top: 55%; background: var(--aqua); animation-delay: -10s; transform: scale(.65); } .fish.three::after { border-left-color: var(--aqua); }
+    @keyframes swim { 0%, 100% { transform: translateX(-3px) rotate(1deg); } 50% { transform: translateX(110px) translateY(-18px) rotate(-3deg); } }
+    .sand { position: absolute; z-index: 2; bottom: -20px; left: -5%; width: 110%; height: 100px; background: radial-gradient(ellipse at 50% 0%, rgba(255,213,159,.72), rgba(184,116,70,.45) 53%, transparent 54%); opacity: .72; }
+    .kelp { position: absolute; z-index: 2; bottom: 27px; width: 9px; height: 175px; border-radius: 50%; border-left: 3px solid #54b29b; transform-origin: bottom; opacity: .75; }
+    .k1 { left: 10%; transform: rotate(-11deg); } .k2 { left: 17%; height: 120px; transform: rotate(9deg); } .k3 { right: 15%; height: 142px; transform: rotate(-8deg); }
+    .coral { position: absolute; z-index: 2; bottom: 17px; right: 25%; width: 84px; height: 88px; background: repeating-linear-gradient(90deg, transparent 0 13px, rgba(255,156,118,.8) 14px 20px, transparent 21px 29px); clip-path: polygon(0 100%, 8% 40%, 19% 56%, 28% 0, 39% 52%, 52% 21%, 63% 58%, 77% 6%, 88% 50%, 100% 39%, 100% 100%); }
+    .tank-caption { position: absolute; z-index: 4; left: 22px; right: 22px; bottom: 20px; display: flex; align-items: end; justify-content: space-between; }
+    .tank-caption h2 { margin: 0; font-size: 20px; font-weight: 500; font-family: Georgia, "Songti SC", serif; } .tank-caption span { color: #d1e2dd; font-size: 12px; }
+
+    .info-panel { padding: 4px 0 0 22px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 22px; background: transparent; }
+    .panel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .panel-title h3 { margin: 0; font-size: 16px; font-weight: 560; } .panel-title button { border: 0; background: transparent; color: var(--aqua); font-size: 12px; }
+    .fish-list { display: grid; gap: 10px; }
+    .fish-row { display: flex; align-items: center; gap: 11px; padding: 10px 0; border-bottom: 1px solid rgba(232,248,240,.1); background: transparent; }
+    .fish-row:hover { color: var(--aqua); }
+    .fish-thumb { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: rgba(117,232,225,.11); color: var(--aqua); }
+    .fish-row strong { display: block; font-size: 13px; font-weight: 550; } .fish-row small { color: var(--muted); font-size: 11px; }
+    .fish-row .count { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .divider { height: 1px; background: var(--line); }
+    .note { padding: 14px; border-left: 2px solid var(--coral); background: rgba(232,169,140,.1); color: #dceae5; font-size: 12px; line-height: 1.6; }
+    .note b { color: var(--coral); font-weight: 600; display: block; margin-bottom: 4px; }
+    .recent { margin-top: 42px; border-top: 1px solid var(--line); padding-top: 18px; }
+    .recent-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; margin-top: 12px; }
+    .recent-card { min-height: 110px; padding: 12px 0; border: 0; border-top: 1px solid rgba(232,248,240,.15); text-align: left; background: transparent; }
+    .recent-card:hover { border-color: rgba(117,232,225,.65); }
+    .recent-card .mini-line { width: 24px; height: 2px; background: var(--coral); margin-bottom: 26px; }
+    .recent-card strong { display: block; font-size: 12px; line-height: 1.35; font-weight: 550; } .recent-card span { display: block; color: var(--muted); font-size: 10px; margin-top: 7px; }
+    @media (max-width: 980px) { .shell { grid-template-columns: 78px minmax(0, 1fr); } .sidebar { padding: 24px 10px; align-items: center; } .brand { padding: 0; } .brand strong, .nav-label, .nav button span, .side-footer { display: none; } .nav button { width: 48px; justify-content: center; padding: 0; } main { padding: 0 22px 32px; } }
+    @media (max-width: 720px) { .workspace { grid-template-columns: 1fr; gap: 28px; } .intro { display: block; } .live-pill { margin-top: 18px; } .tank-card { min-height: 460px; } .info-panel { border-left: 0; border-top: 1px solid var(--line); padding: 20px 0 0; } .recent-grid { grid-template-columns: 1fr; gap: 10px; } .recent-card { min-height: 90px; } }
+    @media (max-width: 480px) { .shell { display: block; } .sidebar { height: 66px; padding: 0 14px; flex-direction: row; justify-content: space-between; border-right: 0; border-bottom: 1px solid var(--line); } .nav { display: flex; } .side-footer { display: none; } .nav button { width: 42px; min-height: 42px; } main { padding: 0 14px 28px; } .topbar { height: 64px; } .crumbs { font-size: 12px; } h1 { font-size: 36px; } .tank-card { min-height: 400px; } .tank-tools button { padding: 6px; } .tank-tools button span { display: none; } }
+    /* Apple-like material pass: glass is reserved for navigation, toolbar, and sheets. */
+    :root { --apple-bg: #d8e9e7; --apple-ink: #17272b; --apple-muted: #61777a; --apple-line: rgba(255,255,255,.62); --apple-glass: rgba(249,255,253,.48); --apple-glass-strong: rgba(248,255,253,.72); --apple-blue: #147fa3; }
+    body { color: var(--apple-ink); background: #b8d5d3; background-image: radial-gradient(circle at 66% 8%, rgba(255,255,255,.76), transparent 25%), radial-gradient(circle at 15% 85%, rgba(105,174,185,.5), transparent 34%), linear-gradient(130deg, #bdd9d4, #81b8c2 57%, #518b9b); }
+    body::after { background: radial-gradient(ellipse at center, transparent 44%, rgba(21,55,61,.16) 100%); }
+    .shell { min-height: calc(100vh - 36px); margin: 18px; grid-template-columns: 214px minmax(0, 1fr); gap: 14px; }
+    .sidebar { position: sticky; top: 18px; height: calc(100vh - 36px); border: 1px solid var(--apple-line); border-radius: 26px; padding: 20px 12px; background: linear-gradient(145deg, rgba(247,255,253,.72), rgba(212,240,237,.32)); box-shadow: 0 18px 44px rgba(31,76,83,.18), inset 0 1px rgba(255,255,255,.74); backdrop-filter: blur(28px) saturate(150%); -webkit-backdrop-filter: blur(28px) saturate(150%); }
+    .brand { padding: 4px 10px 18px; border-bottom: 1px solid rgba(255,255,255,.48); }
+    .brand strong { color: var(--apple-ink); } .brand-mark { border-color: var(--apple-blue); box-shadow: 0 0 20px rgba(20,127,163,.22); } .brand-mark::after { background: var(--apple-blue); }
+    .nav-label { margin-top: 20px; color: #668487; } .nav { gap: 3px; }
+    .nav button { min-height: 40px; color: #47666a; font-size: 13px; }
+    .nav button:hover, .nav button.active { color: var(--apple-ink); background: rgba(255,255,255,.48); box-shadow: 0 4px 13px rgba(55,112,119,.1); border-radius: 12px; }
+    .nav button.active { padding-left: 10px; box-shadow: inset 2px 0 var(--apple-blue), 0 4px 13px rgba(55,112,119,.1); }
+    .side-footer { color: #587376; border-top-color: rgba(255,255,255,.5); }
+    main { padding: 0 16px 34px; border: 1px solid rgba(255,255,255,.42); border-radius: 28px; background: rgba(235,249,246,.34); box-shadow: 0 22px 70px rgba(31,76,83,.14), inset 0 1px rgba(255,255,255,.44); backdrop-filter: blur(16px) saturate(125%); -webkit-backdrop-filter: blur(16px) saturate(125%); }
+    .topbar { height: 68px; padding: 0 14px; border: 1px solid rgba(255,255,255,.58); border-radius: 20px; background: var(--apple-glass-strong); box-shadow: 0 10px 25px rgba(46,104,110,.1), inset 0 1px rgba(255,255,255,.84); backdrop-filter: blur(24px) saturate(150%); -webkit-backdrop-filter: blur(24px) saturate(150%); }
+    .crumbs { color: var(--apple-muted); } .crumbs b { color: var(--apple-ink); }
+    .icon-btn { border-color: rgba(255,255,255,.78); background: rgba(255,255,255,.44); color: #45666b; box-shadow: 0 3px 10px rgba(52,111,117,.1), inset 0 1px rgba(255,255,255,.8); }
+    .icon-btn:hover { color: var(--apple-blue); border-color: rgba(20,127,163,.45); background: rgba(255,255,255,.72); }
+    .intro { padding: 44px 12px 30px; } .eyebrow { color: var(--apple-blue); letter-spacing: .11em; } h1 { color: var(--apple-ink); font-weight: 520; } .intro p { color: var(--apple-muted); }
+    .live-pill { border-color: rgba(20,127,163,.25); background: rgba(242,255,252,.56); color: var(--apple-blue); box-shadow: 0 3px 12px rgba(52,111,117,.08); }
+    .workspace { gap: 16px; }
+    .tank-card { min-height: 556px; border-radius: 24px; border: 1px solid rgba(255,255,255,.62); box-shadow: 0 20px 46px rgba(31,76,83,.18), inset 0 1px rgba(255,255,255,.68); }
+    .tank-toolbar { inset: 16px 18px auto; padding: 7px 9px 7px 12px; border: 1px solid rgba(255,255,255,.45); border-radius: 14px; background: rgba(18,72,83,.22); color: #effffc; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    .tank-label { color: rgba(239,255,252,.8); } .tank-label strong { color: #fff; } .tank-tools button { color: rgba(239,255,252,.76); border-radius: 8px; } .tank-tools button:hover, .tank-tools button.selected { color: #fff; background: rgba(255,255,255,.18); border-color: transparent; }
+    .tank-caption { left: 24px; right: 24px; bottom: 22px; padding-top: 56px; background: linear-gradient(0deg, rgba(3,25,32,.48), transparent); }
+    .tank-caption h2 { color: #fff; } .tank-caption span { color: rgba(239,255,252,.78); }
+    .info-panel { padding: 18px 14px 10px; border: 1px solid rgba(255,255,255,.62); border-radius: 22px; background: var(--apple-glass); box-shadow: 0 14px 35px rgba(31,76,83,.12), inset 0 1px rgba(255,255,255,.76); backdrop-filter: blur(24px) saturate(145%); -webkit-backdrop-filter: blur(24px) saturate(145%); }
+    .panel-title h3 { color: var(--apple-ink); } .panel-title button { color: var(--apple-blue); } .fish-row { border-bottom-color: rgba(71,116,119,.16); } .fish-row strong { color: var(--apple-ink); } .fish-row small, .fish-row .count { color: var(--apple-muted); } .fish-thumb { background: rgba(20,127,163,.12); color: var(--apple-blue); } .divider { background: rgba(71,116,119,.16); }
+    .note { color: #35585c; background: rgba(255,237,219,.46); border-left-color: #c76e5f; } .note b { color: #ac594e; }
+    .recent { margin-left: 12px; margin-right: 12px; border-top-color: rgba(255,255,255,.62); } .recent-card { color: var(--apple-ink); border-top-color: rgba(255,255,255,.62); } .recent-card strong { color: var(--apple-ink); } .recent-card span { color: var(--apple-muted); }
+    @media (max-width: 980px) { .shell { margin: 12px; min-height: calc(100vh - 24px); } main { padding: 0 10px 30px; } }
+    @media (max-width: 720px) { .shell { margin: 0; display: block; } main { border-radius: 0; border-left: 0; border-right: 0; } .sidebar { position: sticky; top: 0; z-index: 8; height: 68px; border-radius: 0 0 20px 20px; padding: 10px 14px; } .brand { border: 0; padding: 4px 8px; } .nav-label, .side-footer { display: none; } .nav button { min-height: 44px; } }
+    .sheet-backdrop { position: fixed; z-index: 30; inset: 0; background: rgba(12,44,49,.2); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+    .sheet { position: fixed; z-index: 31; right: 30px; bottom: 30px; width: min(390px, calc(100vw - 32px)); padding: 15px 22px 22px; border: 1px solid rgba(255,255,255,.8); border-radius: 24px; background: rgba(249,255,253,.84); color: var(--apple-ink); box-shadow: 0 24px 70px rgba(24,73,80,.24), inset 0 1px rgba(255,255,255,.92); backdrop-filter: blur(30px) saturate(150%); -webkit-backdrop-filter: blur(30px) saturate(150%); }
+    .sheet[hidden], .sheet-backdrop[hidden] { display: none; }
+    .sheet-handle { width: 42px; height: 4px; margin: 0 auto 20px; border-radius: 99px; background: rgba(53,91,96,.26); }
+    .sheet-head { display: flex; justify-content: space-between; align-items: start; } .sheet h2 { margin: 5px 0 8px; font: 500 26px/1.1 Georgia, "Songti SC", serif; } .sheet p { color: var(--apple-muted); font-size: 13px; line-height: 1.6; }
+    .close-sheet { width: 30px; height: 30px; border: 0; border-radius: 50%; background: rgba(75,120,122,.12); color: var(--apple-muted); display: grid; place-items: center; } .close-sheet:hover { color: var(--apple-ink); background: rgba(75,120,122,.2); }
+    .sheet textarea { width: 100%; min-height: 100px; resize: vertical; border: 1px solid rgba(62,112,116,.24); border-radius: 13px; padding: 12px; color: var(--apple-ink); background: rgba(255,255,255,.54); outline: none; font: inherit; } .sheet textarea:focus { border-color: var(--apple-blue); box-shadow: 0 0 0 3px rgba(20,127,163,.14); }
+    .sheet-foot { display: flex; justify-content: end; gap: 8px; margin-top: 14px; } .sheet-secondary, .sheet-primary { min-height: 38px; border-radius: 12px; padding: 0 15px; border: 0; } .sheet-secondary { background: transparent; color: var(--apple-blue); } .sheet-primary { background: var(--apple-blue); color: white; box-shadow: 0 5px 12px rgba(20,127,163,.24); }
+    @media (max-width: 720px) { .sheet { right: 16px; bottom: 16px; left: 16px; width: auto; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark"></div><strong>cochpia</strong></div>
+      <div class="nav-label">Cochpia space</div>
+      <nav class="nav" aria-label="主导航">
+        <button class="active" data-view="sanctum"><i data-lucide="house"></i><span>Sanctum</span></button>
+        <button data-view="chat"><i data-lucide="message-circle"></i><span>Chat</span></button>
+        <button data-view="life"><i data-lucide="layers-3"></i><span>共生</span></button>
+        <button data-view="workbench"><i data-lucide="layout-grid"></i><span>工作区</span></button>
+        <button data-view="music"><i data-lucide="music-2"></i><span>Music</span></button>
+        <button data-view="veil"><i data-lucide="moon"></i><span>Veil</span></button>
+        <button data-view="settings"><i data-lucide="settings-2"></i><span>设置</span></button>
+      </nav>
+      <div class="side-footer"><span class="status-dot"></span>水质稳定<br />今日已观察 18 分钟</div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="crumbs">Cochpia / <b>Sanctum</b></div>
+        <div class="top-actions"><button class="icon-btn" id="sound" aria-label="切换环境音"><i data-lucide="volume-2"></i></button><button class="icon-btn" id="focus" aria-label="进入专注模式"><i data-lucide="maximize-2"></i></button></div>
+      </header>
+
+      <div class="content">
+        <section class="intro">
+          <div><div class="eyebrow">Sanctum · Still blooming</div><h1>让共同经历，慢慢长出记忆。</h1><p>这是 Cochpia 的安静入口。把鱼缸作为共同生活的隐喻：每一次对话、观察与灵感，都在水面下保留自己的位置。</p></div>
+          <div class="live-pill"><span class="status-dot"></span><span id="view-label">Reef is alive</span></div>
+        </section>
+
+        <section class="workspace">
+          <article class="tank-card" aria-label="Cochpia 水族馆预览">
+            <div class="tank-toolbar"><div class="tank-label"><i data-lucide="droplets"></i><span><strong>Blue hour reef</strong> · 07:42 PM</span></div><div class="tank-tools"><button class="selected" data-scene="blue"><i data-lucide="moon"></i><span>蓝调</span></button><button data-scene="day"><i data-lucide="sun"></i><span>日光</span></button></div></div>
+            <div class="water" id="water"><span class="bubble b1"></span><span class="bubble b2"></span><span class="bubble b3"></span><span class="bubble b4"></span><span class="fish one"></span><span class="fish two"></span><span class="fish three"></span><span class="kelp k1"></span><span class="kelp k2"></span><span class="kelp k3"></span><span class="coral"></span><span class="sand"></span></div>
+            <div class="tank-caption"><div><h2>Blue hour reef</h2><span>3 fish · 12 notes · 1 new observation</span></div><span>温度 25.8°C</span></div>
+          </article>
+
+          <aside class="info-panel">
+            <div class="panel-title"><h3>Agents</h3><button id="shuffle">查看全部</button></div>
+            <div class="fish-list">
+              <div class="fish-row"><div class="fish-thumb"><i data-lucide="fish"></i></div><div><strong>Cochpia</strong><small>陪伴者 · 在线</small></div><span class="count">主</span></div>
+              <div class="fish-row"><div class="fish-thumb"><i data-lucide="fish"></i></div><div><strong>观察者</strong><small>记录共同经历</small></div><span class="count">06</span></div>
+              <div class="fish-row"><div class="fish-thumb"><i data-lucide="fish"></i></div><div><strong>协作者</strong><small>工作区 · 就绪</small></div><span class="count">04</span></div>
+            </div>
+            <div class="divider"></div>
+            <div class="note"><b>共同经历 · 刚刚</b>“好的想法不一定要立刻完成。先让它在水里游一会儿。”</div>
+            <div class="panel-title"><h3>水族馆指标</h3><i data-lucide="activity" style="color:var(--aqua);width:17px"></i></div>
+            <div class="fish-row"><div><strong>今日专注</strong><small>比昨日多 24 分钟</small></div><span class="count" style="color:var(--aqua)">01:18</span></div>
+          </aside>
+        </section>
+
+        <section class="recent"><div class="panel-title"><h3>Sessions</h3><button id="new-note">+ 新的相遇</button></div><div class="recent-grid"><button class="recent-card"><div class="mini-line"></div><strong>水族馆首页的第一版结构</strong><span>与 Cochpia · 刚刚</span></button><button class="recent-card"><div class="mini-line" style="background:var(--aqua)"></div><strong>关于安静界面的 5 个判断</strong><span>与观察者 · 昨天</span></button><button class="recent-card"><div class="mini-line" style="background:var(--sand)"></div><strong>cochpia 语气和内容原则</strong><span>工作区 · 3 天前</span></button></div></section>
+        <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+        <section class="sheet" id="note-sheet" aria-label="新的相遇" hidden>
+          <div class="sheet-handle"></div><div class="sheet-head"><div><div class="eyebrow">New session</div><h2>新的相遇</h2></div><button class="close-sheet" id="close-sheet" aria-label="关闭"><i data-lucide="x"></i></button></div>
+          <p>写下此刻想和 Cochpia 分享的事。</p><textarea placeholder="今天的水面是什么颜色？"></textarea><div class="sheet-foot"><button class="sheet-secondary" id="cancel-sheet">取消</button><button class="sheet-primary" id="start-sheet">开始对话</button></div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script>
+    lucide.createIcons();
+    const root = document.documentElement;
+    const water = document.querySelector('#water');
+    document.querySelectorAll('[data-scene]').forEach((button) => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-scene]').forEach((item) => item.classList.remove('selected'));
+      button.classList.add('selected');
+      water.style.background = button.dataset.scene === 'day'
+        ? 'linear-gradient(160deg, #2e7780 0%, #126075 50%, #08384a 100%)'
+        : 'linear-gradient(160deg, #0b4455 0%, #082d3b 48%, #041b29 100%)';
+    }));
+    document.querySelector('#sound').addEventListener('click', (event) => {
+      const icon = event.currentTarget.querySelector('svg');
+      icon.setAttribute('data-lucide', icon.getAttribute('data-lucide') === 'volume-2' ? 'volume-x' : 'volume-2');
+      lucide.createIcons();
+    });
+    document.querySelector('#focus').addEventListener('click', () => document.body.classList.toggle('focus-mode'));
+    document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-view]').forEach((item) => item.classList.remove('active'));
+      button.classList.add('active');
+      document.querySelector('#view-label').textContent = button.dataset.view === 'aquarium' ? 'Reef is alive' : `${button.textContent.trim()} ready`;
+    }));
+    document.querySelector('#shuffle').addEventListener('click', () => {
+      const fish = document.querySelectorAll('.fish');
+      fish.forEach((item, index) => item.style.animationDelay = `${-Math.random() * (index + 4)}s`);
+    });
+    const sheet = document.querySelector('#note-sheet');
+    const backdrop = document.querySelector('#sheet-backdrop');
+    const closeSheet = () => { sheet.hidden = true; backdrop.hidden = true; };
+    document.querySelector('#new-note').addEventListener('click', () => { sheet.hidden = false; backdrop.hidden = false; sheet.querySelector('textarea').focus(); });
+    document.querySelector('#close-sheet').addEventListener('click', closeSheet);
+    document.querySelector('#cancel-sheet').addEventListener('click', closeSheet);
+    backdrop.addEventListener('click', closeSheet);
+    document.querySelector('#start-sheet').addEventListener('click', closeSheet);
+  </script>
+</body>
+</html>

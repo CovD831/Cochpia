@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveDbSsl } from './db-ssl.js';
+import { assertProductionDbSsl, resolveDbSsl } from './db-ssl.js';
 
 test('db ssl defaults to no SSL when DATABASE_SSL is unset', () => {
   const original = process.env.DATABASE_SSL;
@@ -21,4 +21,13 @@ test('db ssl allows an explicit no-verify opt-in', () => {
   process.env.DATABASE_SSL = 'no-verify';
   try { assert.deepEqual(resolveDbSsl(), { rejectUnauthorized: false }); }
   finally { if (original === undefined) delete process.env.DATABASE_SSL; else process.env.DATABASE_SSL = original; }
+});
+
+test('production postgres requires certificate verification', () => {
+  const previous = process.env.DATABASE_SSL;
+  delete process.env.DATABASE_SSL;
+  assert.throws(() => assertProductionDbSsl({ environment: 'production', provider: 'postgres' }), /DATABASE_SSL=true/);
+  process.env.DATABASE_SSL = 'true';
+  assert.doesNotThrow(() => assertProductionDbSsl({ environment: 'production', provider: 'postgres' }));
+  if (previous === undefined) delete process.env.DATABASE_SSL; else process.env.DATABASE_SSL = previous;
 });

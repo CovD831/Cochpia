@@ -92,20 +92,21 @@ export function GroupInfoPanel({ session, agents, open, onClose, onSave, onInvit
 
 export function AgentCard({ agent, onChat, onEdit, onDelete, onView }) {
   const displayName = agent.remark || agent.name;
-  return <div className="agent-card" style={{ order: agent.primary ? -2 : agent.pinned ? -1 : 0 }}>
-    <div className="agent-card-banner" aria-hidden="true" />
-    <div className="agent-card-body">
+  return <article className="agent-card" style={{ order: agent.primary ? -2 : agent.pinned ? -1 : 0 }}>
+    <button type="button" className="agent-card-visual agent-card-avatar-btn" onClick={() => onView(agent)} aria-label="查看资料" title="查看资料">
+      {agent.avatarImage ? <img src={agent.avatarImage} alt="" /> : <span>{agentInitial(agent)}</span>}
+      <i aria-hidden="true" />
+    </button>
+    <div className="agent-card-right">
       <div className="agent-card-head">
-        <button type="button" className="agent-card-avatar agent-card-avatar-btn" onClick={() => onView(agent)} aria-label="查看资料" title="查看资料">{agent.avatarImage ? <img src={agent.avatarImage} alt="" /> : agentInitial(agent)}</button>
         <div className="agent-card-id"><strong>{agent.primary && <span className="agent-badge" title="主陪伴">主</span>}{agent.pinned && <span className="agent-badge" title="已置顶">📌</span>}{displayName}</strong><small>{agent.role || agent.relationship || '朋友'}{agent.remark ? ` · ${agent.name}` : ''}{agent.muted ? ' · 🔕' : ''}</small></div>
         <span className="agent-card-model">{agent.model || agent.provider || '默认'}</span>
       </div>
-      <p className="agent-card-signature">{agent.signature || '（还没有个性签名）'}</p>
-      {(agent.tags || []).length > 0 && <div className="agent-tags">{agent.tags.map(tag => <span className="agent-tag" key={tag}>{tag}</span>)}</div>}
-      <div className="agent-card-info"><div className="agent-card-row"><span>说话语气</span><b>{agent.tone || '自然、温和'}</b></div></div>
+      <p className="agent-card-signature">{agent.signature || '还没有个性签名'}</p>
+      <div className="agent-card-details"><span>{agent.tone || '自然、温和'}</span>{(agent.tags || []).slice(0, 2).map(tag => <span key={tag}>{tag}</span>)}</div>
       <div className="agent-card-actions"><button type="button" className="select-model" onClick={() => onChat(agent)}>发消息</button><button type="button" className="text-button" onClick={() => onEdit(agent)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => onDelete(agent)}>删除</button></div>
     </div>
-  </div>;
+  </article>;
 }
 
 export function AgentFormModal({ agent, models, onClose, onSave }) {

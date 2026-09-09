@@ -7,15 +7,13 @@ test('mergeState adds missing items by id without overwriting existing ones', ()
     sessions: [{ id: 'a', title: 'existing' }],
     messages: { a: [{ id: 'm1', role: 'user', content: 'old' }] },
     memories: [{ id: 'm1' }],
-    personality: { version: 2 },
-    evidence: [], personalityHistory: [], personalityAudit: []
+    evidence: []
   };
   const incoming = {
     sessions: [{ id: 'a', title: 'imported-dup' }, { id: 'b', title: 'new' }],
     messages: { a: [{ id: 'm1', content: 'dup' }, { id: 'm2', content: 'new' }], b: [{ id: 'm3', content: 'b-msg' }] },
     memories: [{ id: 'm1' }, { id: 'm2' }],
-    personality: { version: 99 },
-    evidence: [], personalityHistory: [], personalityAudit: []
+    evidence: []
   };
   const merged = mergeState(base, incoming);
   assert.equal(merged.sessions.length, 2);
@@ -23,12 +21,6 @@ test('mergeState adds missing items by id without overwriting existing ones', ()
   assert.equal(merged.messages.a.length, 2);
   assert.equal(merged.messages.b.length, 1);
   assert.equal(merged.memories.length, 2);
-  assert.equal(merged.personality.version, 2);
-});
-
-test('mergeState fills personality only when missing', () => {
-  const merged = mergeState({ sessions: [] }, { personality: { version: 7 }, sessions: [] });
-  assert.equal(merged.personality.version, 7);
 });
 
 test('mergeState imports workspace preferences only when missing', () => {

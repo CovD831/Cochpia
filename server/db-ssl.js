@@ -15,3 +15,11 @@ export function resolveDbSsl() {
   if (mode === 'no-verify') return { rejectUnauthorized: false };
   return undefined;
 }
+
+export function assertProductionDbSsl({ environment = process.env.NODE_ENV, provider = process.env.STORAGE_PROVIDER } = {}) {
+  if (String(environment || '').toLowerCase() !== 'production' || String(provider || '').toLowerCase() !== 'postgres') return;
+  const mode = String(process.env.DATABASE_SSL || '').toLowerCase();
+  if (!['true', 'require', 'verify-full'].includes(mode)) {
+    throw Object.assign(new Error('DATABASE_SSL=true (or verify-full) is required in production'), { code: 'DATABASE_TLS_VERIFICATION_REQUIRED', status: 503 });
+  }
+}

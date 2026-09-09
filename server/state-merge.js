@@ -16,7 +16,7 @@ export function mergeState(base, incoming) {
     }
     merged[key] = target;
   };
-  ['sessions', 'memories', 'evidence', 'personalityHistory', 'personalityAudit', 'agents'].forEach(mergeById);
+  ['sessions', 'memories', 'evidence', 'agents'].forEach(mergeById);
 
   if (incoming.messages && typeof incoming.messages === 'object') {
     merged.messages = { ...(merged.messages || {}) };
@@ -34,7 +34,6 @@ export function mergeState(base, incoming) {
     }
   }
 
-  if (!merged.personality && incoming.personality) merged.personality = incoming.personality;
   if (!merged.profile && incoming.profile) merged.profile = incoming.profile;
   if (!merged.workspacePreferences && incoming.workspacePreferences) merged.workspacePreferences = incoming.workspacePreferences;
 

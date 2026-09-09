@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cochpia 前端设计稿</title>
+<style>
+  :root {
+    --canvas: #0b121a;
+    --panel: #101b26;
+    --elevated: #172533;
+    --text-strong: #f3f7fb;
+    --text-body: #b6c4d0;
+    --text-muted: #718496;
+    --border: #233443;
+    --action: #8cc9bd;
+    --gold: #e5bb83;
+    --danger: #ed8c83;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 20% -10%, #14232e 0%, #0b121a 60%);
+    color: var(--text-body);
+    font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 40px 24px 80px;
+  }
+  .board-head { max-width: 1280px; margin: 0 auto 32px; }
+  .board-head .kicker { color: var(--action); font-size: 12px; letter-spacing: .18em; text-transform: uppercase; }
+  .board-head h1 { color: var(--text-strong); font-size: 30px; margin: 8px 0 6px; font-weight: 600; }
+  .board-head p { color: var(--text-muted); max-width: 720px; }
+  .tokens { display: flex; flex-wrap: wrap; gap: 10px; max-width: 1280px; margin: 18px auto 0; }
+  .token { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: rgba(23,37,51,.6); font-size: 12px; color: var(--text-muted); }
+  .token i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+
+  .section { max-width: 1280px; margin: 40px auto 0; }
+  .section-title { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; color: var(--text-strong); font-size: 18px; }
+  .section-title small { color: var(--text-muted); font-size: 12px; }
+  .frames { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+  .frame { position: relative; }
+  .frame-label { position: absolute; top: -22px; left: 0; font-size: 11px; color: var(--text-muted); letter-spacing: .05em; }
+
+  /* 手机框 */
+  .phone { width: 320px; border-radius: 34px; border: 1px solid #2a3a4a; background: #0d1722; padding: 10px; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+  .phone-screen { position: relative; border-radius: 26px; background: var(--canvas); overflow: hidden; height: 640px; display: flex; flex-direction: column; }
+  .phone-notch { height: 22px; display: flex; align-items: center; justify-content: center; }
+  .phone-notch::after { content: ""; width: 90px; height: 14px; border-radius: 10px; background: #0a1119; }
+  .statusbar { display: flex; justify-content: space-between; padding: 0 14px 4px; font-size: 9px; color: var(--text-muted); }
+
+  /* 桌面框 */
+  .desktop { width: 920px; border-radius: 12px; border: 1px solid #2a3a4a; background: #0d1722; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,.5); }
+  .desktop-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #0f1a26; border-bottom: 1px solid var(--border); }
+  .desktop-bar i { width: 10px; height: 10px; border-radius: 50%; }
+  .desktop-bar .r { background: var(--danger); } .desktop-bar .y { background: var(--gold); } .desktop-bar .g { background: var(--action); }
+  .desktop-bar span { margin-left: 10px; color: var(--text-muted); font-size: 10px; }
+  .desktop-body { display: flex; min-height: 420px; background: var(--canvas); }
+
+  /* 通用组件 */
+  .btn { border: 0; border-radius: 8px; padding: 7px 12px; font-size: 11px; cursor: pointer; }
+  .btn-primary { background: var(--action); color: #0b121a; font-weight: 600; }
+  .btn-ghost { background: transparent; color: var(--action); }
+  .btn-danger { background: transparent; color: var(--danger); }
+  .pill { display: inline-block; font-size: 9px; color: var(--action); border: 1px solid rgba(140,201,189,.4); border-radius: 999px; padding: 2px 7px; }
+  .eyebrow { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--text-muted); }
+
+  /* 底部标签栏 */
+  .tabbar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-around; padding: 8px 4px 12px; background: rgba(23,37,51,.94); border-top: 1px solid var(--border); }
+  .tab { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 9px; color: var(--text-muted); }
+  .tab.on { color: var(--action); }
+  .tab .dot { width: 24px; height: 24px; border-radius: 50%; background: var(--elevated); display: grid; place-items: center; font-size: 12px; }
+  .tab.on .dot { background: var(--action); color: #0b121a; }
+
+  /* 左侧导航（桌面） */
+  .rail { width: 84px; display: flex; flex-direction: column; align-items: center; gap: 20px; padding-top: 30px; border-right: 1px solid var(--border); }
+  .rail .item { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 9px; color: var(--text-muted); }
+  .rail .item.on { color: var(--action); }
+  .rail .item .dot { width: 34px; height: 34px; border-radius: 50%; background: var(--elevated); display: grid; place-items: center; font-size: 14px; }
+  .rail .item.on .dot { background: var(--action); color: #0b121a; }
+
+  /* 气泡 */
+  .bubble-row { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 14px; }
+  .bubble-row.me { flex-direction: row-reverse; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--elevated); display: grid; place-items: center; font-size: 12px; color: var(--action); flex: 0 0 28px; }
+  .bubble { max-width: 72%; padding: 9px 12px; font-size: 12px; line-height: 1.5; }
+  .bubble.theirs { background: #1c2a38; color: var(--text-strong); border-radius: 4px 14px 14px 14px; }
+  .bubble.mine { background: var(--action); color: #0b121a; border-radius: 14px 4px 14px 14px; }
+  .sender { font-size: 9px; color: var(--text-muted); margin: 0 0 4px 36px; }
+  .time-sep { text-align: center; font-size: 9px; color: var(--text-muted); margin: 16px 0; }
+  .time-sep span { background: rgba(23,37,51,.8); padding: 2px 10px; border-radius: 999px; }
+
+  /* 输入栏 */
+  .composer { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 6px; padding: 10px 12px 14px; background: linear-gradient(transparent, #0b121a 30%); }
+  .composer .input { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: 18px; padding: 9px 12px; font-size: 12px; color: var(--text-strong); }
+  .composer .round { width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; font-size: 14px; background: transparent; color: var(--text-muted); cursor: pointer; }
+  .composer .send { background: var(--action); color: #0b121a; }
+
+  /* 卡片 */
+  .card { background: var(--elevated); border: 1px solid var(--border); border-radius: var(--radius); }
+  .agent-card { overflow: hidden; border-radius: 14px; background: var(--elevated); border: 1px solid var(--border); }
+  .agent-banner { height: 44px; background: linear-gradient(135deg, rgba(140,201,189,.3), rgba(140,201,189,.06) 70%); }
+  .agent-body { padding: 0 12px 12px; }
+  .agent-head { display: flex; align-items: center; gap: 8px; margin-top: -16px; }
+  .agent-ava { width: 40px; height: 40px; border-radius: 12px; border: 3px solid var(--elevated); background: rgba(140,201,189,.18); display: grid; place-items: center; font-size: 18px; color: var(--action); }
+  .agent-name { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+  .agent-role { font-size: 9px; color: var(--text-muted); }
+  .agent-sig { font-size: 10px; color: var(--text-muted); margin: 6px 0; }
+  .agent-actions { display: flex; gap: 8px; font-size: 10px; }
+
+  /* 资料页 */
+  .profile-banner { height: 80px; background: linear-gradient(135deg, rgba(140,201,189,.35), rgba(140,201,189,.06) 70%); }
+  .profile-ava { width: 64px; height: 64px; border-radius: 20px; border: 4px solid var(--panel); background: rgba(140,201,189,.18); display: grid; place-items: center; font-size: 30px; color: var(--action); margin: -28px 0 0 18px; }
+  .info-row { display: flex; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--border); font-size: 11px; }
+  .info-row span { color: var(--text-muted); }
+  .info-row b { color: var(--text-body); font-weight: 500; }
+  .switch { width: 34px; height: 20px; border-radius: 999px; background: var(--action); position: relative; }
+  .switch::after { content: ""; position: absolute; right: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #0b121a; }
+  .tag { font-size: 9px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+
+  /* 工作区 */
+  .wb-panel { border: 1px solid var(--border); border-radius: 12px; background: var(--elevated); padding: 14px; margin-bottom: 12px; }
+  .wb-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .wb-card { border: 1px solid var(--border); border-radius: 12px; background: var(--elevated); padding: 14px; }
+  .wb-card .ico { width: 32px; height: 32px; border-radius: 9px; background: rgba(140,201,189,.14); display: grid; place-items: center; color: var(--action); font-size: 15px; margin-bottom: 8px; }
+  .steps { display: flex; align-items: center; gap: 4px; margin: 10px 0; }
+  .step { flex: 1; text-align: center; font-size: 9px; color: var(--text-muted); }
+  .step .bar { height: 4px; border-radius: 4px; background: var(--border); margin-top: 4px; }
+  .step.done .bar { background: var(--action); }
+  .step.active .bar { background: var(--gold); }
+
+  /* 弹窗遮罩 */
+  .overlay { position: absolute; inset: 0; background: rgba(7,16,24,.6); display: grid; place-items: center; z-index: 5; }
+  .dialog { width: 86%; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; }
+
+  /* splash */
+  .splash { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; background: radial-gradient(circle at 50% 40%, rgba(140,201,189,.16), transparent 55%), #0b121a; }
+  .orb { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--action); position: relative; margin: 0 auto 20px; }
+  .orb::after { content: ""; position: absolute; inset: 24px; border-radius: 50%; background: var(--action); box-shadow: 0 0 22px rgba(140,201,189,.6); }
+  .word { font-family: Georgia, "Times New Roman", serif; font-style: italic; font-size: 44px; color: #fffafc; }
+  .tagline { font-style: italic; color: var(--action); font-size: 15px; margin-top: 4px; }
+  .hint { margin-top: 22px; font-size: 10px; letter-spacing: 3px; color: var(--text-muted); }
+
+  .muted { color: var(--text-muted); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+</style>
+</head>
+<body>
+
+<div class="board-head">
+  <div class="kicker">Cochpia · UI Design Mockup</div>
+  <h1>前端设计稿</h1>
+  <p>暗色玻璃拟态 + 香槟青绿点缀。双端形态：移动端底部标签栏 / 桌面端左侧图标导航。聊天界面仿照 QQ / Line / 微信主流范式，频道栏、工具日志、派发任务卡为 Cochpia 特有叠加层。</p>
+  <div class="tokens">
+    <span class="token"><i style="background:#0b121a"></i>画布 #0b121a</span>
+    <span class="token"><i style="background:#101b26"></i>面板 #101b26</span>
+    <span class="token"><i style="background:#8cc9bd"></i>强调 #8cc9bd</span>
+    <span class="token"><i style="background:#e5bb83"></i>暖金 #e5bb83</span>
+    <span class="token"><i style="background:#ed8c83"></i>危险 #ed8c83</span>
+    <span class="token"><i style="background:#b6c4d0"></i>正文 #b6c4d0</span>
+  </div>
+</div>
+
+<!-- 移动端 -->
+<div class="section">
+  <div class="section-title">移动端（390px 基准）<small>底部标签栏导航 · 底部抽屉弹窗</small></div>
+  <div class="frames">
+
+    <!-- Splash -->
+    <div class="frame"><div class="frame-label">1 · Splash 开屏</div>
+      <div class="phone"><div class="phone-screen">
+        <div class="splash">
+          <div><div class="orb"></div><div class="word">Cochpia</div><div class="tagline">Still Blooming</div><div style="color:var(--action);margin-top:14px">— ✦ —</div><div class="hint">轻 触 进 入</div></div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- 首页 -->
+    <div class="frame"><div class="frame-label">2 · 首页 Sanctum</div>
+      <div class="phone"><div class="phone-screen">
+        <div class="phone-notch"></div>
+        <div class="statusbar"><span>9:41</span><span>🟢 本地开发</span></div>
+        <div style="padding:0 14px;overflow:auto;height:100%;padding-bottom:60px">
+          <div class="card" style="display:flex;gap:12px;padding:14px;margin-bottom:12px">
+            <div class="avatar" style="width:44px;height:44px;flex:0 0 44px;font-size:20px">✦</div>
+            <div><div style="color:var(--text-strong);font-weight:600">Cochpia <span class="btn btn-ghost" style="font-size:10px">编辑档案</span></div><div class="muted" style="font-size:10px;margin-top:3px">会从共同经历中逐步形成对你的理解。</div></div>
+          </div>
+          <div class="grid2" style="margin-bottom:14px">
+            <div class="card" style="padding:12px"><div style="color:var(--action)">＋</div><div style="color:var(--text-strong);font-size:13px">新的相遇</div><div class="muted" style="font-size:9px">6 个会话</div></div>
+            <div class="card" style="padding:12px"><div style="color:var(--action)">📅</div><div style="color:var(--text-strong);font-size:13px">日历</div><div class="muted" style="font-size:9px">0 条日程</div></div>
+          </div>
+          <div class="eyebrow" style="margin:0 0 8px">Agents</div>
+          <div style="display:grid;gap:10px">
+            <div class="agent-card"><div class="agent-banner"></div><div class="agent-body">
+              <div class="agent-head"><div class="agent-ava">被</div><div style="flex:1"><div class="agent-name">被拯救者</div><div class="agent-role">朋友 · 叛逆，反抗</div></div><span class="pill">deepseek</span></div>
+              <div class="agent-sig">没有个性签名</div>
+              <div class="agent-actions"><span class="btn btn-primary">发消息</span><span class="btn btn-ghost">编辑</span><span class="btn btn-danger">删除</span></div>
+            </div></div>
+            <div class="agent-card"><div class="agent-banner"></div><div class="agent-body">
+              <div class="agent-head"><div class="agent-ava">4</div><div style="flex:1"><div class="agent-name">404</div><div class="agent-role">朋友 · 嘴硬心软</div></div><span class="pill">deepseek</span></div>
+              <div class="agent-sig">嘴硬，心软。会吃醋，会逞强。</div>
+              <div class="agent-actions"><span class="btn btn-primary">发消息</span><span class="btn btn-ghost">编辑</span><span class="btn btn-danger">删除</span></div>
+            </div></div>
+            <div class="agent-card" style="border-style:dashed;background:transparent;text-align:center;padding:16px"><div style="color:var(--action);font-size:20px">＋</div><div style="color:var(--text-strong);font-size:12px">新建角色</div></div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <span class="tab on"><span class="dot">⌂</span>Sanctum</span>
+          <span class="tab"><span class="dot">✎</span>Chat</span>
+          <span class="tab"><span class="dot">◈</span>共生</span>
+          <span class="tab"><span class="dot">▦</span>工作区</span>
+          <span class="tab"><span class="dot">♪</span>Music</span>
+          <span class="tab"><span class="dot">☾</span>Veil</span>
+          <span class="tab"><span class="dot">⚙</span>设置</span>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- 私聊 -->
+    <div class="frame"><div class="frame-label">3 · 聊天 - 私聊（仿 QQ/Line）</div>
+      <div class="phone"><div class="phone-screen">
+        <div class="phone-notch"></div>
+        <div class="statusbar"><span>9:41</span><span>🟢 SSE 已连接</span></div>
+        <div style="border-bottom:1px solid var(--border);padding:8px 14px">
+          <div class="eyebrow">PRIVATE CHAT</div>
+          <div style="color:var(--text-strong);font-weight:600">被 被拯救者</div>
+          <div class="muted" style="font-size:10px">叛逆，反抗</div>
+        </div>
+        <div style="display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:10px">
+          <span class="pill" style="border-color:var(--border)">默认频道</span>
+          <span style="color:var(--text-muted)">＋</span>
+          <span style="flex:1"></span>
+          <span class="pill" style="background:var(--action);color:#0b121a">陪伴</span>
+        </div>
+        <div style="flex:1;overflow:hidden;padding:12px 14px">
+          <div class="time-sep"><span>今天 14:00</span></div>
+          <div class="bubble-row"><div class="avatar">被</div><div><div class="bubble theirs">新家……地方不大，但够我们俩待着。你挑的？眼光还行。</div></div></div>
+          <div class="bubble-row me"><div class="avatar">你</div><div><div class="bubble mine">帮我看看移动端布局有没有问题</div></div></div>
+          <div class="bubble-row"><div class="avatar">被</div><div><div class="bubble theirs">好，我看看。<br/>嗯……气泡和导航都是对的，就是首页角色卡还能再精致点。</div></div></div>
+        </div>
+        <div class="composer">
+          <span class="round">📎</span><span class="round">🎤</span><span class="round">🔊</span>
+          <div class="input">写下此刻想分享的事…</div>
+          <span class="round send">↑</span>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- 群聊 -->
+    <div class="frame"><div class="frame-label">4 · 聊天 - 群聊（多成员）</div>
+      <div class="phone"><div class="phone-screen">
+        <div class="phone-notch"></div>
+        <div class="statusbar"><span>9:41</span><span>🟢 SSE</span></div>
+        <div style="border-bottom:1px solid var(--border);padding:8px 14px">
+          <div class="eyebrow">GROUP SPACE</div>
+          <div style="color:var(--text-strong);font-weight:600">一家人 <span class="muted" style="font-size:10px">· 3 人</span></div>
+        </div>
+        <div style="display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:10px">
+          <span class="pill" style="border-color:var(--border)">默认</span>
+          <span style="flex:1"></span>
+          <span class="pill">并行</span>
+          <span class="pill">群信息</span>
+        </div>
+        <div style="flex:1;overflow:hidden;padding:12px 14px">
+          <div class="time-sep"><span>今天 15:00</span></div>
+          <div class="sender">404</div>
+          <div class="bubble-row"><div class="avatar">4</div><div><div class="bubble theirs">你们俩聊一下？我听见了。</div></div></div>
+          <div class="sender">被拯救者</div>
+          <div class="bubble-row"><div class="avatar">被</div><div><div class="bubble theirs">行啊，那我们就当着他的面，好好说说。</div></div></div>
+          <div class="bubble-row me"><div class="avatar">你</div><div><div class="bubble mine">你们互相认识一下吧</div></div></div>
+        </div>
+        <div class="composer">
+          <span class="round">📎</span><span class="round">🎤</span>
+          <div class="input">发消息…</div>
+          <span class="round send">↑</span>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Agent 资料页 -->
+    <div class="frame"><div class="frame-label">5 · Agent 资料页（仿 Line/QQ）</div>
+      <div class="phone"><div class="phone-screen">
+        <div class="phone-notch"></div>
+        <div class="statusbar"><span>9:41</span><span>✕</span></div>
+        <div style="flex:1;overflow:auto">
+          <div class="profile-banner"></div>
+          <div style="display:flex;align-items:flex-end;gap:12px;padding:0 16px 12px">
+            <div class="profile-ava">4</div>
+            <div style="padding-bottom:2px"><div style="color:var(--text-strong);font-size:20px;font-weight:600">📌 404</div><div class="muted" style="font-size:10px">原名 · 404</div><div style="color:var(--text-body);font-size:12px">嘴硬，心软。会吃醋，会逞强。</div></div>
+          </div>
+          <div style="padding:0 16px">
+            <div class="info-row"><span>角色定位</span><b>朋友</b></div>
+            <div class="info-row"><span>说话语气</span><b>嘴硬心软</b></div>
+            <div class="info-row"><span>模型</span><b>deepseek-chat</b></div>
+            <div class="info-row" style="display:block"><span>人格设定</span><p style="color:var(--text-body);font-size:11px;margin-top:4px">嘴硬心软，会吃醋，会逞强。你逗我时容易当真…</p></div>
+          </div>
+          <div style="padding:12px 16px;border-top:1px solid var(--border)">
+            <div class="eyebrow" style="margin-bottom:8px">关系设定 <span class="muted">单边设置</span></div>
+            <div class="info-row"><span>置顶</span><span class="switch"></span></div>
+            <div class="info-row"><span>免打扰</span><span class="switch" style="background:var(--border)"></span></div>
+            <div class="info-row" style="display:block"><span>标签</span><div style="display:flex;gap:5px;margin-top:6px"><span class="tag">同事</span><span class="tag">＋ 添加</span></div></div>
+          </div>
+          <div style="display:flex;gap:10px;padding:14px 16px"><span class="btn btn-primary" style="flex:1;text-align:center">发消息</span><span class="btn" style="flex:1;text-align:center;background:var(--elevated);color:var(--text-body)">编辑</span></div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- 审批弹窗 -->
+    <div class="frame"><div class="frame-label">6 · 审批弹窗（风险分级）</div>
+      <div class="phone"><div class="phone-screen">
+        <div class="phone-notch"></div>
+        <div class="statusbar"><span>9:41</span></div>
+        <div style="flex:1;padding:14px;background:var(--canvas)">
+          <div class="card" style="padding:14px">
+            <div class="eyebrow">WORK MODE · 待确认操作</div>
+            <div style="color:var(--text-strong);font-size:16px;font-weight:600;margin:8px 0">确认执行命令？</div>
+            <div class="muted" style="font-size:11px">风险等级：执行</div>
+            <div style="background:#0b121a;border-radius:10px;padding:10px;margin:12px 0;font-family:monospace;font-size:11px;color:var(--action)">$ npm test</div>
+            <div style="display:flex;gap:8px;margin-top:14px"><span class="btn btn-primary" style="flex:1;text-align:center">确认执行</span><span class="btn" style="flex:1;text-align:center;background:var(--elevated);color:var(--text-body)">拒绝</span></div>
+          </div>
+          <div class="card" style="padding:14px;margin-top:12px">
+            <div class="eyebrow">WORK MODE · 待确认操作</div>
+            <div style="color:var(--text-strong);font-size:16px;font-weight:600;margin:8px 0">二次确认部署操作</div>
+            <div class="muted" style="font-size:11px">风险等级：部署 · 需要第二次确认才会放行</div>
+            <div style="display:flex;gap:8px;margin-top:14px"><span class="btn btn-primary" style="flex:1;text-align:center">确认第二次放行</span></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 桌面端 -->
+<div class="section">
+  <div class="section-title">桌面端（1440px 基准）<small>左侧图标导航 · 可拖拽浮动窗口</small></div>
+  <div class="frames">
+
+    <!-- 首页桌面 -->
+    <div class="frame"><div class="frame-label">7 · 首页（桌面）</div>
+      <div class="desktop">
+        <div class="desktop-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Cochpia</span></div>
+        <div class="desktop-body">
+          <div class="rail">
+            <span class="item on"><span class="dot">⌂</span>Sanctum</span>
+            <span class="item"><span class="dot">✎</span>Chat</span>
+            <span class="item"><span class="dot">◈</span>共生</span>
+            <span class="item"><span class="dot">▦</span>工作区</span>
+            <span class="item"><span class="dot">♪</span>Music</span>
+            <span class="item"><span class="dot">☾</span>Veil</span>
+            <span class="item"><span class="dot">⚙</span>设置</span>
+          </div>
+          <div style="flex:1;padding:28px 32px;overflow:auto">
+            <div class="card" style="display:flex;gap:14px;padding:16px;margin-bottom:16px;align-items:center">
+              <div class="avatar" style="width:52px;height:52px;flex:0 0 52px;font-size:24px">✦</div>
+              <div style="flex:1"><div style="color:var(--text-strong);font-weight:600;font-size:16px">Cochpia <span class="btn btn-ghost">编辑档案</span></div><div class="muted" style="font-size:11px">会从共同经历中逐步形成对你的理解。</div></div>
+            </div>
+            <div class="eyebrow" style="margin-bottom:8px">Agents</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+              <div class="agent-card"><div class="agent-banner"></div><div class="agent-body">
+                <div class="agent-head"><div class="agent-ava">被</div><div style="flex:1"><div class="agent-name">被拯救者</div><div class="agent-role">朋友</div></div><span class="pill">deepseek</span></div>
+                <div class="agent-sig">叛逆，反抗</div>
+                <div class="agent-actions"><span class="btn btn-primary">发消息</span><span class="btn btn-ghost">编辑</span></div>
+              </div></div>
+              <div class="agent-card"><div class="agent-banner"></div><div class="agent-body">
+                <div class="agent-head"><div class="agent-ava">4</div><div style="flex:1"><div class="agent-name">404</div><div class="agent-role">朋友</div></div><span class="pill">deepseek</span></div>
+                <div class="agent-sig">嘴硬心软</div>
+                <div class="agent-actions"><span class="btn btn-primary">发消息</span><span class="btn btn-ghost">编辑</span></div>
+              </div></div>
+              <div class="agent-card" style="border-style:dashed;background:transparent;display:grid;place-items:center;text-align:center"><div><div style="color:var(--action);font-size:22px">＋</div><div style="color:var(--text-strong);font-size:12px">新建角色</div></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 工作区桌面 -->
+    <div class="frame"><div class="frame-label">8 · 工作区（桌面）</div>
+      <div class="desktop">
+        <div class="desktop-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>Cochpia</span></div>
+        <div class="desktop-body">
+          <div class="rail">
+            <span class="item"><span class="dot">⌂</span>Sanctum</span>
+            <span class="item"><span class="dot">✎</span>Chat</span>
+            <span class="item"><span class="dot">◈</span>共生</span>
+            <span class="item on"><span class="dot">▦</span>工作区</span>
+            <span class="item"><span class="dot">♪</span>Music</span>
+            <span class="item"><span class="dot">☾</span>Veil</span>
+            <span class="item"><span class="dot">⚙</span>设置</span>
+          </div>
+          <div style="flex:1;padding:24px 28px;overflow:auto">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+              <div><div class="eyebrow">COCHPIA WORKSPACE</div><div style="color:var(--text-strong);font-size:22px;font-weight:600">工作区</div></div>
+              <span class="btn btn-primary">◈ 协作开发</span>
+            </div>
+            <div class="wb-panel">
+              <div class="eyebrow">MODEL DIRECTORY</div>
+              <div style="color:var(--text-strong);font-weight:600;margin:4px 0 10px">模型配置 <span class="pill" style="border-color:var(--action)">已连接</span></div>
+              <div style="display:flex;gap:8px">
+                <div style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:11px">DeepSeek</div>
+                <div style="flex:1;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:11px">deepseek-chat</div>
+                <span class="btn" style="background:var(--elevated);color:var(--text-body)">测试连接</span>
+                <span class="btn btn-primary">用于当前会话</span>
+              </div>
+            </div>
+            <div class="wb-grid">
+              <div class="wb-card"><div class="ico">▣</div><div style="color:var(--text-strong);font-weight:600;font-size:12px">GitHub</div><div class="muted" style="font-size:10px">查看仓库与提交</div></div>
+              <div class="wb-card"><div class="ico">▤</div><div style="color:var(--text-strong);font-weight:600;font-size:12px">Codex</div><div class="muted" style="font-size:10px">任务执行器</div></div>
+              <div class="wb-card"><div class="ico">◈</div><div style="color:var(--text-strong);font-weight:600;font-size:12px">Pi Agent</div><div class="muted" style="font-size:10px">实现 Agent</div></div>
+              <div class="wb-card"><div class="ico">✎</div><div style="color:var(--text-strong);font-weight:600;font-size:12px">Claude Code</div><div class="muted" style="font-size:10px">审查 Agent</div></div>
+            </div>
+            <div class="wb-panel" style="margin-top:12px">
+              <div class="eyebrow">TASK FLOW · 协作流水线</div>
+              <div class="steps">
+                <div class="step done">plan<span class="bar"></span></div>
+                <div class="step done">implement<span class="bar"></span></div>
+                <div class="step active">verify<span class="bar"></span></div>
+                <div class="step">review<span class="bar"></span></div>
+              </div>
+              <div class="muted" style="font-size:10px">pi 规划 → codex 实现 → 验证 → 审查</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 设置浮动窗口 -->
+    <div class="frame"><div class="frame-label">9 · 设置（桌面浮动窗口）</div>
+      <div class="desktop" style="width:440px">
+        <div class="desktop-bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>设置</span></div>
+        <div style="display:flex;min-height:320px;background:var(--canvas)">
+          <div style="width:110px;border-right:1px solid var(--border);padding:12px 8px;display:flex;flex-direction:column;gap:4px">
+            <span style="font-size:11px;color:var(--action);padding:6px 10px;border-radius:6px;background:var(--elevated)">外观</span>
+            <span style="font-size:11px;color:var(--text-muted);padding:6px 10px">字体</span>
+            <span style="font-size:11px;color:var(--text-muted);padding:6px 10px">背景</span>
+            <span style="font-size:11px;color:var(--text-muted);padding:6px 10px">声音</span>
+            <span style="font-size:11px;color:var(--text-muted);padding:6px 10px">时间</span>
+            <span style="font-size:11px;color:var(--text-muted);padding:6px 10px">语言</span>
+            <span style="font-size:11px;color:var(--text-muted);padding:6px 10px">数据</span>
+          </div>
+          <div style="flex:1;padding:16px">
+            <div class="eyebrow">工作区控制</div>
+            <div style="color:var(--text-strong);font-weight:600;margin:4px 0 12px">外观</div>
+            <div class="muted" style="font-size:11px;margin-bottom:8px">强调色</div>
+            <div style="display:flex;gap:6px;margin-bottom:14px"><span style="width:22px;height:22px;border-radius:50%;background:#8cc9bd"></span><span style="width:22px;height:22px;border-radius:50%;background:#c9698b"></span><span style="width:22px;height:22px;border-radius:50%;background:#679eb6"></span><span style="width:22px;height:22px;border-radius:50%;background:#9a764b"></span></div>
+            <div class="info-row"><span>界面圆角</span><b>24px</b></div>
+            <div class="info-row"><span>面板透明度</span><b>100%</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">设计说明</div>
+  <div class="card" style="padding:18px;max-width:1280px">
+    <p style="color:var(--text-body);font-size:13px;line-height:1.8">
+      · 质感：暗色玻璃拟态（毛玻璃 + 半透明 + 细描边 + 柔和阴影），香槟青绿点缀。<br/>
+      · 双端：移动端底部标签栏 + 底部抽屉；桌面端左侧图标导航 + 可拖拽浮动窗口。<br/>
+      · 聊天界面严格仿照 QQ/Line/微信：左对方右自己气泡、头像+名字、居中时间分隔、连续消息头像隐藏、底部输入栏（附件/语音/文本框/发送圆钮）。<br/>
+      · Cochpia 特有叠加层：频道栏（频道/搜索/模式切换）、工具日志折叠卡、🚀 派发任务卡。<br/>
+      · Agent 资料页仿 Line/QQ 个人资料页：顶部 banner + 大头像叠边 + 信息列表 + 关系设定（置顶/免打扰/标签）+ 底部操作按钮。
+    </p>
+  </div>
+</div>
+
+</body>
+</html>

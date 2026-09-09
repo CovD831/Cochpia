@@ -14,3 +14,7 @@ uploads/
 
 # User-provided media: publish only after ownership/license is confirmed
 client/public/306155_medium.mp4
+
+# Local debug/log artifacts
+*.log
+_*.tmp.mjs

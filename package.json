@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"node server/index.js\" \"vite --host 0.0.0.0\"",
+    "dev": "concurrently \"node server/index.js\" \"npm run dev:frontend\"",
+    "dev:frontend": "vite --host 0.0.0.0 --force",
+    "predev:frontend": "node scripts/clean-vite-cache.mjs",
     "server": "node server/index.js",
+    "pretest": "node scripts/refresh-test-tokens.mjs",
     "test": "node --test server/*.test.js",
     "build": "vite build",
     "start": "node server/index.js",
@@ -24,16 +27,17 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
-    "@vitejs/plugin-react": "latest",
+    "@vitejs/plugin-react": "^5.0.4",
     "concurrently": "latest",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "latest",
     "jose": "^6.2.8",
     "pg": "^8.23.0",
-    "react": "latest",
-    "react-dom": "latest",
+    "pixi.js": "^8.20.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
     "redis": "^5.12.1",
-    "vite": "latest"
+    "vite": "^7.1.12"
   }
 }

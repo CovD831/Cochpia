@@ -1,0 +1,33 @@
+{
+  "id": "collab-dev",
+  "name": "协作开发",
+  "description": "pi 规划 → codex 实现 → 验证 → 审查",
+  "stages": [
+    {
+      "id": "plan",
+      "role": "planner",
+      "prompt": "分析需求并写出实现计划：\n{goal}",
+      "dependsOn": []
+    },
+    {
+      "id": "implement",
+      "role": "implementer",
+      "prompt": "按下面的计划实现代码：\n{goal}",
+      "dependsOn": ["plan"],
+      "inputFrom": "plan"
+    },
+    {
+      "id": "verify",
+      "role": "verifier",
+      "dependsOn": ["implement"]
+    },
+    {
+      "id": "review",
+      "role": "reviewer",
+      "prompt": "审查这次实现是否符合计划与验收标准。\n{goal}",
+      "dependsOn": ["verify"],
+      "inputFrom": "implement"
+    }
+  ],
+  "checkpoints": ["verify", "review"]
+}

@@ -1,6 +1,6 @@
 // Cochpia Service Worker：仅缓存可安全复用的资源，HTML 和 SW 始终从网络获取。
 // CACHE 必须在每次发布时变化，避免旧版本资源继续存活。
-const CACHE = 'cochpia-v22';
+const CACHE = 'cochpia-v24';
 const CORE = ['/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', event => {

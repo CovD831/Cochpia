@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -20,7 +21,7 @@ test('two-user isolation acceptance', { skip: !canRun && 'requires a running Pos
     method: 'POST',
     body: JSON.stringify({ title: `isolation-${Date.now()}` })
   });
-  assert.equal(created.response.status, 201);
+  assert.equal(created.response.status, 201, `user A authentication failed: ${created.body?.error?.code || 'unknown'}`);
   const sessionId = created.body.id;
 
   const userAList = await request('/api/sessions', userAToken);
@@ -28,15 +29,11 @@ test('two-user isolation acceptance', { skip: !canRun && 'requires a running Pos
   assert.ok(userAList.body.some(session => session.id === sessionId));
 
   const userBSession = await request(`/api/sessions/${sessionId}/messages`, userBToken);
-  assert.ok([403, 404].includes(userBSession.response.status));
+  assert.ok([403, 404].includes(userBSession.response.status), `cross-user session access returned ${userBSession.response.status}`);
 
   const userBMemory = await request('/api/memories', userBToken);
   assert.equal(userBMemory.response.status, 200);
   assert.ok(!userBMemory.body.some(memory => memory.source === `chat:${sessionId}`));
-
-  const userBPersonality = await request('/api/personality', userBToken);
-  assert.equal(userBPersonality.response.status, 200);
-  assert.notEqual(userBPersonality.body.evidenceCount, undefined);
 
   const deletedByB = await request(`/api/sessions/${sessionId}`, userBToken, { method: 'DELETE' });
   assert.ok([403, 404].includes(deletedByB.response.status));

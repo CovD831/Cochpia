@@ -14,7 +14,9 @@ For a real deployment, configure HTTPS, a custom domain, server-only secrets, Po
 Before production release:
 
 1. Set `AUTH_MODE=required` and `STORAGE_PROVIDER=postgres`.
-2. Configure `CLIENT_ORIGIN` to the HTTPS web origin.
-3. Keep model and MCP credentials only in API-service variables.
-4. Configure scheduled PostgreSQL backups and perform a restore drill.
-5. Set an external log/metric retention policy; the local `/api/metrics` counters reset on restart.
+2. Set `DATABASE_SSL=true` or `DATABASE_SSL=verify-full`; production startup rejects unverified PostgreSQL TLS.
+3. Configure `CLIENT_ORIGIN` to the HTTPS web origin.
+4. Keep model, MCP, Pi, Codex, and database credentials only in API-service variables.
+5. Configure `COCHPIA_WORKSPACE_ROOTS` explicitly when Agent tasks need additional directories.
+6. Configure scheduled PostgreSQL backups and perform a restore drill.
+7. Set an external log/metric retention policy; the local `/api/metrics` counters reset on restart.

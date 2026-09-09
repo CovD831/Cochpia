@@ -11,11 +11,21 @@ test('mock provider returns a relationship-aware response', async () => {
   assert.match(response, /记得|关系/);
 });
 
-test('companion prompt follows the selected support intent', () => {
+test('companion prompt keeps identity, safety boundaries, and support intent', () => {
   const provider = createModelProvider('openai', { apiKey: 'fixture', model: 'fixture' });
   const prompt = provider.composeSystemPrompt({ runtimeContext: { mode: 'companion', companionIntent: 'comfort' } });
-  assert.match(prompt, /陪伴模式/);
-  assert.match(prompt, /安慰和情绪支持/);
+  assert.match(prompt, /安全边界/);
+  assert.match(prompt, /情绪支持/);
+  assert.match(prompt, /不声称拥有真实意识/);
+  assert.doesNotMatch(prompt, /近期对话/);
+});
+
+test('companion prompt identifies the group and its members', () => {
+  const provider = createModelProvider('openai', { apiKey: 'fixture', model: 'fixture' });
+  const prompt = provider.composeSystemPrompt({ runtimeContext: { groupContext: { name: '一家人', description: '家庭聊天', currentAgent: '404', members: ['404', '3', '用户'] } } });
+  assert.match(prompt, /群聊「一家人」/);
+  assert.match(prompt, /群成员：404、3、用户/);
+  assert.match(prompt, /不要把自己当成群里唯一/);
 });
 
 test('unsupported provider stays unavailable instead of crashing configuration', async () => {

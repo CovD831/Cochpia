@@ -32,8 +32,6 @@ export function collectSyncChanges(state, { cursor, limit = 100 } = {}) {
   }
   for (const memory of state.memories || []) add('memory', memory.id, memory, memory.updatedAt || memory.createdAt);
   for (const evidence of state.evidence || []) add('evidence', evidence.id, evidence, evidence.updatedAt || evidence.createdAt);
-  for (const audit of state.personalityAudit || []) add('personality_audit', audit.id, audit, audit.createdAt);
-  if (state.personality?.updatedAt) add('personality', 'current', state.personality, state.personality.updatedAt);
 
   records.sort((a, b) => compareRecord(a, b));
   const changed = records.filter(record => compareRecord(record, decoded) > 0);
