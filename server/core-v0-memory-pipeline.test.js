@@ -346,6 +346,52 @@ test('R-016 key injection: same-key memories reach the auditor despite a below-t
   assert.deepEqual(noKey.map(d => d.id), ['a2']);
 });
 
+test('R-017 retention sweep: expired events/assertions are swept once per interval', async () => {
+  const expiredEvent = { ...rawEvent('re-exp', '陈旧事件'), deleteAfter: '2026-01-02T00:00:00.000Z' };
+  const state = memoryFixture({ rawEvents: [expiredEvent] });
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [],
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const first = await drain();
+  assert.ok(first.retention, 'summary carries retention stats');
+  assert.equal(first.retention.rawEvents, 1, 'expired raw event physically removed');
+  assert.equal(state.rawEvents.length, 0);
+
+  // Interval gate: an event that expires right after the sweep waits for
+  // the next interval - an immediate second drain must not sweep again.
+  state.rawEvents.push({ ...rawEvent('re-exp-2', '新的陈旧事件'), deleteAfter: '2026-01-02T00:00:00.000Z' });
+  const second = await drain();
+  assert.equal(state.rawEvents.length, 1, 'interval gate suppresses an immediate second sweep');
+  assert.ok(!second.retention || second.retention.rawEvents === 0);
+});
+
+test('R-017: flag off keeps legacy behavior; zero interval sweeps every drain', async () => {
+  const makeState = () => memoryFixture({ rawEvents: [{ ...rawEvent('re-exp', '陈旧事件'), deleteAfter: '2026-01-02T00:00:00.000Z' }] });
+
+  const offState = makeState();
+  const offRepo = mockRepository(offState);
+  const offDrain = createMemoryExtractionDrain({
+    pool: offRepo.pool, repository: offRepo.repository, extractor: async () => [], context: CTX,
+    moduleOptions: { projectionEnabled: true }, retentionSweep: false
+  });
+  await offDrain();
+  assert.equal(offState.rawEvents.length, 1, 'flag off: nothing swept');
+
+  const eagerState = makeState();
+  const eagerRepo = mockRepository(eagerState);
+  const eagerDrain = createMemoryExtractionDrain({
+    pool: eagerRepo.pool, repository: eagerRepo.repository, extractor: async () => [], context: CTX,
+    moduleOptions: { projectionEnabled: true }, retentionSweepIntervalMs: 0
+  });
+  const eager = await eagerDrain();
+  assert.equal(eagerState.rawEvents.length, 0, 'zero interval: sweeps every drain');
+});
+
 test('Core message deletion persists across hydration and keeps the turn', async () => {
   const { createCoreV0PostgresFixture } = await import('./core-v0-postgres-fixture.js');
   const { CORE_V0_PRODUCTION_TABLES, MEMORY_PRODUCTION_TABLES, CORE_V0_PRODUCTION_REQUIRED_COLUMNS, MEMORY_PRODUCTION_REQUIRED_COLUMNS } =

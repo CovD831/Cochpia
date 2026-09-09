@@ -205,13 +205,18 @@ export function createMemoryExtractionDrain({
   batch = DEFAULT_BATCH,
   timeBudgetMs = DEFAULT_TIME_BUDGET_MS,
   audnSimilarMinScore = parseThreshold(process.env.MEMORY_AUDN_SIMILAR_MIN_SCORE, DEFAULT_AUDN_SIMILAR_MIN_SCORE),
-  audnKeyInject = process.env.MEMORY_AUDN_KEY_INJECT === 'true'
+  audnKeyInject = process.env.MEMORY_AUDN_KEY_INJECT === 'true',
+  retentionSweep = process.env.MEMORY_RETENTION_SWEEP !== 'false',
+  retentionSweepIntervalMs = Number(process.env.MEMORY_RETENTION_SWEEP_INTERVAL_MS) || 3_600_000
 } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new TypeError('Memory extraction drain requires a pool');
   if (!repository || typeof repository.load !== 'function' || typeof repository.save !== 'function') {
     throw new TypeError('Memory extraction drain requires a repository');
   }
   const subjectKey = `cochpia:memory-extract:${context.tenantId}:${context.subjectUserId}`;
+  // R-017: at most one retention sweep per subject per interval (process
+  // lifetime - a restart may run one extra sweep, which is harmless).
+  const lastRetentionSweepAt = new Map();
   const effectiveBatch = Math.max(1, Math.min(Number(batch) || DEFAULT_BATCH, MAX_BATCH));
   let consecutiveFailures = 0;
   let pausedUntil = 0;
@@ -553,6 +558,32 @@ export function createMemoryExtractionDrain({
           // Lost markers/index docs mean reprocessed events or a lexical-only
           // corpus next drain; correctness is unaffected and the audit loss is
           // acceptable against corrupting a canonical save.
+        }
+      }
+      // R-017: lifecycle sweep, time-gated per subject. sweepRetention only
+      // downgrades (expired statuses, invalidated versions) and physically
+      // removes raw events past their designed 35-day deleteAfter - the
+      // semantics the schema has promised since day one but nothing executed.
+      if (retentionSweep) {
+        const now = Date.now();
+        const last = lastRetentionSweepAt.get(subjectKey) || 0;
+        if (now - last >= retentionSweepIntervalMs) {
+          try {
+            const stats = await memory.sweepRetention(context, { now: new Date(now).toISOString(), limit: 200 });
+            lastRetentionSweepAt.set(subjectKey, now);
+            const touched = Object.values(stats).reduce((sum, n) => sum + (Number(n) || 0), 0);
+            summary.retention = stats;
+            if (touched > 0) {
+              auditEvent(memory.state, context, 'memory_retention_swept', { stats, triggeredBy: 'drain' });
+              await repository.save(context, memory.state);
+            }
+          } catch (error) {
+            // A failed sweep costs nothing: the next drain after the interval
+            // retries it, and extraction results above are already persisted.
+            auditEvent(memory.state, context, 'memory_retention_sweep_failed', {
+              errorCode: error?.code || error?.message || 'RETENTION_SWEEP_FAILED'
+            });
+          }
         }
       }
       return summary;
