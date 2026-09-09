@@ -78,19 +78,17 @@ retrieveAsync（purpose: answer_user_query 等）
 
 | 模块 | 位置 | 现状 |
 |---|---|---|
-| **sweepRetention** | memory-module.js:1829 | 完整实现：rawEvents 过期物理清、sessions 过期降级、断言 expiresAt/会话过期 → expired + 版本 invalidated、确认/冷却/幂等记录清理。**生产无人调用** |
-| createMemoryModuleServiceWorker | memory-module-service-worker.js | 含 outbox worker + 定期 retention sweep（60s）+ episodes 重建 + 稳定画像投影（projectStableProfile）。**生产未实例化**（drain 取代了它的提取职责，其余职责悬空） |
-| projectStableProfile（稳定画像投影） | memory-module-projection.js | 按 scope（user/relationship）投影画像——生产未运行 |
-| rebuildEpisodes（情节分组） | memory-module-episodes.js | flag episodeGrouping 控制——生产未运行 |
+| **sweepRetention** | memory-module.js:1829 | ~~生产无人调用~~ **R-017 已接线**：drain 内每 subject 每小时门控清扫 |
+| **rebuildEpisodes**（情节分组） | memory-module-episodes.js | ~~生产未运行~~ **R-017b 已接线**：drain 内按本批触及的 session 重建（flag 默认 on）——此前 ContextBundle 的 relevantEpisodes 恒为空 |
+| 画像投影 | memory-module.js:997 + projection.js | **更正：增量投影本已接线**（projectionEnabled=memoryPipelineEnabled，promotion/confirm 时投影）；孤儿仅剩 projectStableProfile 全量重建工具（恢复/回填用，按需调用即可） |
+| createMemoryModuleServiceWorker | memory-module-service-worker.js | 保持退役：提取职责已由 drain 承担，清扫已入 drain；多 worker 竞争消费的需求出现时再评估 |
 
-## 7. 缺口 → R-017
+## 7. 缺口 → 已闭合
 
-数据在无限累积：rawEvents（35 天字段存在但无人执行）、过期会话/断言
-（expiresAt 无人检查）、consumed 授权/冷却/幂等记录只增不减。
-
-**R-017：把 sweepRetention 接进生产 drain**（时间门控，每 subject 至多
-每小时一次），语义沿用既有"先降级不删除"（断言→expired、版本→
-invalidated；仅 rawEvents 按既定 35 天策略物理清除）。详见 r017-plan.md。
+- ~~sweepRetention 未接线~~ → R-017（r017-plan.md）；
+- ~~episodes 未接线~~ → R-017b（同提交系列）；
+- 仍开放：**实体/关系维度**（subject_type/subject_id/relationship_agent_id
+  字段预留未使用）——R-018 候选，见 r018-plan.md（含 SAG 评估）。
 EOF
 marker
 echo written

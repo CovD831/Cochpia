@@ -14,6 +14,7 @@ import { randomUUID, createHash } from 'node:crypto';
 
 import { createMemoryModule } from './memory-module.js';
 import { cosineSimilarity } from './memory-module-retrieval.js';
+import { rebuildEpisodes } from './memory-module-episodes.js';
 
 const DEFAULT_BATCH = 3;
 const MAX_BATCH = 10;
@@ -207,6 +208,7 @@ export function createMemoryExtractionDrain({
   audnSimilarMinScore = parseThreshold(process.env.MEMORY_AUDN_SIMILAR_MIN_SCORE, DEFAULT_AUDN_SIMILAR_MIN_SCORE),
   audnKeyInject = process.env.MEMORY_AUDN_KEY_INJECT === 'true',
   retentionSweep = process.env.MEMORY_RETENTION_SWEEP !== 'false',
+  episodeGrouping = process.env.MEMORY_EPISODE_GROUPING !== 'false',
   retentionSweepIntervalMs = (() => {
     // Zero is a legal value (sweep every drain); `|| 3_600_000` would
     // silently discard it.
@@ -299,6 +301,25 @@ export function createMemoryExtractionDrain({
             // retries it, and extraction results are unaffected.
             auditEvent(memory.state, context, 'memory_retention_sweep_failed', {
               errorCode: error?.code || error?.message || 'RETENTION_SWEEP_FAILED'
+            });
+          }
+        }
+      }
+
+      // R-017b: the episode grouping was implemented but orphaned - the
+      // ContextBundle's relevantEpisodes has been permanently empty in
+      // production. Rebuild per session for the sessions touched by this
+      // drain's events (30-min temporal windows, deterministic).
+      if (episodeGrouping && Array.isArray(state.rawEvents) && state.rawEvents.length) {
+        const touchedSessions = [...new Set((state.rawEvents || [])
+          .filter(event => event.tenantId === context.tenantId && event.userId === context.subjectUserId && event.sessionId)
+          .map(event => event.sessionId))];
+        for (const sessionId of touchedSessions) {
+          try {
+            rebuildEpisodes(memory.state, { tenantId: context.tenantId, userId: context.subjectUserId, sessionId });
+          } catch (error) {
+            auditEvent(memory.state, context, 'memory_episode_rebuild_failed', {
+              sessionId, errorCode: error?.code || error?.message || 'EPISODE_REBUILD_FAILED'
             });
           }
         }

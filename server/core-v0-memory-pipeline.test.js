@@ -346,6 +346,31 @@ test('R-016 key injection: same-key memories reach the auditor despite a below-t
   assert.deepEqual(noKey.map(d => d.id), ['a2']);
 });
 
+test('R-017b episode grouping: sessions touched by the drain get episodes rebuilt', async () => {
+  const state = memoryFixture({ rawEvents: [rawEvent('re-1', '今天聊到了养猫的事情')] });
+  const { pool, repository } = mockRepository(state);
+  const drain = createMemoryExtractionDrain({
+    pool,
+    repository,
+    extractor: async () => [],
+    context: CTX,
+    moduleOptions: { projectionEnabled: true }
+  });
+  const result = await drain();
+  assert.ok(state.episodes.length >= 1, `expected episodes, got ${JSON.stringify(state.episodes)}`);
+  assert.equal(state.episodes[0].sessionId, 'ms-0');
+  assert.ok(state.episodeMembers.some(member => member.rawEventId === 're-1'));
+  // Flag off (explicit): no episodes built.
+  const offState = memoryFixture({ rawEvents: [rawEvent('re-1', '今天聊到了养猫的事情')] });
+  const offRepo = mockRepository(offState);
+  const offDrain = createMemoryExtractionDrain({
+    pool: offRepo.pool, repository: offRepo.repository, extractor: async () => [], context: CTX,
+    moduleOptions: { projectionEnabled: true }, episodeGrouping: false
+  });
+  await offDrain();
+  assert.equal(offState.episodes.length, 0, 'flag off: episodes untouched');
+});
+
 test('R-017 retention sweep: expired events/assertions are swept once per interval', async () => {
   const expiredEvent = { ...rawEvent('re-exp', '陈旧事件'), deleteAfter: '2026-01-02T00:00:00.000Z' };
   const state = memoryFixture({ rawEvents: [expiredEvent] });
