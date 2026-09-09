@@ -333,9 +333,10 @@ export async function createCoreV0ProductionAdapter({
     // of the top BM25 score are dropped before fusion (phase3b showed the
     // lexical channel saturating the fused ranking at depth).
     lexicalFloorRatio: parseScoreThreshold(process.env.MEMORY_LEXICAL_FLOOR_RATIO, 0.5),
-    // R-015: lexical fallback suppression when the embedding channel is
-    // healthy but silent (default off).
-    suppressLexicalFallback: isTruthy(process.env.MEMORY_LEXICAL_SUPPRESS),
+    // R-015 (promoted to default 2026-09-09): lexical fallback suppression
+    // when the embedding channel is healthy but silent. Opt out with
+    // MEMORY_LEXICAL_SUPPRESS=false.
+    suppressLexicalFallback: isTruthy(process.env.MEMORY_LEXICAL_SUPPRESS ?? 'true'),
     // R-012c decay re-weight: flag-gated OFF by default. 3b measured ranking
     // as depth-stable (needle hit@1=100% at 2000), so decay only becomes
     // valuable once per-memory access tracking exists.
@@ -359,7 +360,7 @@ export async function createCoreV0ProductionAdapter({
 // not touch the user-facing turn.
 const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 30_000;
   const drainExtraction = memoryPipelineEnabled
-    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, embeddingGateway, embeddingModel, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs, audnKeyInject: isTruthy(process.env.MEMORY_AUDN_KEY_INJECT) })
+    ? createMemoryExtractionDrain({ pool, repository, extractor: effectiveExtractor, auditor: effectiveAuditor, embeddingGateway, embeddingModel, context, moduleOptions: effectiveModuleOptions, timeBudgetMs: extractBudgetMs, audnKeyInject: isTruthy(process.env.MEMORY_AUDN_KEY_INJECT ?? 'true') })
     : null;
   const service = createCoreV0TurnService({
     state: store.state,

@@ -215,7 +215,9 @@ try {
     embeddingTimeoutMs: 2000,
     vectorMinScore: Number(process.env.MEMORY_VECTOR_MIN_SCORE) || 0.55,
     lexicalFloorRatio: Number(process.env.MEMORY_LEXICAL_FLOOR_RATIO) || 0.5,
-    suppressLexicalFallback: process.env.MEMORY_LEXICAL_SUPPRESS === 'true'
+    // Mirror the production default (promoted 2026-09-09): suppressed
+    // unless explicitly opted out.
+    suppressLexicalFallback: process.env.MEMORY_LEXICAL_SUPPRESS !== 'false'
   });
   const rawRetrieve = async query => {
     const result = await probeMemory.retrieveAsync(context, { query, purpose: 'answer_user_query' });
