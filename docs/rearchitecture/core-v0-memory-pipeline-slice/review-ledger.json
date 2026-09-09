@@ -224,5 +224,96 @@
     },
     "evidence": "r017-run1 + live repro (ee615d4) + memory-lifecycle-map.md",
     "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-001",
+    "severity": "blocking",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "存储模型自相矛盾：写入侧声称新表 memory_assertion_entities，服务侧却说与 indexDocuments 的实体列做 SQL 交集——后者今天不存在；且新表方案漏了 DDL 与 readiness 列清单更新（A-10 结构校验会拒绝）",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§3 修订：实体唯一存放于 indexDocuments.entity_norms（text[] 新列），schema SQL + MEMORY_PRODUCTION_REQUIRED_COLUMNS 同步更新"
+    },
+    "evidence": "grep 证实 schema 与两个文件均无 entity 面；indexDocuments 插入为固定列",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-002",
+    "severity": "blocking",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "指代一致性（entity_norm）策略未定义：'爸爸/我爸爸/父亲'、'家里/家' 若归一化为精确串则同指称跨轮不一致，实体桥接在真实语料上必然失效——P-1 原设计只测'抽取命中率'，测错了东西",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§5 P-1 重定义：额外测量跨轮 norm 一致率（同指称 → 同 norm ≥90%），few-shot 指定'用消息中对该实体的称呼'为 norm"
+    },
+    "evidence": "B-S22 依赖 家里→家 归一化；B-S14 依赖 爸爸→家里人（超出词法归一化能力，见 AR-003）",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-003",
+    "severity": "blocking",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "动机案例不成立：B-S14（家里人都是做什么的 → 爸爸是高中老师）需要 家里人→爸爸 的类别/语义桥，一跳词法实体匹配够不着——即使真 SAG 也需要这条边存在。B-S26（养了什么→鹦鹉）同理。一跳实际覆盖的是'查询点名实体'的场景（如：鹦鹉会学舌吗/尘螨怎么除）",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§3 收益重新划界：R-018 目标 = 实体点名词查询；类别代词查询（B-S14 类）保持开放，归 future work（实体层级/语义实体链接）"
+    },
+    "evidence": "三 case 实体桥接逐一推演：B-S22 部分可达（家里/家里），B-S14/B-S26 不可达",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-004",
+    "severity": "major",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "扩展触发条件与注入权重未定义：无关查询（天气/问候）也可能匹配到实体（'天气'实体），盲目扩展 = 把垃圾重新请回来（R-015 刚清走的东西）；'低权重'无定义",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§3 触发规则：仅当 (a) 基础检索稀疏（<5 条）或 (b) 实体精确命中时扩展；注入项排在双通道结果之后（不参与 RRF，只补位 limit 空隙）"
+    },
+    "evidence": "R-015 的教训：检索通道会为巧合命中给出高分",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-005",
+    "severity": "major",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "治理缺口：S2-pending 断言的实体在确认前是否可索引未说明（实体文本本身泄露敏感内容方向）；forget/forgetSession/forgetAccount 级联清单未含实体存储；新存储缺 tenant/user 隔离列",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§3 治理规则：仅 active 断言的实体入索引；cleanDerivedForDeletion 级联清理实体列；entity_norms 随 indexDocument 生命周期（无独立表 = 无独立授权面）"
+    },
+    "evidence": "forget 语义是 redaction+墓碑，任何残留面都必须进级联",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-006",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "提取 prompt 变更（新增 entities 字段）会整体移动所有模型相关指标——E-3 的'其余指标带内'必须对照 prompt 变更前的 defaults-run 解读，且 entities 形状非法（非数组/超长）必须被解析层忽略而非报错",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§5 解析健壮性 + E-3 解读注意"
+    },
+    "evidence": "R-014 的教训：prompt 一动，dedup/paraphrase 全线漂移",
+    "status": "closed"
+  },
+  {
+    "finding_id": "R018-AR-007",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "现有 220 case 没有实体点名词查询的 case（家庭类 3 条全是类别代词查询）——按 AR-003 重新划界后，E-3 需要**补充**实体点名 case 才能证明价值，且不得改动 220 基线（可比性）",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r018-plan.md",
+      "anchor": "§5 新增 10 条实体点名补充 case（独立 supplement 文件，单独跑）"
+    },
+    "evidence": "eval-cases.json 实体相关 case 仅 3 条且均为类别代词型",
+    "status": "closed"
   }
 ]
