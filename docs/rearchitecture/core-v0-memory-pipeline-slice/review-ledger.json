@@ -172,5 +172,31 @@
     },
     "evidence": "phase3c-floor0 对照 + phase3b needle hit@1=100% @2000",
     "status": "closed"
+  },
+  {
+    "finding_id": "R3C-007",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "R-014 上下文感知提取：机制级收益证实（隔离复现 C-A06 UPDATE 3/3、探针 keyword 存活 11/15->13/15），但 n=3 评测级 arbitration 73.3% vs v4 71.1% 无显著差异——剩余方差来自第二消息提取产出波动；dedup 95%->86.7% 疑似上下文导致候选增多（C-A04 双候选实测），需权衡 CONTEXT_TURNS 取值",
+    "consumer": {
+      "path": "docs/rearchitecture/core-v0-memory-pipeline-slice/r014-plan.md",
+      "anchor": "R-014 flag 默认值待定；dedup 补偿待设计"
+    },
+    "evidence": "r014-run1..3 (n=3) + r015-run2 对照",
+    "status": "open"
+  },
+  {
+    "finding_id": "R3C-008",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "R-015 词法回退抑制：E-2 通过——noise_any_rate 21/25->3/25，precision_noise 16%->88%，零召回回归；剩余 3 条失败是 hybrid_rrf 模式的 bge-m3 语义误报（另一类问题）。flag 默认关，生产开启待决策",
+    "consumer": {
+      "path": "server/memory-module-retrieval.js",
+      "anchor": "hybridSearch suppressLexicalFallback"
+    },
+    "evidence": "r015-run2 (2026-09-09)",
+    "status": "closed"
   }
 ]
