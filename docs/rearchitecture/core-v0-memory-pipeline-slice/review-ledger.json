@@ -211,5 +211,18 @@
     },
     "evidence": "r016-run1 (2026-09-09, 三 flag 同开)",
     "status": "closed"
+  },
+  {
+    "finding_id": "R3C-010",
+    "severity": "advisory",
+    "decision": "consumed",
+    "owner": "WorkBuddy",
+    "statement": "R-017 生命周期调度 E-3 通过：sweepRetention 接入 drain（每 subject 每小时门控，默认 on），26 失败与基线持平、dedup 20/20、R-015 噪声抑制效果保持。遗留：稳定画像投影与情节分组仍为孤儿模块，归 R-018 实体记忆与后续产品需求",
+    "consumer": {
+      "path": "server/memory-extraction.js",
+      "anchor": "retentionSweep in runDrain (before idle short-circuit)"
+    },
+    "evidence": "r017-run1 + live repro (ee615d4) + memory-lifecycle-map.md",
+    "status": "closed"
   }
 ]

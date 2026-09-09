@@ -36,6 +36,16 @@
 ## 4. 状态
 
 - [x] 设计冻结
-- [ ] 实现 + E-1
-- [ ] E-2 复现
-- [ ] E-3 回归
+- [x] 实现 + E-1（新增 2 用例；全套 330 项绿）
+- [x] E-2 复现（live PG：过期 raw event 1→0，审计 memory_retention_swept
+  有痕；两次失败复现换来两个真缺陷修复，见 ee615d4）
+- [x] E-3 回归（r017-run1）：26 失败与 defaults-run1 持平，dedup 20/20、
+  precision_noise 22/25、noise_any 3/25 全部保持；arb 12/15、lexical
+  22/25、s2 21/24 为 ±1 case 方差带内波动。**无回归，验收通过。**
+
+## 5. 遗留
+
+- 孤儿模块中稳定画像投影（projectStableProfile）与情节分组
+  （episodeGrouping）仍未接线——前者建议随实体记忆模块（R-018 候选）
+  一起设计，后者等产品需要情节叙事时再评估；
+- service worker 整体保持退役状态，若未来需要多 worker 竞争消费再评估。
