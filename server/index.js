@@ -11,8 +11,9 @@ import { createMemoryModuleRuntime } from './memory-module-runtime.js';
 import { createGrowthEvidenceService } from './growth-evidence.js';
 import { createModelProvider, listModelProviders, resolveModelConfig, resolveModelSelection } from './model-provider.js';
 import { authenticateRequest, authMode, validateAuthStorage } from './auth.js';
-import { buildRuntimeContext, findRegenerationTarget } from './runtime-context.js';
+import { buildRuntimeContext } from './runtime-context.js';
 import { createSseEvent, formatSseEvent, replaySseEvents } from './sse.js';
+import { createTurnStreamHandler } from './turn-stream.js';
 import { applyPersonalityChange, createPersonalityRollbackAudit } from './personality.js';
 import { queryCollection } from './collection-query.js';
 import { createAgentService } from './agent-service.js';
@@ -22,8 +23,15 @@ import { createMusicService } from './music-service.js';
 import { createNeteaseMusicAdapter } from './netease-music-adapter.js';
 import { executeTool, findTool, toOpenAITools } from './tools.js';
 import { createPiClient } from './pi-client.js';
-import { maybeCompactConversation } from './compaction.js';
+import { detectModeSwitch as detectModeSwitchShared } from './mode-switch.js';
+// In-session summarisation now runs inside the turn service
+// (createTurnCompaction in core-v0-production.js), so index.js no longer
+// imports it directly.
 import { mergeState } from './state-merge.js';
+// auto-memory.js survives stage 3: the work-mode path still uses its
+// shouldRemember heuristic through finalizeMemoryModule. The disposition's
+// "delete auto-memory.js" assumed the legacy companion path was the only user;
+// keeping work mode means keeping this too.
 import { shouldRemember } from './auto-memory.js';
 import { ensurePsychologyTraits, listAtmospherePresets, resolveAtmosphere } from './psychology.js';
 import { sanitizeWorkspacePreferences } from './workspace-preferences.js';
@@ -276,10 +284,27 @@ const finishRun = run => {
   setTimeout(() => { if (streamRuns.get(run.id) === run) streamRuns.delete(run.id); }, streamRetentionMs).unref?.();
 };
 
+// R-020 stage 3: /api/chat/turns serves both transports. A client asking for
+// text/event-stream gets the same turn streamed; everyone else keeps the
+// single-shot JSON response. The turn semantics are identical either way.
+const turnStream = createTurnStreamHandler({
+  wantsStream: req => /\btext\/event-stream\b/i.test(String(req.get('accept') || '')),
+  isEnabled: coreV0Enabled,
+  serviceForRequest: coreV0ServiceForRequest,
+  drainExtraction: coreV0DrainExtraction,
+  onDegrade: reason => observability.recordMemoryDegrade(reason),
+  respondError: respondCoreV0Error
+});
+
 app.post('/api/chat/turns', async (req, res) => {
+  // Checked before the stream handler so a disabled Core v0 reports why it is
+  // disabled (503 CORE_V0_DISABLED) instead of a generic 500. Since the client
+  // now talks to this route for all companion chat, this is the single most
+  // likely misconfiguration: without CORE_V0_ENABLED=true nothing works.
   if (!coreV0Enabled()) {
-    return respondCoreV0Error(res, new CoreV0Error('CORE_V0_DISABLED', 'Core v0 is disabled', { status: 503, retryable: true }));
+    return respondCoreV0Error(res, new CoreV0Error('CORE_V0_DISABLED', 'Core v0 is disabled; set CORE_V0_ENABLED=true', { status: 503, retryable: true }));
   }
+  if (turnStream.wantsStream(req)) return turnStream.start(req, res);
   try {
     const { service, drainExtraction } = await coreV0ServiceForRequest(req);
     const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
@@ -295,6 +320,11 @@ app.post('/api/chat/turns', async (req, res) => {
     return respondCoreV0Error(res, error);
   }
 });
+// Reattach to a streaming run after a dropped connection (Last-Event-ID replay),
+// and cancel one in flight. Both mirror the legacy /api/chat/stream/:runId
+// contract so the client needs no special casing.
+app.get('/api/chat/turns/:runId', (req, res) => turnStream.reattach(req, res));
+app.delete('/api/chat/turns/:runId', (req, res) => turnStream.cancel(req, res));
 const attachStreamResponse = (run, res, afterId = '') => {
   run.response = res;
   run.connected = true;
@@ -612,7 +642,9 @@ app.post('/api/models/:provider/test', async (req, res) => {
     fail(res, error.code === 'MODEL_AUTH_FAILED' ? 401 : error.code === 'MODEL_INSUFFICIENT_BALANCE' ? 402 : error.code === 'MODEL_NOT_FOUND' ? 404 : error.code === 'MODEL_TIMEOUT' ? 504 : 502, error.code || 'MODEL_CONNECTION_FAILED', error.message);
   }
 });
-app.post('/api/chat/cancel', (req, res) => {
+// Work-mode run control. The companion path cancels through
+// DELETE /api/chat/turns/:runId; these two routes now serve work runs only.
+app.post('/api/chat/work/cancel', (req, res) => {
   const sessionId = String(req.body?.sessionId || '').trim();
   const run = activeRuns.get(runtimeKey(sessionId));
   if (!run) return fail(res, 404, 'CHAT_RUN_NOT_FOUND', 'No active chat run was found');
@@ -626,7 +658,7 @@ app.post('/api/chat/cancel', (req, res) => {
   }
   res.status(202).json({ ok: true, sessionId });
 });
-app.get('/api/chat/stream/:runId', (req, res) => {
+app.get('/api/chat/work/:runId', (req, res) => {
   const run = streamRuns.get(req.params.runId);
   if (!run || run.userId !== currentUserId()) return fail(res, 404, 'STREAM_RUN_NOT_FOUND', 'Stream run not found');
   if (run.response && !run.response.writableEnded && !run.response.destroyed) run.response.end();
@@ -799,14 +831,10 @@ app.post('/api/personality/rollback', async (req, res) => {
   await saveState(state); res.json({ ...state.personality, audit: state.personalityAudit[0] });
 });
 
-const detectModeSwitch = text => {
-  const t = String(text || '').trim();
-  const wantsWork = /(切换到|进入|开启|切到|回到|切换).{0,4}工作模式/.test(t) || t === '工作模式';
-  const wantsCompanion = /(切换到|进入|开启|切到|回到|切换).{0,4}陪伴模式/.test(t) || t === '陪伴模式';
-  if (wantsWork) return 'work';
-  if (wantsCompanion) return 'companion';
-  return null;
-};
+// Mode switching lived here as a local helper until stage 3. It now lives in
+// mode-switch.js because the client needs the same detection to route between
+// /api/chat/turns and /api/chat/work, and two copies would drift silently.
+const detectModeSwitch = detectModeSwitchShared;
 
 // 用 Pi RPC 执行工作模式任务：spawn `pi --mode rpc`，把事件流映射为 Cochpia 的 SSE 事件
 async function runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode = 'work' }) {
@@ -853,43 +881,44 @@ async function finalizeMemoryModule({ chatMemory, userEvent, userMessage, assist
   return memoryId;
 }
 
-async function handleChatStream(req, res, { regenerateMessageId = null, retry = false } = {}) {
-  const { sessionId, message, provider, model: requestedModel, channel, companionIntent } = req.body || {};
+// R-020 stage 3（2026-09-11 老板决策）：工作模式保留为独立路由。
+//
+// 为什么它没有跟着伴侣链路一起迁进 turns：turn 管线没有工具循环、没有审批流、
+// 也没有 Pi 引擎，而 `06-legacy-module-disposition.md` 明确把
+// `pi-client.js` + `tools.js` 列为「保留」（不属伴侣链路但功能完整）。
+// 阶段 3.4 原文「删 handleChatStream 全函数」与这条处置相冲突，
+// 老板裁决为「抽出独立路由保留」——伴侣对话走 /api/chat/turns，
+// 工作相关的一切走这里。
+//
+// 模式切换也归这里：老板明确 turns 不读写 session.mode，
+// 所以「切换到工作模式」这类指令必须由工作路由应答。
+async function handleWorkStream(req, res) {
+  const { sessionId, message, channel } = req.body || {};
   const activeChannel = String(channel || '默认').slice(0, 60);
-  const validCompanionIntents = new Set(['listen', 'comfort', 'advice', 'accompany', 'quiet']);
-  if (!sessionId || (!regenerateMessageId && !String(message || '').trim())) return res.status(400).json({ error: 'sessionId and message are required' });
-  if (!getSession(sessionId)) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-  if (!state.messages[sessionId]) state.messages[sessionId] = [];
-  const regeneration = regenerateMessageId ? findRegenerationTarget(state.messages[sessionId], regenerateMessageId) : null;
-  if (regenerateMessageId && !regeneration) return fail(res, 404, 'REGENERATE_TARGET_NOT_FOUND', 'Assistant message with a preceding user message was not found');
-  const userMessage = regeneration?.user || { id: randomUUID(), role: 'user', content: String(message).trim().slice(0, 8000), createdAt: new Date().toISOString(), channel: activeChannel };
+  if (!sessionId || !String(message || '').trim()) return res.status(400).json({ error: 'sessionId and message are required' });
   const session = getSession(sessionId);
-  const currentMode = () => session.mode || state.mode || 'companion';
-  const activeCompanionIntent = validCompanionIntents.has(companionIntent) ? companionIntent : (session.companionIntent || 'listen');
-  if (currentMode() === 'companion' && validCompanionIntents.has(companionIntent) && session.companionIntent !== companionIntent) {
-    session.companionIntent = companionIntent;
-    touchSession(session);
+  if (!session) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
+  // C-10：私聊会话必须有绑定 agent，否则 Memory 无法解析 callerAgentId。
+  if (session.kind !== 'group' && !session.agentId) {
+    return fail(res, 400, 'SESSION_AGENT_UNBOUND', 'This session has no bound agent; bind one before chatting');
   }
-  const hasRequestSelection = Boolean(provider || requestedModel);
-  const requestedProvider = provider || session.modelProvider || process.env.MODEL_PROVIDER || 'mock';
-  const requestedName = requestedModel || session.modelName || '';
-  const selection = resolveModelSelection(requestedProvider, requestedName);
+  if (!state.messages[sessionId]) state.messages[sessionId] = [];
+  const currentMode = () => session.mode || state.mode || 'companion';
+
+  const requestedProvider = session.modelProvider || process.env.MODEL_PROVIDER || 'mock';
+  const selection = resolveModelSelection(requestedProvider, session.modelName || '');
   if (!selection.ok) return fail(res, selection.code === 'MODEL_NOT_CONFIGURED' ? 503 : 400, selection.code, selection.error);
   const selectedModel = createModelProvider(requestedProvider, { model: selection.config.model });
-  if (hasRequestSelection) {
-    session.modelProvider = selection.config.provider;
-    session.modelName = selection.config.model;
-    touchSession(session);
+
+  const userMessage = { id: randomUUID(), role: 'user', content: String(message).trim().slice(0, 8000), createdAt: new Date().toISOString(), channel: activeChannel };
+  state.messages[sessionId].push(userMessage);
+  try {
+    await saveState(state);
+  } catch (error) {
+    state.messages[sessionId].pop();
+    return fail(res, 503, error.code || 'STORAGE_WRITE_FAILED', error.message);
   }
-  if (!regeneration) {
-    state.messages[sessionId].push(userMessage);
-    try {
-      await saveState(state);
-    } catch (error) {
-      state.messages[sessionId].pop();
-      return fail(res, 503, error.code || 'STORAGE_WRITE_FAILED', error.message);
-    }
-  }
+
   const chatMemory = chatMemoryForRequest(req);
   let recalled = [];
   let memoryBundle = null;
@@ -905,33 +934,17 @@ async function handleChatStream(req, res, { regenerateMessageId = null, retry = 
     observability.recordMemoryDegrade(memoryDegradedReason);
     console.error(JSON.stringify({ event: 'memory_chat_retrieve_failed', code: memoryDegradedReason }));
   }
-  const assistantMessage = { id: randomUUID(), role: 'assistant', content: '', createdAt: new Date().toISOString(), regeneratedFrom: regeneration?.assistant.id || null, channel: activeChannel };
-  if (regeneration) {
-    regeneration.assistant.supersededAt = new Date().toISOString();
-    regeneration.assistant.supersededBy = assistantMessage.id;
-  }
-  const restoreRegeneration = () => {
-    if (regeneration) {
-      delete regeneration.assistant.supersededAt;
-      delete regeneration.assistant.supersededBy;
-    }
-  };
+
+  const assistantMessage = { id: randomUUID(), role: 'assistant', content: '', createdAt: new Date().toISOString(), channel: activeChannel };
   const runKey = runtimeKey(sessionId);
   if (activeRuns.has(runKey)) return fail(res, 409, 'CHAT_ALREADY_RUNNING', 'A chat run is already active for this session');
   const run = { id: randomUUID(), key: runKey, userId: currentUserId(), sessionId, controller: new AbortController(), cancelled: false, finished: false, sequence: 0, events: [], response: null, connected: false };
   activeRuns.set(runKey, run);
   streamRuns.set(run.id, run);
   attachStreamResponse(run, res);
-  send(res, 'meta', { runId: run.id, messageId: assistantMessage.id, recalled: recalled.length, protocol: 'cochpia.sse.v1', provider: selectedModel.provider, model: selectedModel.model, regeneratedFrom: regeneration?.assistant.id || null, retry }, run);
-  let summary = session.summary || '';
-  try {
-    const compact = await maybeCompactConversation(session, state.messages[sessionId], selectedModel);
-    summary = compact.summary;
-    if (compact.changed) await saveState(state);
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'compaction_failed', code: error.code || 'COMPACTION_FAILED' }));
-  }
-  // 语言切换工作/陪伴模式
+  send(res, 'meta', { runId: run.id, messageId: assistantMessage.id, recalled: recalled.length, protocol: 'cochpia.sse.v1', provider: selectedModel.provider, model: selectedModel.model, memoryStatus: memoryDegradedReason ? 'degraded' : 'available', memoryDegradedReason }, run);
+
+  // 模式切换：由本路由独占，turns 不参与。
   const switchTo = detectModeSwitch(userMessage.content);
   if (switchTo && switchTo !== currentMode()) {
     session.mode = switchTo;
@@ -940,115 +953,89 @@ async function handleChatStream(req, res, { regenerateMessageId = null, retry = 
     assistantMessage.content = switchTo === 'work'
       ? '已切换到「工作模式」。现在我会以任务为导向，帮你执行具体任务。需要切回时，说「切换到陪伴模式」即可。'
       : '已切回「陪伴模式」。我会继续像平常一样陪着你。需要工作时，说「切换到工作模式」即可。';
+    state.messages[sessionId].push(assistantMessage);
+    touchSession(getSession(sessionId));
+    send(res, 'text', { delta: assistantMessage.content }, run);
+    send(res, 'done', { runId: run.id, messageId: assistantMessage.id, mode: currentMode() }, run);
+    finishRun(run); if (run.response) run.response.end();
+    return;
+  }
+
+  if (currentMode() !== 'work') {
+    // 这是守卫，不是功能：伴侣对话属于 /api/chat/turns。
+    // 走到这里说明客户端路由错了；若在这里作答，就等于复活了本阶段
+    // 要删掉的第二条聊天链路。
+    send(res, 'error', { code: 'USE_TURNS_FOR_COMPANION', message: 'This session is in companion mode; send companion messages to /api/chat/turns' }, run);
+    send(res, 'done', { ok: false, runId: run.id, mode: currentMode() }, run);
+    finishRun(run); if (run.response) run.response.end();
+    return;
+  }
+
+  // 工作模式：优先 Pi RPC（强引擎），失败回退本地工具
+  try {
+    if (await runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode: currentMode() })) {
+      const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
+      send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, engine: 'pi', mode: currentMode() }, run);
+      finishRun(run); if (run.response) run.response.end(); return;
+    }
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'pi_rpc_unavailable', error: error.code || error.message }));
+  }
+  try {
+    // 工作模式可用独立模型（WORK_MODEL_PROVIDER / WORK_MODEL_NAME），未配置则用会话模型
+    const workProviderName = process.env.WORK_MODEL_PROVIDER || requestedProvider;
+    const workModelName = process.env.WORK_MODEL_NAME || selection.config.model;
+    const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model)
+      ? selectedModel
+      : createModelProvider(workProviderName, { model: workModelName });
+    const rt = buildRuntimeContext({ messages: [], personality: state.personality, recalled, memoryBundle, summary: session.summary || '', persona: session.persona, atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: session.companionIntent || 'listen' });
+    const system = workModel.composeSystemPrompt({ recalled, runtimeContext: rt });
+    const history = state.messages[sessionId].slice(0, -1).slice(-10).map(m => ({ role: m.role, content: m.content }));
+    const conversation = [...history, { role: 'user', content: userMessage.content }];
+    let finalContent = '';
+    for (let step = 0; step < 8; step += 1) {
+      if (run.cancelled) { finishRun(run); return; }
+      const result = await workModel.generateWithTools({ system, messages: conversation, tools: toOpenAITools(), signal: run.controller.signal });
+      if (!result.toolCalls.length) { finalContent = result.content; break; }
+      conversation.push({ role: 'assistant', content: result.content || '', tool_calls: result.toolCalls });
+      for (const tc of result.toolCalls) {
+        const name = tc.function?.name || '';
+        let args = {};
+        try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = {}; }
+        const tool = findTool(name);
+        send(res, 'tool', { runId: run.id, name, args }, run);
+        let toolResult;
+        if (tool?.requiresApproval) {
+          send(res, 'tool_pending', { runId: run.id, toolCallId: tc.id, name, args }, run);
+          const approval = await waitForApproval(run.id, tc.id);
+          if (!approval.approved) {
+            toolResult = '用户拒绝了这次修改';
+            send(res, 'tool_result', { runId: run.id, name, result: toolResult }, run);
+            conversation.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });
+            continue;
+          }
+          toolResult = await executeTool(name, args);
+        } else {
+          toolResult = await executeTool(name, args);
+        }
+        send(res, 'tool_result', { runId: run.id, name, result: String(toolResult).slice(0, 4000) }, run);
+        conversation.push({ role: 'tool', tool_call_id: tc.id, content: String(toolResult).slice(0, 8000) });
+      }
+    }
+    assistantMessage.content = finalContent || '（工具调用未产生最终回复，请换个问法）';
     state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
     send(res, 'text', { delta: assistantMessage.content }, run);
     send(res, 'done', { runId: run.id, messageId: assistantMessage.id, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run);
     finishRun(run); if (run.response) run.response.end();
-    return;
-  }
-  // 工作模式：优先 Pi RPC（强引擎），失败回退本地工具
-  if (currentMode() === 'work') {
-    try {
-      if (await runPiWorkMode({ res, run, userMessage, assistantMessage, sessionId, mode: currentMode() })) {
-        const memoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
-        send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId, engine: 'pi', mode: currentMode() }, run);
-        finishRun(run); if (run.response) run.response.end(); return;
-      }
-    } catch (error) {
-      console.error(JSON.stringify({ event: 'pi_rpc_unavailable', error: error.code || error.message }));
-    }
-    try {
-      // 工作模式可用独立模型（WORK_MODEL_PROVIDER / WORK_MODEL_NAME），未配置则用会话模型
-      const workProviderName = process.env.WORK_MODEL_PROVIDER || requestedProvider;
-      const workModelName = process.env.WORK_MODEL_NAME || selection.config.model;
-      const workModel = (workProviderName === requestedProvider && workModelName === selection.config.model)
-        ? selectedModel
-        : createModelProvider(workProviderName, { model: workModelName });
-      const rt = buildRuntimeContext({ messages: [], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent });
-      const system = workModel.composeSystemPrompt({ recalled, runtimeContext: rt });
-      const history = state.messages[sessionId].slice(0, -1).slice(-10).map(m => ({ role: m.role, content: m.content }));
-      const conversation = [...history, { role: 'user', content: userMessage.content }];
-      let finalContent = '';
-      for (let step = 0; step < 8; step += 1) {
-        if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
-        const result = await workModel.generateWithTools({ system, messages: conversation, tools: toOpenAITools(), signal: run.controller.signal });
-        if (!result.toolCalls.length) { finalContent = result.content; break; }
-        conversation.push({ role: 'assistant', content: result.content || '', tool_calls: result.toolCalls });
-        for (const tc of result.toolCalls) {
-          const name = tc.function?.name || '';
-          let args = {};
-          try { args = JSON.parse(tc.function?.arguments || '{}'); } catch { args = {}; }
-          const tool = findTool(name);
-          send(res, 'tool', { runId: run.id, name, args }, run);
-          let toolResult;
-          if (tool?.requiresApproval) {
-            send(res, 'tool_pending', { runId: run.id, toolCallId: tc.id, name, args }, run);
-            const approval = await waitForApproval(run.id, tc.id);
-            if (!approval.approved) {
-              toolResult = '用户拒绝了这次修改';
-              send(res, 'tool_result', { runId: run.id, name, result: toolResult }, run);
-              conversation.push({ role: 'tool', tool_call_id: tc.id, content: toolResult });
-              continue;
-            }
-            toolResult = await executeTool(name, args);
-          } else {
-            toolResult = await executeTool(name, args);
-          }
-          send(res, 'tool_result', { runId: run.id, name, result: String(toolResult).slice(0, 4000) }, run);
-          conversation.push({ role: 'tool', tool_call_id: tc.id, content: String(toolResult).slice(0, 8000) });
-        }
-      }
-      assistantMessage.content = finalContent || '（工具调用未产生最终回复，请换个问法）';
-      state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
-      send(res, 'text', { delta: assistantMessage.content }, run);
-      send(res, 'done', { runId: run.id, messageId: assistantMessage.id, mode: currentMode(), provider: selectedModel.provider, model: selectedModel.model }, run);
-      finishRun(run); if (run.response) run.response.end();
-    } catch (error) {
-      send(res, 'error', { code: error.code || 'WORK_MODE_FAILED', message: error.message }, run);
-      send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run);
-      restoreRegeneration(); finishRun(run);
-      if (run.response) run.response.end();
-    }
-    return;
-  }
-  try {
-    for await (const delta of selectedModel.stream({
-      message: userMessage.content,
-      recalled,
-      runtimeContext: buildRuntimeContext({ messages: state.messages[sessionId], personality: state.personality, recalled, memoryBundle, summary, persona: session.persona, atmosphere: resolveAtmosphere(session.atmosphere)?.tone, profile: state.profile, mode: currentMode(), companionIntent: activeCompanionIntent }),
-      signal: run.controller.signal
-    })) {
-      if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
-      assistantMessage.content += delta;
-      send(res, 'text', { delta }, run);
-    }
-  }
-  catch (error) {
-    if (!run.cancelNotified) { send(res, 'error', { code: error.code || 'MODEL_UNAVAILABLE', message: error.message }, run); send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run); if (run.response) run.response.end(); }
-    restoreRegeneration();
-    finishRun(run);
-    return;
-  }
-  if (run.cancelled) { restoreRegeneration(); finishRun(run); return; }
-  let heldMemoryId = null;
-  try {
-    state.messages[sessionId].push(assistantMessage); touchSession(getSession(sessionId));
-    heldMemoryId = await finalizeMemoryModule({ chatMemory, userEvent, userMessage, assistantMessage, sessionId, channel: activeChannel });
-    await saveState(state);
   } catch (error) {
-    send(res, 'error', { code: 'FINALIZE_FAILED', message: error.message }, run);
+    send(res, 'error', { code: error.code || 'WORK_MODE_FAILED', message: error.message }, run);
     send(res, 'done', { ok: false, messageId: assistantMessage.id, runId: run.id }, run);
-    restoreRegeneration();
     finishRun(run);
-    if (run.response) return run.response.end();
-    return;
+    if (run.response) run.response.end();
   }
-  send(res, 'done', { runId: run.id, messageId: assistantMessage.id, memoryId: heldMemoryId, personalityVersion: state.personality.version, provider: selectedModel.provider, model: selectedModel.model, regeneratedFrom: regeneration?.assistant.id || null, retry }, run); finishRun(run); if (run.response) run.response.end();
 }
 
-app.post('/api/chat/stream', (req, res) => handleChatStream(req, res));
-app.post('/api/chat/regenerate', (req, res) => handleChatStream(req, res, { regenerateMessageId: String(req.body?.messageId || '').trim() || null }));
-app.post('/api/chat/retry', (req, res) => handleChatStream(req, res, { regenerateMessageId: String(req.body?.messageId || '').trim() || null, retry: true }));
+app.post('/api/chat/work', (req, res) => handleWorkStream(req, res));
 app.post('/api/chat/group', async (req, res) => {
   const { sessionId, message, channel } = req.body || {};
   if (!sessionId || !String(message || '').trim()) return fail(res, 400, 'INVALID_REQUEST', 'sessionId and message are required');

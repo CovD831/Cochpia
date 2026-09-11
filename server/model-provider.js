@@ -86,7 +86,19 @@ export function resolveModelSelection(provider = process.env.MODEL_PROVIDER || '
 export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mock', overrides = {}) {
   const config = resolveModelConfig(provider, overrides);
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  // The mock is a local-debugging provider, so it carries two affordances the
+  // end-to-end acceptance needs and a real provider cannot offer:
+  //   MOCK_REPLY_TEXT     -- a fixed reply, so assertions are exact. The
+  //                          default reply is a single paragraph with no line
+  //                          break, which cannot exercise the client's
+  //                          segment-per-line rendering at all.
+  //   MOCK_STREAM_DELAY_MS -- chunk pacing. The 24ms default finishes in ~200ms,
+  //                          which is too fast to observe a mid-stream
+  //                          disconnect or a cancellation.
+  const mockReplyOverride = String(process.env.MOCK_REPLY_TEXT || '').trim();
+  const mockChunkDelayMs = Number(process.env.MOCK_STREAM_DELAY_MS || 0);
   const generateMock = ({ message, recalled = [] }) => {
+    if (mockReplyOverride) return mockReplyOverride;
     const clipped = String(message).slice(0, 54);
     return recalled.length
       ? `我记得我们正在建立一段会持续变化的关系。你刚才提到“${clipped}”，我会把它和过去的经历放在一起理解。现在的我会更关注你的真实感受，也会保留这次相遇。`
@@ -127,7 +139,11 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
       generate: async ({ message, recalled }) => generateMock({ message, recalled }),
       async *stream({ message, recalled = [] } = {}) {
         const full = generateMock({ message, recalled });
-        for (const chunk of full.match(/.{1,12}/gu) || [full]) { yield chunk; await sleep(24); }
+        // [\s\S] rather than . -- without the s flag, '.' does not match a
+        // newline, so match() silently DROPS every line break and the streamed
+        // text diverges from the non-streamed text. The client renders one
+        // bubble per line, so this also made segmenting impossible to exercise.
+        for (const chunk of full.match(/[\s\S]{1,12}/gu) || [full]) { yield chunk; await sleep(mockChunkDelayMs || 24); }
       }
     };
   }

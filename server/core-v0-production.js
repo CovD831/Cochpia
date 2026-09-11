@@ -14,6 +14,7 @@ import { createMemoryModulePostgresRepository } from './memory-module-postgres.j
 import { createMemoryModule } from './memory-module.js';
 import { createMemoryExtractionDrain, createModelExtractor, createModelAuditor } from './memory-extraction.js';
 import { createOllamaEmbeddingGateway } from './memory-embedding.js';
+import { createTurnCompaction } from './compaction.js';
 
 let schemaPreparationCache = new WeakMap();
 
@@ -265,6 +266,19 @@ function createModelGateway(model) {
       const content = String(await model.generate(input) || '').trim();
       if (!content) throw new CoreV0Error('MODEL_EMPTY_RESULT', 'Model returned an empty result', { status: 502, retryable: true });
       return { status: 'generation_succeeded', content };
+    },
+    // R-020 stage 3: the streaming entry point for /api/chat/turns. The
+    // assembled content is the same text generate() would return, so the turn
+    // commit is byte-identical whichever path the caller takes.
+    async *stream(input = {}) {
+      if (typeof model.stream !== 'function') {
+        yield String(await model.generate(input) || '').trim();
+        return;
+      }
+      for await (const delta of model.stream(input)) {
+        const text = String(delta || '');
+        if (text) yield text;
+      }
     }
   };
 }
@@ -368,6 +382,10 @@ const extractBudgetMs = Number(process.env.CORE_V0_MEMORY_EXTRACT_BUDGET_MS) || 
     context,
     memoryPort,
     modelGateway,
+    // R-020 stage 3: the retired chat handler used to own in-session
+    // summarisation; it now runs inside the turn so long sessions stay
+    // summarised on the single remaining path.
+    compact: createTurnCompaction({ model }),
     enabled: true
   });
 
@@ -506,7 +524,14 @@ export function createCoreV0LocalAdapter({
   }
   const modelGateway = createModelGateway(createModelProvider(modelProvider, { model: selection.config.model }));
   const memoryPort = createInProcessMemoryPort({ memoryModule, context });
-  const service = createCoreV0TurnService({ state, context, memoryPort, modelGateway, enabled: true });
+  const service = createCoreV0TurnService({
+    state,
+    context,
+    memoryPort,
+    modelGateway,
+    compact: createTurnCompaction({ model: createModelProvider(modelProvider, { model: selection.config.model }) }),
+    enabled: true
+  });
   return { state, context, memoryPort, modelGateway, service };
 }
 

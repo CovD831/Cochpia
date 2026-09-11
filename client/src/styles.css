@@ -682,6 +682,12 @@ h1, h2, .brand strong, .empty-state h2, .inspector h2, .settings-header h2, .bub
 .composer { background:var(--panel-surface, var(--surface-elevated)); border-radius:999px; box-shadow:0 8px 18px color-mix(in srgb, var(--action-primary) 16%, transparent); }
 .send-button { background:var(--action-primary); color:var(--on-action); }
 .send-button:hover { background:var(--action-primary-hover); }
+/* Stop must not look like Send: a deliberate interruption is a different act
+   from submitting, and a mis-click that silently kills a reply would be worse
+   than an extra moment of hesitation. */
+.stop-button { background:var(--surface-elevated); color:var(--text-strong); border:1px solid var(--border-strong, var(--border-default)); }
+.stop-button:hover { background:var(--surface-panel); color:var(--text-strong); }
+.stop-button:disabled { opacity:.35; cursor:not-allowed; }
 
 /* 频道栏 */
 .channel-bar { border-bottom:1px solid var(--border-default); }

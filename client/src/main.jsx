@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, supabase, apiBase } from './api';
+// R-020 stage 3: one shared mode-switch detector. The client uses it to decide
+// which chat route a message belongs to, so it can never disagree with the
+// server about what counts as a mode command.
+import { isWorkRouteMessage } from '../../server/mode-switch.js';
 import './styles.css';
 import { MaterialPreview } from './material/MaterialPreview';
 import { MaterialProvider } from './material/MaterialProvider';
@@ -14,8 +18,6 @@ import { MusicProvider } from './audio/MusicProvider';
 import { MusicWindow } from './audio/MusicWindow';
 import { I18nProvider } from './i18n/I18nProvider';
 import { TimeProvider, useTime } from './time/TimeProvider';
-import LifeCalendar from './life/LifeCalendar';
-import LifeGame from './life/LifeGame';
 import { ProfileProvider, useProfile } from './profile/ProfileProvider';
 import CharacterProfile from './profile/CharacterProfile';
 import AvatarPicker from './profile/AvatarPicker';
@@ -212,6 +214,11 @@ function App() {
   const conversationRef = useRef(null);
   const nearBottomRef = useRef(true);
   const streamStateRef = useRef({ currentId: null, buffer: '', pausing: false, timer: null, counter: 0 });
+  // R-020 stage 3.5: the stop button needs to reach the run that is currently
+  // streaming, and to break the in-flight fetch locally. The server refuses to
+  // commit a cancelled turn (turn-stream.js aborts generation), so cancelling
+  // never leaves a half-written reply behind.
+  const streamRunRef = useRef({ runId: null, workMode: false, controller: null, cancelled: false });
   const [jumpToBottom, setJumpToBottom] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [channel, setChannel] = useState('默认');
@@ -610,8 +617,11 @@ function App() {
   };
 
   const newSession = async () => {
+    // R-020 stage 3: a private session must name its agent. Memory scoping is
+    // per-agent, so a session without one cannot resolve a caller identity.
+    if (!agents.length) { setError('请先在 Arcana 添加好友 Agent'); setPage('arcana'); return; }
     try {
-      const session = await api('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const session = await api('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId: agents[0].id }) });
       setSessions(current => [session, ...current]);
       await load(session.id);
     } catch (err) { setError(err.message); }
@@ -683,6 +693,12 @@ function App() {
     setToolEvents([]);
     setPendingApproval(null);
     const text = input.trim();
+    // R-020 stage 3: companion chat goes to /api/chat/turns and work mode to
+    // /api/chat/work. The work route also owns mode switching, so a switch
+    // command has to be routed there even while the session is still in
+    // companion mode -- otherwise "切换到工作模式" would be answered as small
+    // talk and the switch would never happen.
+    const workRoute = isWorkRouteMessage({ mode, text });
     if (sessions.find(item => item.id === sessionId)?.kind === 'group') {
       setInput('');
       setMessages(current => [...current, { id: `local-${Date.now()}`, role: 'user', content: text, createdAt: new Date().toISOString() }]);
@@ -695,8 +711,13 @@ function App() {
       return;
     }
     setInput('');
+    // One idempotency key per send: a network retry of the same message
+    // resolves to the same turn instead of producing a second reply.
+    const sendKey = (globalThis.crypto?.randomUUID?.() || `send-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const firstId = 'streaming-0';
     streamStateRef.current = { currentId: firstId, buffer: '', pausing: false, timer: null, counter: 0 };
+    // Fresh run: the stop button stays inert until the meta event names the run.
+    streamRunRef.current = { runId: null, workMode: workRoute, controller: new AbortController(), cancelled: false };
     setMessages(current => [...current, { id: `local-${Date.now()}`, role: 'user', content: text, createdAt: new Date().toISOString() }, { id: firstId, role: 'assistant', content: '', createdAt: new Date().toISOString(), isStreaming: true }]);
     nearBottomRef.current = true;
     scrollToBottom('auto');
@@ -729,10 +750,21 @@ function App() {
     };
     try {
       const session = supabase ? (await supabase.auth.getSession()).data.session : null;
-      const streamHeaders = { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) };
-      let response = await fetch(`${apiBase}/api/chat/stream`, {
-        method: 'POST', headers: streamHeaders,
-        body: JSON.stringify({ sessionId, message: text, provider: selectedProvider, model: selectedModel, channel, companionIntent: mode === 'companion' ? companionIntent : null })
+      const streamHeaders = { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) };
+      // R-020 stage 3: /api/chat/turns is the companion path and speaks SSE
+      // (meta/text/done/error). /api/chat/work keeps the legacy work-mode
+      // protocol (text/tool/tool_pending/tool_result/done). The rendering
+      // below handles both because the event names overlap where it matters.
+      const chatEndpoint = workRoute ? `${apiBase}/api/chat/work` : `${apiBase}/api/chat/turns`;
+      const reattachEndpoint = runIdValue => workRoute
+        ? `${apiBase}/api/chat/work/${encodeURIComponent(runIdValue)}`
+        : `${apiBase}/api/chat/turns/${encodeURIComponent(runIdValue)}`;
+      // The idempotency key makes a retried send resolve to the same turn
+      // instead of producing a second reply (companion path).
+      let response = await fetch(chatEndpoint, {
+        method: 'POST', headers: { ...streamHeaders, ...(workRoute ? {} : { 'Idempotency-Key': sendKey }) },
+        body: JSON.stringify({ sessionId, message: text, channel }),
+        signal: streamRunRef.current.controller.signal
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
@@ -746,6 +778,7 @@ function App() {
       let reconnectAttempts = 0;
       let fullText = '';
       let assistantMessageId = '';
+      let assistantPending = false;
       const scheduleComposerUnlock = () => {
         clearTimeout(completionUnlockTimer);
         completionUnlockTimer = setTimeout(() => setStreaming(false), 1200);
@@ -761,6 +794,9 @@ function App() {
           if (!eventName || !dataText) return;
           if (eventId) lastEventId = eventId;
           const data = JSON.parse(dataText);
+          // Record the run id as soon as the server names it, so the stop
+          // button has something to cancel.
+          if (eventName === 'meta' && data.runId) streamRunRef.current.runId = data.runId;
           if (eventName === 'meta') { runId = data.runId || runId; if (data.provider) setActualModel({ provider: data.provider, model: data.model }); }
           if (eventName === 'text') { fullText += data.delta; streamStateRef.current.buffer += data.delta; streamProcess(); scheduleComposerUnlock(); }
           if (eventName === 'error') {
@@ -770,7 +806,16 @@ function App() {
           if (eventName === 'tool') { setToolEvents(current => [...current, { name: data.name, args: data.args, result: null }]); }
           if (eventName === 'tool_pending') { setPendingApproval({ runId: data.runId, toolCallId: data.toolCallId, name: data.name, args: data.args }); }
           if (eventName === 'tool_result') { setToolEvents(current => { const next = [...current]; for (let i = next.length - 1; i >= 0; i -= 1) { if (next[i].result === null && next[i].name === data.name) { next[i] = { ...next[i], result: data.result }; break; } } return next; }); }
-          if (eventName === 'done') { streamFinished = true; if (data.mode) setMode(data.mode); if (data.messageId) assistantMessageId = data.messageId; if (data.ok === false && !streamError) streamError = '模型没有完成本次回复'; }
+          if (eventName === 'done') {
+            streamFinished = true;
+            if (data.mode) setMode(data.mode);
+            if (data.messageId) assistantMessageId = data.messageId;
+            // A 'pending' turn is not a failure: the raw event is durable and
+            // the reply will resolve on a later turn, so it must not be
+            // reported as an error to the user.
+            if (data.status === 'pending') { assistantPending = true; }
+            else if (data.ok === false && !streamError) streamError = '模型没有完成本次回复';
+          }
         });
       };
       const readStream = async currentResponse => {
@@ -784,20 +829,33 @@ function App() {
       };
       while (!streamFinished) {
         await readStream(response);
-        if (streamFinished || !runId || reconnectAttempts >= 3) break;
+        if (streamFinished || !runId || streamRunRef.current.cancelled || reconnectAttempts >= 3) break;
         reconnectAttempts += 1;
         await new Promise(resolve => setTimeout(resolve, 250 * reconnectAttempts));
-        response = await fetch(`${apiBase}/api/chat/stream/${encodeURIComponent(runId)}`, { headers: { ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}), ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) } });
+        if (streamRunRef.current.cancelled) break;
+        response = await fetch(reattachEndpoint(runId), { signal: streamRunRef.current.controller.signal, headers: { Accept: 'text/event-stream', ...(lastEventId ? { 'Last-Event-ID': lastEventId } : {}), ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) } });
       }
-      if (!streamFinished && !streamError) streamError = 'SSE 连接中断，且无法恢复';
+      // A cancelled run is a deliberate stop, not a dropped connection.
+      if (!streamFinished && !streamError && !streamRunRef.current.cancelled) streamError = 'SSE 连接中断，且无法恢复';
       if (streamError) throw new Error(streamError);
       const st = streamStateRef.current;
       if (st.timer) clearTimeout(st.timer);
+      if (streamRunRef.current.cancelled) {
+        // Whatever the server committed is the truth; the local streaming
+        // bubble is provisional and must not outlive the stop.
+        setMessages(current => current.filter(item => !item.id.startsWith('streaming-')));
+        setStreaming(false);
+        await loadSessionMessages(sessionId, channel).catch(() => {});
+        return;
+      }
       if (st.buffer.trim()) {
         setMessages(current => current.map(item => item.id === st.currentId ? { ...item, content: st.buffer, isStreaming: false } : item));
       } else {
         setMessages(current => current.filter(item => item.id !== st.currentId));
       }
+      // A pending turn produced no text yet; say so instead of showing the
+      // user an empty bubble that looks like a dropped reply.
+      if (assistantPending) setError('这条消息已记录，回复会在下一轮补上');
       setStreaming(false);
       await loadSessionMessages(sessionId, channel).catch(() => {});
       void refresh().catch(err => setError(err.message));
@@ -805,10 +863,47 @@ function App() {
     } catch (err) {
       const st = streamStateRef.current;
       if (st.timer) clearTimeout(st.timer);
+      if (streamRunRef.current.cancelled) {
+        // The stop button aborts the fetch, which surfaces here as an
+        // AbortError. Reporting it would look like a failure the user caused
+        // on purpose, so the stop path stays silent and syncs with the server.
+        setMessages(current => current.filter(item => !item.id.startsWith('streaming-')));
+        await loadSessionMessages(sessionId, channel).catch(() => {});
+        return;
+      }
       setError(err.message);
       setInput(text);
       setMessages(current => current.filter(item => !item.id.startsWith('streaming-')));
     } finally { clearTimeout(completionUnlockTimer); setStreaming(false); }
+  };
+
+  // Stop an in-flight reply. The server decides what happens to the turn: for
+  // the companion path it aborts generation and commits nothing, so no partial
+  // reply is ever persisted (pinned by turn-stream.test.js T5). Work-mode runs
+  // cancel through their own route.
+  const cancelGeneration = async () => {
+    const run = streamRunRef.current;
+    if (!streaming || run.cancelled) return;
+    run.cancelled = true;
+    const st = streamStateRef.current;
+    if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+    st.pausing = false;
+    try {
+      if (run.workMode) {
+        if (sessionId) await api('/api/chat/work/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }) });
+      } else if (run.runId) {
+        const session = supabase ? (await supabase.auth.getSession()).data.session : null;
+        await fetch(`${apiBase}/api/chat/turns/${encodeURIComponent(run.runId)}`, {
+          method: 'DELETE',
+          headers: { ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) }
+        });
+      }
+    } catch {
+      // A failed cancel request must not block the local stop; the abort below
+      // still ends the stream, and the reload below reconciles with the server.
+    }
+    run.controller.abort();
+    setStreaming(false);
   };
 
   const submitAuth = async event => {
@@ -888,9 +983,9 @@ function App() {
     {user && supabase && <button className="auth-logout" onClick={() => supabase.auth.signOut()}>退出</button>}
     {page !== 'splash' && <div className="aube-lights"><i className="l-red" aria-hidden="true" /><i className="l-yellow" aria-hidden="true" /><button type="button" className="l-green" onClick={() => setMinimized(true)} title="最小化" aria-label="最小化应用" /></div>}
     {page === 'splash' && <button type="button" className="aube-splash" onClick={() => setPage('home')} aria-label="进入 Cochpia"><video className="aube-splash-video" src="/306155_medium.mp4" autoPlay muted loop playsInline preload="auto" aria-hidden="true" /><span className="aube-splash-veil" aria-hidden="true" /><span className="aube-splash-center"><span className="aube-orb"><span className="aube-orb-core" /></span><span className="aube-word">Cochpia</span><span className="aube-tag">Still Blooming</span><span className="aube-divider"><i /><em>✦</em><i /></span><span className="aube-hint">轻触进入</span></span></button>}
-    {page !== 'splash' && <nav className="aube-nav"><button className={`aube-nav-item ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span className="aube-nav-dot">⌂</span><span className="aube-nav-lbl">Sanctum</span></button><button className={`aube-nav-item ${page === 'chat' ? 'active' : ''}`} onClick={() => setPage('chat')}><span className="aube-nav-dot">✎</span><span className="aube-nav-lbl">Chat</span></button><button className={`aube-nav-item ${page === 'arcana' ? 'active' : ''}`} onClick={() => setPage('arcana')}><span className="aube-nav-dot">⌗</span><span className="aube-nav-lbl">Arcana</span></button><button className={`aube-nav-item ${page === 'life' ? 'active' : ''}`} onClick={() => setPage('life')}><span className="aube-nav-dot">◈</span><span className="aube-nav-lbl">共生</span></button><button className="aube-nav-item" onClick={openMusic}><span className="aube-nav-dot">♫</span><span className="aube-nav-lbl">Music</span></button><button className="aube-nav-item" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><span className="aube-nav-dot">◐</span><span className="aube-nav-lbl">Veil</span></button><button className="aube-nav-item" onClick={openSettings}><span className="aube-nav-dot">⚙</span><span className="aube-nav-lbl">设置</span></button></nav>}
+    {page !== 'splash' && <nav className="aube-nav"><button className={`aube-nav-item ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span className="aube-nav-dot">⌂</span><span className="aube-nav-lbl">Sanctum</span></button><button className={`aube-nav-item ${page === 'chat' ? 'active' : ''}`} onClick={() => setPage('chat')}><span className="aube-nav-dot">✎</span><span className="aube-nav-lbl">Chat</span></button><button className={`aube-nav-item ${page === 'arcana' ? 'active' : ''}`} onClick={() => setPage('arcana')}><span className="aube-nav-dot">⌗</span><span className="aube-nav-lbl">Arcana</span></button><button className="aube-nav-item" onClick={openMusic}><span className="aube-nav-dot">♫</span><span className="aube-nav-lbl">Music</span></button><button className="aube-nav-item" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><span className="aube-nav-dot">◐</span><span className="aube-nav-lbl">Veil</span></button><button className="aube-nav-item" onClick={openSettings}><span className="aube-nav-dot">⚙</span><span className="aube-nav-lbl">设置</span></button></nav>}
     {page === 'home' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card aube-profile"><div className="aube-pava">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</div><div><div className="aube-pname">{profile.name}<button type="button" className="text-button profile-edit" onClick={() => setProfileOpen(true)}>编辑档案</button></div><div className="aube-pquote">{personality?.summary || '温和、好奇，正在学习如何更准确地陪伴。'}</div><div className="aube-tags">{(personality?.traits || []).slice(0, 4).map(trait => <span key={trait.key}>{trait.label} {Math.round(trait.value * 100)}%</span>)}</div></div></div><div className="aube-duo"><div className="aube-card aube-mini" onClick={newSession}><span className="aube-mi"><FeatherIcon name="plus" size={18} /></span><h5>新的相遇</h5><small>{sessions.length} 个会话</small></div><div className="aube-card aube-mini" onClick={() => setEventOpen(true)}><span className="aube-mi"><FeatherIcon name="calendar" size={18} /></span><h5>日历</h5><small>{events.length} 条日程</small></div></div><div className="aube-sec">Sessions</div><div className="aube-sessions">{sessions.map(session => <div key={session.id} className={`aube-session-row ${session.id === sessionId ? 'active' : ''}`}><button className="aube-session" onClick={() => { load(session.id); setPage('chat'); }}>{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话"><FeatherIcon name="x" size={16} /></button></div>)}</div><div className="aube-sec">Pulse</div><div className="aube-card aube-pulse">{(personality?.traits || []).map(trait => <div className="aube-prow" key={trait.key}><span className="aube-pl">{trait.label}</span><div className="aube-pbar"><i style={{ width: `${trait.value * 100}%` }} /></div><span className="aube-pv">{Math.round(trait.value * 100)}</span></div>)}</div></div></div>}
-    {page === 'life' && <div className="aube-page-overlay"><div className="aube-page-scroll"><LifeGame onChat={() => setPage('chat')} /><details className="life-calendar-legacy"><summary>查看生命格日历</summary><LifeCalendar /></details></div></div>}
+    {page === 'life' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card" style={{ padding: '24px', lineHeight: 1.8 }}>共生模式正在重建。<br />记忆与生活状态会以 Agent 自己的节奏生长，这里将呈现它的日常。</div></div></div>}
 
     {page === 'arcana' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-ptitle">Arcana</div><div className="aube-sect">Persona · 人格</div><textarea className="persona-input" value={personaDraft} onChange={event => setPersonaDraft(event.target.value)} rows="4" placeholder="自定义本会话 Cochpia 的人格与语气,留空使用默认人格…" /><button className="select-model" style={{ marginTop: 10 }} onClick={savePersona}>保存人格</button><div className="aube-sect">Veil · 主题</div><div className="aube-veils">{[['sakura', '樱花'], ['ember', '余烬'], ['moss', '苔藓'], ['ink', '墨'], ['va11', '赛博']].map(([id, name]) => <button key={id} className={`aube-veil ${workspacePreferences.theme.themeId === id ? 'active' : ''}`} onClick={() => setWorkspaceSetting('theme', 'themeId', id)}>{name}</button>)}</div><div className="aube-sect">Atmosphere · 氛围</div><select value={atmosphere} onChange={event => saveAtmosphere(event.target.value)}><option value="">默认</option>{atmospherePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.name} · {preset.description}</option>)}</select><div className="aube-sect">Model · 模型</div><select value={selectedProvider} onChange={selectProvider}><option value="">选择供应商</option>{models.providers.map(provider => <option key={provider.provider} value={provider.provider} disabled={!provider.ready}>{provider.label}{provider.ready ? '' : ' · 未配置'}</option>)}</select><select value={selectedModel} onChange={selectModel} style={{ marginTop: 8 }}><option value="">选择模型</option>{providerModelOptions(selectedProviderInfo).map(model => <option key={model} value={model}>{model}</option>)}</select><div className="aube-sect" style={{ marginTop: 16 }}>Providers</div>{models.providers.map(provider => <div className="aube-row" key={provider.provider}><span>{provider.label}</span><span className="aube-row-rv">{provider.ready ? '已配置' : '未配置'}</span></div>)}<div className="aube-sect">Agents · 好友</div>{agents.length === 0 ? <div className="aube-row"><span style={{ color: 'var(--text-muted)' }}>还没有好友 Agent,添加一个试试</span></div> : agents.map(agent => <div className="aube-row" key={agent.id}><span>{agent.avatar} {agent.name}</span><span className="aube-row-rv">{agent.provider ? `${agent.provider}/${agent.model || '默认'}` : '默认模型'}</span><button type="button" className="text-button" onClick={() => removeAgent(agent.id)}>删</button></div>)}<form className="agent-form" onSubmit={createAgent}><input value={agentDraft.name} onChange={event => setAgentDraft(current => ({ ...current, name: event.target.value }))} placeholder="名称" /><input value={agentDraft.persona} onChange={event => setAgentDraft(current => ({ ...current, persona: event.target.value }))} placeholder="人格(可选)" /><select value={agentDraft.provider} onChange={event => setAgentDraft(current => ({ ...current, provider: event.target.value }))}><option value="">默认模型</option>{models.providers.filter(provider => provider.ready).map(provider => <option key={provider.provider} value={provider.provider}>{provider.label}</option>)}</select><input value={agentDraft.model} onChange={event => setAgentDraft(current => ({ ...current, model: event.target.value }))} placeholder="模型名" /><AvatarPicker value={agentDraft.avatar} onChange={avatar => setAgentDraft(current => ({ ...current, avatar }))} /><button type="submit">添加</button></form><button className="select-model" style={{ marginTop: 10, width: '100%' }} onClick={createGroupSession}>创建群聊(含全部好友)</button><div className="aube-sect">共同空间 · Shared state</div><button type="button" className="select-model" style={{ width: '100%' }} onClick={() => restoreWindow('inspector')}><FeatherIcon name="eye" size={15} /> 查看共同状态</button><div className="aube-sect">Data · 数据</div><div className="aube-row"><button className="text-button" onClick={exportData}>导出数据</button><label className="text-button" style={{ marginLeft: 16, cursor: 'pointer' }}>导入数据<input type="file" accept="application/json,.json" onChange={importData} hidden /></label></div></div></div>}
     <div className="model-dock">
@@ -911,7 +1006,7 @@ function App() {
 
     <aside className="sidebar"><div className="brand"><span className="brand-mark">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</span><div><strong>{profile.name}</strong><span>relationship workspace</span></div></div><button className="new-chat" onClick={newSession}><span>+</span> 新的相遇</button><div className="section-label">会话</div><nav className="session-list">{sessions.map(session => <div key={session.id} className={`session-row ${session.id === sessionId ? 'active' : ''}`}><button className="session" onClick={() => load(session.id)}><span className="session-dot" />{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话"><FeatherIcon name="x" size={16} /></button></div>)}</nav><div className="sidebar-foot"><span className="status-dot" />本地开发模式<span className="version">v0.1</span><button type="button" className="text-button" onClick={exportData}>导出</button><label className="text-button import-label">导入<input type="file" accept="application/json,.json" onChange={importData} hidden /></label></div></aside>
 
-    <main className={`main-panel ${page !== 'chat' ? 'is-page-hidden' : ''}`}><header className="topbar"><div><p className="eyebrow">LIVE RELATIONSHIP LOG</p><h1>与你共同成长的空间</h1></div><div className="top-actions"><button className="icon-button" aria-label="切换主题" title="切换主题" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><FeatherIcon name={workspacePreferences.theme.themeId === 'sakura' ? 'moon' : 'sun'} size={16} /></button><span className="connection"><span className="status-dot" /> SSE 已连接</span></div></header><div className="channel-bar">{page === 'chat' && <div className="chat-context-tools"><GroupChatIdentity session={currentSession} agents={agents} onOpen={() => setGroupPanelOpen(true)} /></div>}<div className="channel-tabs">{channels.map(item => <button type="button" key={item.name} className={item.name === channel ? 'channel-tab active' : 'channel-tab'} onClick={() => switchChannel(item.name)}>{item.name}<span className="channel-count">{item.count}</span></button>)}<button type="button" className="channel-tab channel-add" aria-label="新建频道" title="新建频道" onClick={addChannel}><FeatherIcon name="plus" size={16} /></button></div><input className="chat-search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="搜索聊天记录" /><button type="button" className={`mode-toggle ${mode}`} onClick={toggleMode} title={mode === 'companion' ? '当前陪伴模式，点击切换工作模式' : '当前工作模式，点击切回陪伴模式'}>{mode === 'companion' ? '陪伴' : '工作'}</button></div><div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>{messages.length === 0 && <div className="empty-state"><span className="empty-mark">01</span><h2>从一段真实的分享开始</h2><p>每次对话都会成为可审计的共同经历，只有重要的内容才会进入长记忆。</p></div>}{groupedMessages.map(item => item.type === 'date' ? <div key={item.key} className="date-sep"><span>{item.label}</span></div> : <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}><div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || (profile.avatarImage ? <img src={profile.avatarImage} alt="" /> : profile.avatar)) : '你'}</div><div className="message-content"><div className="message-meta">{item.role === 'assistant' ? (item.senderName || profile.name) : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>{editingMessageId === item.id && item.lastInGroup ? <div className="message-edit"><textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus /><div><button type="button" className="text-button" onClick={() => saveMessageEdit(item.id)}>保存</button><button type="button" className="text-button muted-button" onClick={cancelEditingMessage}>取消</button></div></div> : <><div className="bubble">{item.content || <span className="typing">正在形成回应<span>.</span><span>.</span><span>.</span></span>}{item.isStreaming && item.content ? <span className="typing-cursor" /> : null}</div>{item.lastInGroup && !('isStreaming' in item) && <div className="message-actions">{item.role === 'assistant' && ttsSupported && <button type="button" className="text-button" onClick={() => toggleSpeak(item)}>{speakingId === item.id ? '停止朗读' : '朗读'}</button>}<button type="button" className="text-button" onClick={() => startEditingMessage(item)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => removeMessage(item.id)}>删除</button></div>}</>}</div></article>)}{toolEvents.length > 0 && <div className="tool-log">{toolEvents.map((item, i) => <details key={i} className="tool-item" open={item.result === null}><summary>🔧 {item.name} {item.args?.path || item.args?.pattern || item.args?.name || item.args?.dir || ''}</summary>{item.result === null ? <span className="tool-pending">执行中…</span> : <pre className="tool-result">{item.result}</pre>}</details>)}</div>}{jumpToBottom && <button className="jump-bottom" onClick={() => { nearBottomRef.current = true; setJumpToBottom(false); scrollToBottom('smooth'); }} aria-label="回到底部" title="回到底部"><FeatherIcon name="chevronDown" size={18} /></button>}</div><form className="composer" onSubmit={sendMessage}><CompanionIntentBar mode={mode} intent={companionIntent} onChange={setCompanionIntent} /><button type="button" className="upload-button" onClick={() => fileRef.current?.click()} disabled={streaming} aria-label="上传文件" title="上传文件"><FeatherIcon name="paperclip" size={17} /></button><button type="button" className={`upload-button voice-button${listening ? ' listening' : ''}`} onClick={toggleListening} disabled={streaming || !recognitionSupported} aria-pressed={listening} aria-label={listening ? '停止语音输入' : '语音输入'} title={recognitionSupported ? (listening ? '点击停止说话' : '点击开始说话') : '当前浏览器不支持语音识别'}>{listening ? <FeatherIcon name="stopCircle" size={17} /> : <FeatherIcon name="mic" size={17} />}</button><button type="button" className={`upload-button auto-read${autoRead ? ' active' : ''}`} onClick={toggleAutoRead} disabled={!ttsSupported} aria-pressed={autoRead} aria-label="自动朗读回复" title={ttsSupported ? (autoRead ? '已开启自动朗读回复' : '开启自动朗读回复') : '当前浏览器不支持语音合成'}><FeatherIcon name="volume2" size={17} /></button><textarea value={listening ? `${input}${finalText}${interimText}` : input} onChange={event => setInput(event.target.value)} disabled={streaming} readOnly={listening} placeholder={listening ? '正在聆听…' : '写下此刻想分享的事…'} rows="1" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event); } }} /><input ref={fileRef} type="file" hidden onChange={uploadFile} /><button className="send-button" disabled={streaming || !input.trim()} aria-label="发送消息" title="发送消息"><FeatherIcon name="arrowUp" size={18} /></button><div className="composer-note">Enter 发送 · 🎤 语音输入 · 🔊 自动朗读</div></form></main>
+    <main className={`main-panel ${page !== 'chat' ? 'is-page-hidden' : ''}`}><header className="topbar"><div><p className="eyebrow">LIVE RELATIONSHIP LOG</p><h1>与你共同成长的空间</h1></div><div className="top-actions"><button className="icon-button" aria-label="切换主题" title="切换主题" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><FeatherIcon name={workspacePreferences.theme.themeId === 'sakura' ? 'moon' : 'sun'} size={16} /></button><span className="connection"><span className="status-dot" /> SSE 已连接</span></div></header><div className="channel-bar">{page === 'chat' && <div className="chat-context-tools"><GroupChatIdentity session={currentSession} agents={agents} onOpen={() => setGroupPanelOpen(true)} /></div>}<div className="channel-tabs">{channels.map(item => <button type="button" key={item.name} className={item.name === channel ? 'channel-tab active' : 'channel-tab'} onClick={() => switchChannel(item.name)}>{item.name}<span className="channel-count">{item.count}</span></button>)}<button type="button" className="channel-tab channel-add" aria-label="新建频道" title="新建频道" onClick={addChannel}><FeatherIcon name="plus" size={16} /></button></div><input className="chat-search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="搜索聊天记录" /><button type="button" className={`mode-toggle ${mode}`} onClick={toggleMode} title={mode === 'companion' ? '当前陪伴模式，点击切换工作模式' : '当前工作模式，点击切回陪伴模式'}>{mode === 'companion' ? '陪伴' : '工作'}</button></div><div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>{messages.length === 0 && <div className="empty-state"><span className="empty-mark">01</span><h2>从一段真实的分享开始</h2><p>每次对话都会成为可审计的共同经历，只有重要的内容才会进入长记忆。</p></div>}{groupedMessages.map(item => item.type === 'date' ? <div key={item.key} className="date-sep"><span>{item.label}</span></div> : <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}><div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || (profile.avatarImage ? <img src={profile.avatarImage} alt="" /> : profile.avatar)) : '你'}</div><div className="message-content"><div className="message-meta">{item.role === 'assistant' ? (item.senderName || profile.name) : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>{editingMessageId === item.id && item.lastInGroup ? <div className="message-edit"><textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus /><div><button type="button" className="text-button" onClick={() => saveMessageEdit(item.id)}>保存</button><button type="button" className="text-button muted-button" onClick={cancelEditingMessage}>取消</button></div></div> : <><div className="bubble">{item.content || <span className="typing">正在形成回应<span>.</span><span>.</span><span>.</span></span>}{item.isStreaming && item.content ? <span className="typing-cursor" /> : null}</div>{item.lastInGroup && !('isStreaming' in item) && <div className="message-actions">{item.role === 'assistant' && ttsSupported && <button type="button" className="text-button" onClick={() => toggleSpeak(item)}>{speakingId === item.id ? '停止朗读' : '朗读'}</button>}<button type="button" className="text-button" onClick={() => startEditingMessage(item)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => removeMessage(item.id)}>删除</button></div>}</>}</div></article>)}{toolEvents.length > 0 && <div className="tool-log">{toolEvents.map((item, i) => <details key={i} className="tool-item" open={item.result === null}><summary>🔧 {item.name} {item.args?.path || item.args?.pattern || item.args?.name || item.args?.dir || ''}</summary>{item.result === null ? <span className="tool-pending">执行中…</span> : <pre className="tool-result">{item.result}</pre>}</details>)}</div>}{jumpToBottom && <button className="jump-bottom" onClick={() => { nearBottomRef.current = true; setJumpToBottom(false); scrollToBottom('smooth'); }} aria-label="回到底部" title="回到底部"><FeatherIcon name="chevronDown" size={18} /></button>}</div><form className="composer" onSubmit={sendMessage}><CompanionIntentBar mode={mode} intent={companionIntent} onChange={setCompanionIntent} /><button type="button" className="upload-button" onClick={() => fileRef.current?.click()} disabled={streaming} aria-label="上传文件" title="上传文件"><FeatherIcon name="paperclip" size={17} /></button><button type="button" className={`upload-button voice-button${listening ? ' listening' : ''}`} onClick={toggleListening} disabled={streaming || !recognitionSupported} aria-pressed={listening} aria-label={listening ? '停止语音输入' : '语音输入'} title={recognitionSupported ? (listening ? '点击停止说话' : '点击开始说话') : '当前浏览器不支持语音识别'}>{listening ? <FeatherIcon name="stopCircle" size={17} /> : <FeatherIcon name="mic" size={17} />}</button><button type="button" className={`upload-button auto-read${autoRead ? ' active' : ''}`} onClick={toggleAutoRead} disabled={!ttsSupported} aria-pressed={autoRead} aria-label="自动朗读回复" title={ttsSupported ? (autoRead ? '已开启自动朗读回复' : '开启自动朗读回复') : '当前浏览器不支持语音合成'}><FeatherIcon name="volume2" size={17} /></button><textarea value={listening ? `${input}${finalText}${interimText}` : input} onChange={event => setInput(event.target.value)} disabled={streaming} readOnly={listening} placeholder={listening ? '正在聆听…' : '写下此刻想分享的事…'} rows="1" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event); } }} /><input ref={fileRef} type="file" hidden onChange={uploadFile} />{streaming ? <button type="button" className="send-button stop-button" onClick={cancelGeneration} aria-label="停止生成" title="停止生成"><FeatherIcon name="stopCircle" size={18} /></button> : <button className="send-button" disabled={!input.trim()} aria-label="发送消息" title="发送消息"><FeatherIcon name="arrowUp" size={18} /></button>}<div className="composer-note">Enter 发送 · 🎤 语音输入 · 🔊 自动朗读</div></form></main>
 
     <div className="window-layer"><FloatingWindow id="inspector" title="共同状态"><aside className="inspector"><div className="inspector-head"><div><p className="eyebrow">COGNITIVE STATE</p><h2>共同状态</h2></div><span className="live-pill">LIVE</span></div><section className="state-card"><div className="state-card-top"><span className="state-icon">✦</span><div><strong>关系正在形成</strong><span>基于共同事件持续更新</span></div></div><div className="state-line"><span>共享记忆</span><strong>{memory.count}</strong></div><div className="state-line"><span>人格版本</span><strong>v{personality?.version || 1}</strong></div></section><MaterialPreview /><section className="inspector-section"><div className="section-heading"><span>人格趋势</span><button type="button" className="text-button" onClick={() => setHistoryOpen(true)}>查看版本</button></div>{(personality?.traits || []).map(trait => <div className="trait" key={trait.key}><div><span>{trait.label}</span><b>{Math.round(trait.value * 100)}%</b></div><div className="progress"><i style={{ width: `${trait.value * 100}%` }} /></div></div>)}</section><section className="inspector-section"><div className="section-heading"><span>最近记忆</span><span className="count-label">{memory.count} 条</span></div>{memory.memories.slice(0, 3).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.type === 'relationship' ? '关系' : '事件'}</span><p>{item.summary}</p><small>{Math.round(item.confidence * 100)}% 确信 · {item.source}</small></div>)}</section><section className="inspector-section"><div className="section-heading"><span>成长证据</span><button type="button" className="text-button" onClick={() => setGrowthOpen(true)}>查看时间线</button></div>{growthEvidence.slice(0, 2).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.status || 'draft'}</span><p>{item.claim}</p><small>{item.evidence}</small></div>)}</section><section className="protocol-note"><span>◎</span><p><strong>可验证成长</strong>每次人格变化都保留证据和版本，随时可回滚。</p></section></aside></FloatingWindow></div>
 

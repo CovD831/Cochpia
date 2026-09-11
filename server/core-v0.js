@@ -420,6 +420,16 @@ export function createCoreV0MockModelGateway({ provider = createModelProvider('m
       const content = await provider.generate({ message, recalled, runtimeContext });
       if (!String(content || '').trim()) throw new CoreV0Error('MODEL_EMPTY_RESULT', 'Model returned an empty result', { status: 502, retryable: true });
       return { status: 'generation_succeeded', content: String(content).trim() };
+    },
+    // Mirrors the production gateway's delta interface so the streaming path
+    // can be exercised without a network model.
+    async *stream({ message, recalled = [], runtimeContext = null } = {}) {
+      const content = String(await provider.generate({ message, recalled, runtimeContext }) || '');
+      if (!content.trim()) throw new CoreV0Error('MODEL_EMPTY_RESULT', 'Model returned an empty result', { status: 502, retryable: true });
+      const step = 12;
+      for (let index = 0; index < content.length; index += step) {
+        yield content.slice(index, index + step);
+      }
     }
   };
 }
@@ -474,6 +484,11 @@ export function createCoreV0TurnService({
   enabled = true,
   store = null,
   commitWriter = null,
+  // R-020 stage 3: in-session summarisation, wired here because the legacy
+  // chat handler that used to own it is being retired. It summarises the older
+  // part of a long session into session.summary, which the history section then
+  // carries forward. Optional, so the many existing tests are unaffected.
+  compact = null,
   now = nowIso
 } = {}) {
   if (!state || typeof state !== 'object') throw new TypeError('Core v0 turn service requires state');
@@ -814,8 +829,13 @@ export function createCoreV0TurnService({
     }
   };
 
-  const generate = async (turn, session, memoryView) => {
-    if (turn.generatedContent) return { status: 'generation_succeeded', content: turn.generatedContent };
+  const generate = async (turn, session, memoryView, { onDelta = null, shouldAbort = null } = {}) => {
+    if (turn.generatedContent) {
+      // A resumed turn replays what was already generated so the client can
+      // rebuild its view without the model being called twice.
+      if (typeof onDelta === 'function' && turn.generatedContent) onDelta(turn.generatedContent);
+      return { status: 'generation_succeeded', content: turn.generatedContent };
+    }
     const previousMessages = runtimeStore.messagesFor(turn.applicationSessionId)
       .filter(item => item.id !== turn.applicationMessageId && item.visibleAt !== null)
       .slice(-MAX_CONTEXT_MESSAGES);
@@ -830,9 +850,35 @@ export function createCoreV0TurnService({
         memoryView,
         recalled: memoryView.recalled || []
       });
-      const result = await modelGateway.generate({ message: turn.message, recalled: memoryView.recalled || [], runtimeContext });
-      if (result?.status === 'failed') throw new CoreV0Error(result.code || 'MODEL_GENERATION_FAILED', 'Model generation failed', { status: result.httpStatus || 502, retryable: true });
-      const content = String(typeof result === 'string' ? result : result?.content || '').trim();
+      // R-020 stage 3: a streaming caller gets deltas as they arrive; the
+      // committed content is identical to the non-streaming path, so the turn
+      // semantics (idempotency, receipts, commit) are unchanged.
+      const useStream = typeof onDelta === 'function' && typeof modelGateway.stream === 'function';
+      let content;
+      if (useStream) {
+        let assembled = '';
+        for await (const chunk of modelGateway.stream({ message: turn.message, recalled: memoryView.recalled || [], runtimeContext })) {
+          // A cancelled run abandons generation here rather than streaming to
+          // the end and committing. Without this the client would see a reply
+          // it explicitly asked to stop, and the message would be durable.
+          if (typeof shouldAbort === 'function' && shouldAbort()) {
+            const abortError = new CoreV0Error('TURN_CANCELLED', 'The turn was cancelled by the caller', { status: 499, retryable: true });
+            turn.status = 'failed';
+            turn.updatedAt = now();
+            turn.failure = { code: 'TURN_CANCELLED', at: turn.updatedAt };
+            throw abortError;
+          }
+          const delta = String(chunk || '');
+          if (!delta) continue;
+          assembled += delta;
+          onDelta(delta);
+        }
+        content = assembled.trim();
+      } else {
+        const result = await modelGateway.generate({ message: turn.message, recalled: memoryView.recalled || [], runtimeContext });
+        if (result?.status === 'failed') throw new CoreV0Error(result.code || 'MODEL_GENERATION_FAILED', 'Model generation failed', { status: result.httpStatus || 502, retryable: true });
+        content = String(typeof result === 'string' ? result : result?.content || '').trim();
+      }
       if (!content) throw new CoreV0Error('MODEL_EMPTY_RESULT', 'Model returned an empty result', { status: 502, retryable: true });
       turn.generatedContent = content;
       turn.status = 'generation_succeeded';
@@ -921,7 +967,7 @@ export function createCoreV0TurnService({
     }
   };
 
-  const execute = async (normalizedInput, { allowDisabled = false } = {}) => {
+  const execute = async (normalizedInput, { allowDisabled = false, onDelta = null, shouldAbort = null } = {}) => {
     if (!enabled && !allowDisabled) throw new CoreV0Error('CORE_V0_DISABLED', 'Core v0 is disabled', { status: 503, retryable: true });
     const session = sessionFor(normalizedInput.sessionId);
     const applicationSessionId = normalizedInput.sessionId;
@@ -1001,16 +1047,29 @@ export function createCoreV0TurnService({
     turn.updatedAt = now();
     await persistOrThrow();
 
-    await generate(turn, session, memoryView);
+    // In-session summarisation runs after the user message is stored and
+    // before generation, so the current turn's context already carries the
+    // refreshed summary. It must never fail the turn: a conversation continues
+    // without a summary, and the failure is recorded rather than swallowed.
+    if (typeof compact === 'function') {
+      try {
+        const compacted = await compact({ state, session, messages: runtimeStore.messagesFor(turn.applicationSessionId) });
+        if (compacted?.changed) await persistOrThrow();
+      } catch (error) {
+        turn.compactionDegradedReason = error?.code || 'COMPACTION_FAILED';
+      }
+    }
+
+    await generate(turn, session, memoryView, { onDelta, shouldAbort });
     return commit(turn);
   };
 
   return {
     normalize: normalizeCoreV0TurnInput,
-    async handleTurn(input = {}) {
+    async handleTurn(input = {}, { onDelta = null, shouldAbort = null } = {}) {
       const normalized = normalizeCoreV0TurnInput(input);
       const lockKey = `${tenantId}:${subjectUserId}:${normalized.sessionId}`;
-      return withTurnLock(state, lockKey, () => execute(normalized));
+      return withTurnLock(state, lockKey, () => execute(normalized, { onDelta, shouldAbort }));
     },
     async reconcileTurn(turnId) {
       const turn = runtimeStore.findTurn(turnId);

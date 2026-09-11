@@ -30,3 +30,27 @@ export async function maybeCompactConversation(session, messages, model, { thres
   session.summarizedCount = toSummarize.length;
   return { summary, changed: true };
 }
+
+// R-020 stage 3: the hook the turn service calls. It adapts a model provider
+// (whose generate() may return a string or a result envelope) into the raw
+// string interface summarizeConversation expects, so the summariser can stay
+// provider-agnostic.
+//
+// Summarisation is best-effort by design: the caller records a degrade on the
+// turn rather than failing it, because a conversation must keep working even
+// when the model cannot summarise.
+export function createTurnCompaction({ model, threshold, keepRecent } = {}) {
+  if (!model || typeof model.generate !== 'function') return null;
+  const summarizer = {
+    async generate({ message }) {
+      const result = await model.generate({ message, recalled: [] });
+      if (typeof result === 'string') return result;
+      if (result && typeof result.content === 'string') return result.content;
+      return '';
+    }
+  };
+  return async ({ session, messages }) => maybeCompactConversation(session, messages, summarizer, {
+    ...(threshold === undefined ? {} : { threshold }),
+    ...(keepRecent === undefined ? {} : { keepRecent })
+  });
+}

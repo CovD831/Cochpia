@@ -30,6 +30,14 @@
     "evaluate:memory-synthetic": "node scripts/memory-module-synthetic-evaluation.js",
     "migrate:postgres": "node server/migrate-json-to-postgres.js",
     "test:core-v0-memory-pipeline": "node --test server/core-v0-memory-pipeline.test.js",
+    "test:chat-memory-loop": "node --test server/chat-memory-loop.test.js server/chat-memory-degrade.test.js",
+    "test:agent-scope-2a": "node --test server/agent-scope-2a.test.js",
+    "test:turn-stream": "node --test server/turn-stream.test.js",
+    "test:stage3": "node --test server/stage3-cleanup.test.js",
+    "check:routes": "node scripts/route-table-check.mjs",
+    "test:e2e": "/Users/abab/.workbuddy/binaries/python/envs/default/bin/python scripts/e2e-acceptance.py",
+    "smoke:turns-local": "node scripts/turns-local-smoke.js",
+    "smoke:chat-memory": "node scripts/chat-memory-smoke.js",
     "proof:memory-loop": "node scripts/memory-loop-proof.js"
   },
   "dependencies": {
