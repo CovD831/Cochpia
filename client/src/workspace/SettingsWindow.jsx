@@ -21,7 +21,7 @@ function RangeRow({ label, value, min, max, step, onChange, format = item => ite
   return <SettingRow label={<>{label}<b>{format(value)}</b></>}><input type="range" min={min} max={max} step={step} value={value} onChange={event => onChange(Number(event.target.value))} /></SettingRow>;
 }
 
-export function SettingsWindow({ onClose }) {
+export function SettingsBody({ onClose }) {
   const [active, setActive] = useState('appearance');
   const { state, setSetting, resetSlice, resetAll } = useWorkspacePreferences();
   const { state: materialState, materialOptions, setWorkspaceMaterial, resetMaterial } = useMaterial();
@@ -43,8 +43,7 @@ export function SettingsWindow({ onClose }) {
   const resetCurrent = () => active === 'materials' || active === 'glass' ? resetMaterial() : resetSlice(currentSlice);
   const currentLabel = sections.find(([id]) => id === active)?.[1];
 
-  return <FloatingWindow id="settings" title={t('settings')}>
-    <div className="settings-window-body">
+  return <div className="settings-window-body">
       <nav className="settings-nav" aria-label="设置分类">
         {sections.map(([id, label]) => <button type="button" key={id} className={active === id ? 'active' : ''} onClick={() => setActive(id)}>{label}</button>)}
       </nav>
@@ -62,6 +61,14 @@ export function SettingsWindow({ onClose }) {
         {active === 'workspace' && <><SettingRow label="吸附窗口"><input type="checkbox" checked={state.workspace.snapEnabled} onChange={event => set('workspace', 'snapEnabled')(event.target.checked)} /></SettingRow><SettingRow label="显示停靠栏"><input type="checkbox" checked={state.workspace.dockVisible} onChange={event => set('workspace', 'dockVisible')(event.target.checked)} /></SettingRow></>}
         {active === 'accessibility' && <><SettingRow label="高对比度"><input type="checkbox" checked={state.accessibility.highContrast} onChange={event => set('accessibility', 'highContrast')(event.target.checked)} /></SettingRow><SettingRow label="大号文字"><input type="checkbox" checked={state.accessibility.largeText} onChange={event => set('accessibility', 'largeText')(event.target.checked)} /></SettingRow><SettingRow label="显示焦点"><input type="checkbox" checked={state.accessibility.focusVisible} onChange={event => set('accessibility', 'focusVisible')(event.target.checked)} /></SettingRow></>}
       </section>
-    </div>
+    </div>;
+}
+
+// 浮窗外壳保留备用；工作区现在把 SettingsBody 渲染成页面
+// （R-020 阶段 4：导航即切页，只有音乐保留浮窗）。
+export function SettingsWindow({ onClose }) {
+  const { t } = useI18n();
+  return <FloatingWindow id="settings" title={t('settings')}>
+    <SettingsBody onClose={onClose} />
   </FloatingWindow>;
 }

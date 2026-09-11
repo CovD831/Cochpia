@@ -297,6 +297,7 @@ body.modal-open { overflow:hidden; }
 .floating-window-content { min-width:0; min-height:0; flex:1; overflow:auto; }
 .floating-window-content > .inspector { min-height:100%; border:0; background:transparent; }
 .floating-window-resize { position:absolute; right:0; bottom:0; width:18px; height:18px; border:0; border-radius:8px 0 0 0; background:linear-gradient(135deg, transparent 50%, var(--action-primary) 51%, transparent 58%, var(--action-primary) 62%, transparent 69%); cursor:nwse-resize; opacity:.7; }
+.settings-page-card .settings-window-body { height:min(720px, calc(100vh - 230px)); }
 .settings-window-body { display:grid; grid-template-columns:156px minmax(0,1fr); height:100%; min-height:0; }
 .settings-nav { display:grid; align-content:start; gap:3px; padding:14px 10px; border-right:1px solid rgba(255,255,255,var(--material-border-opacity)); overflow:auto; }
 .settings-nav button { min-height:34px; border:0; border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); text-align:left; padding:0 10px; font-size:11px; }
