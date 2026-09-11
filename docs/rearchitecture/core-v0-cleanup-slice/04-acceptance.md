@@ -94,15 +94,52 @@
 
 **闸门**：3-A1 ~ 3-A8 全绿 + 3-A2 老板人工确认。
 
-## 阶段 4 验收（分批）
+## 阶段 4 验收（分批）—— 已执行（2026-09-11）
 
-| ID | 断言 | 形式 |
-|---|---|---|
-| 4-A1 | 每批删除后全量冒烟通过 | 手工 |
-| 4-A2 | 前端所有 api 调用都能在路由表找到 | 静态比对 |
-| 4-A3 | `npm test` + `npm run build` 全绿 | 自动 |
-| 4-A4 | 删除清单与 `06-legacy-module-disposition.md` 一致 | 核对 |
-| 4-A5 | `episodeGrouping` 双定义消除（AR-209） | 静态 |
+| ID | 断言 | 状态 | 证据 |
+|---|---|---|---|
+| 4-A1 | 每批删除后全量冒烟通过 | **通过** | 375 / 370 pass / 0 fail |
+| 4-A2 | 前端所有 api 调用都能在路由表找到 | **通过** | `check:routes` 交叉校验**零失配**（新增） |
+| 4-A3 | `npm test` + `npm run build` 全绿 | **通过** | 375 / 0 fail；build ✓ |
+| 4-A4 | 删除清单与 disposition 一致 | **修正后通过** | 原清单多前提有误，见 AR-216 |
+| 4-A5 | `episodeGrouping` 双定义消除 | **通过** | 影子键已删；flags 测试钉住 |
+
+**范围修正**：动删前逐条复核引用，发现原删除清单多处以
+「零引用 / 前端零调用」为依据的判定**是错的**——music、pipoya、characters
+三项被判为死代码，实际都是**活功能**。详见
+`06-legacy-module-disposition.md` 修正案 与 `05-adversarial-review.md` AR-216。
+
+**实际删除**（分两批，均独立回归）：
+
+| 批次 | 内容 |
+|---|---|
+| A（死代码） | `mcp-client.js`(+测试)、`memory-module-service-worker.js`(+测试)、`episodeGrouping` 影子键 |
+| B（无承诺端点） | `/api/memory/dream`、`/api/personality/audit`、`/api/personality/rollback` |
+| C（老板裁决） | `/api/memories*`（8 条）、`/api/sync` + `sync-service.js`(+测试)、前端 sync 轮询、连带死代码 `rejectCoreChatBypass` |
+
+路由总数 **96 → 84**。
+
+**端到端**：`test:e2e` **14/14**。
+
+阶段 4 把端到端从 8 项扩到 14 项，补上的正是"App() 分解会波及但此前
+零覆盖"的区域——这是动 App() 的前置条件：
+
+| 检查 | 覆盖对象 |
+|---|---|
+| S5 | Chat / Arcana / Sanctum 三个页面可切换 |
+| S6 | 音乐窗口（`MusicProvider` 挂在 app 根，坏掉会拖垮整个应用） |
+| S7 | 设置窗口（FloatingWindow 体系） |
+| S8 | Arcana 页的 agent 管理与氛围预设 |
+| S9 | 资料面板 → `CharacterProfile` → `CharacterComposer` → `pipoyaTestAdapter`（AR-216 差点当"零引用"删掉的链路） |
+| S10 | 导出数据（`/api/export` 的实际下载） |
+
+S4「全程无异常响应」现在覆盖上述全部交互——它扫描整轮运行的服务端
+非 2xx 日志，所以任何一个面板打出 400/500 都会被抓住（AR-212 那类
+"一个失败调用打空整页"正是这样漏掉的）。
+
+**连带修正**：`README.md`（`/api/chat/stream` 说明过期）、
+`docs/memory-module-v1-contract.md`（`/api/memories` 保留理由失效）、
+promotion 闸门 **A-11**（改为断言更强形式）、`isolation.test.js` 空探针。
 
 ## 阶段 3 验收（单链路收口）—— 实施完成（2026-09-11）
 

@@ -262,6 +262,97 @@ def main():
                 if assistant_stored else "服务端无 assistant 消息（半截回复未落盘）",
             )
 
+            # ---------- S5: navigation and panels ----------
+            # Everything below exists because a stage-4 review found that the
+            # test suite covered the chat path and almost nothing else. The
+            # client's startup refresh is a Promise.all, so one failing call
+            # blanks the whole app while `npm test` stays green (AR-212); and
+            # the modules the original author wrote -- music, the character
+            # composer -- had no coverage at all despite being mounted. These
+            # checks keep those surfaces alive rather than merely present.
+            def visible(selector):
+                return page.locator(selector).count() > 0 and page.eval_on_selector(
+                    selector, "e => e.checkVisibility({visibilityProperty:true})")
+
+            def open_page(label):
+                page.click(f".aube-nav-item:has-text('{label}')", timeout=10000)
+                time.sleep(0.6)
+                return page.eval_on_selector_all(
+                    ".aube-nav-item.active", "els => els.map(e => e.textContent.trim()).join('|')")
+
+            # Only Sanctum / Chat / Arcana are pages; Music, Veil and 设置 launch
+            # floating windows instead, so asserting they become "active" was
+            # wrong. Checked separately below.
+            page_results = []
+            for label in ("Chat", "Arcana", "Sanctum"):
+                active = open_page(label)
+                page_results.append((label, label in active))
+            record(
+                "S5 页面导航可切换（Chat / Arcana / Sanctum）",
+                all(ok for _, ok in page_results),
+                "; ".join(f"{lb}{'✓' if ok else '✗'}" for lb, ok in page_results),
+            )
+
+            def open_window(label, selector):
+                # Music/Veil/设置 toggle their window, so a second click closes
+                # it. Click once, and only click again if it did not appear.
+                page.click(f".aube-nav-item:has-text('{label}')", timeout=10000)
+                time.sleep(0.7)
+                if not visible(selector):
+                    page.click(f".aube-nav-item:has-text('{label}')", timeout=10000)
+                    time.sleep(0.7)
+                return visible(selector)
+
+            # The music provider is mounted at the app root, so a broken music
+            # module takes the whole app down, not just the music page.
+            record("S6 音乐窗口可打开并渲染", open_window("Music", ".music-window"), "music-window 可见")
+            record("S7 设置窗口可打开并渲染", open_window("设置", ".settings-window-body"), "settings-window-body 可见")
+
+            # Arcana renders agent management and atmosphere presets.
+            open_page("Arcana")
+            arcana_marks = {
+                "保存人格": page.locator("button:has-text('保存人格')").count() > 0,
+                "主题预设": page.locator("button:has-text('樱花')").count() > 0,
+            }
+            record(
+                "S8 Arcana 页渲染 agent 管理与氛围预设",
+                all(arcana_marks.values()),
+                "; ".join(f"{k}{'✓' if v else '✗'}" for k, v in arcana_marks.items()),
+            )
+
+            # Character editor chain: 编辑档案 -> profileOpen -> CharacterProfile
+            # -> CharacterComposer -> activeCharacterProvider -> pipoyaTestAdapter.
+            # A stage-4 review nearly deleted the last three as "0 references";
+            # they are mounted, so they get an end-to-end assertion.
+            open_page("Sanctum")
+            page.click("button:has-text('编辑档案')", timeout=10000)
+            time.sleep(0.8)
+            character_panel = page.eval_on_selector_all(
+                ".settings-backdrop",
+                "els => els.filter(e => e.checkVisibility({visibilityProperty:true})).length")
+            record(
+                "S9 资料面板（角色编辑器链路）可打开",
+                character_panel > 0,
+                f"可见 settings-backdrop={character_panel}",
+            )
+            page.keyboard.press("Escape")
+            time.sleep(0.5)
+
+            # Export: the UI button is wired to /api/export, which stage 4
+            # deliberately kept while deleting /api/memories/export. There are
+            # two export buttons (an Arcana page section and a sidebar footer);
+            # click the one that is actually on screen.
+            open_page("Arcana")
+            export_button = page.locator("button:has-text('导出'):visible").first
+            with page.expect_download(timeout=20000) as download_info:
+                export_button.click(timeout=10000)
+            download = download_info.value
+            record(
+                "S10 导出数据可下载（/api/export）",
+                bool(download.suggested_filename),
+                f"文件名={download.suggested_filename}",
+            )
+
             browser.close()
     finally:
         server.terminate()

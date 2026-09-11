@@ -691,3 +691,66 @@ turns 完全没有这套逻辑（已 grep 验证零命中）。
 **AR-214 已处置**：`CORE_V0_ENABLED=true` 写入 `repo-main/.env`（老板批准，
 2026-09-11）。`.env` 被 git 忽略，不进版本库；此处记录以免后人不知
 这个开关已事实上不可关闭。
+
+---
+
+## AR-216：阶段 4 删除清单的「零引用」判定大面积失实
+
+**发现时机**：阶段 4 动删之前，按「每批删除后全量冒烟」的要求逐条复核引用。
+
+### 问题
+
+清单里以「零引用 / 前端零调用」为依据的删除判定，**多数依据是反的**。
+被判定为死代码的模块实际都还接在活链路上：
+
+| 判为死代码 | 实际 |
+|---|---|
+| `music-service.js` + `netease-music-adapter.js` + `/api/music/*` | `MusicProvider` 挂在 app 根（`main.jsx:1041`），`MusicWindow` 在用；`MusicProvider.jsx` 调全部 `/api/music/*` |
+| `stdio-mcp-client.js` | 被 `netease-music-adapter.js` import |
+| `client/src/pipoya/` | `characters/characterProvider.js` import `pipoyaTestAdapter`；`client/public/pipoya/` 有真实精灵资源 |
+| `client/src/characters/` | `profile/CharacterProfile.jsx` import 它，而 `CharacterProfile` 由 `main.jsx` 渲染 |
+| `/api/export`、`/api/import` | `main.jsx` 的 `exportData`/`importData` 绑定了「导出数据」按钮 |
+
+若照原清单执行，会**删掉一个已挂载的音乐组件、一套角色编辑器、以及导出功能**，
+而且单元测试未必会红（前端引用不走 node 测试）。
+
+### 根因
+
+清单是**静态引用计数**得出的，而"零引用"这类断言会随代码演进静默失效。
+前端引用尤其容易漏：`grep client/src` 只能证明"字符串不在这里"，
+不能证明"功能是死的"——需要顺着 import 链走到**挂载点**（`createRoot(...).render`）
+才能判断。
+
+### 处置（老板裁决 2026-09-11）
+
+- **只删无对外承诺的端点**：`/api/memory/dream`、`/api/personality/audit`、
+  `/api/personality/rollback`（均前端 0 引用、0 测试、无文档承诺）
+- **保留** `/api/memories*`（README 有承诺）与 `/api/sync`
+- **死代码全删**：`mcp-client.js`(+测试)、`memory-module-service-worker.js`(+测试)、
+  `episodeGrouping` 影子键
+
+### AR-209 的结论也要反着写
+
+原文：「service-worker 已退役，应删除 `memory-module-flags.js` 的影子 flag」。
+
+实测 `memory-module-flags.js` **是活的**（被 `memory-module-runtime.js` 与
+`memory-module-extraction-worker.js` import），**不能删**。
+
+`episodeGrouping` 的实际生效路径也与原判断相反：
+
+| 位置 | 默认 | 是否生效 |
+|---|---|---|
+| `memory-extraction.js:211` | `true` | **唯一生效** |
+| `memory-module-flags.js` | `false` | 惰性——`memory-module.js` 不读该键，只喂给已退役的 worker |
+
+即生产**一直**是 true。正解 = 删退役 worker + 删影子键（**不是**删 flags 模块）。
+
+### 教训
+
+**删除类任务的前提必须逐条实测，不能沿用文档里的引用计数。**
+判定"没人用"需要走到挂载点；"零引用"是最容易过期的一类断言。
+
+### 新增的防复发闸门
+
+`npm run check:routes` 增加**前端调用 ↔ 真实路由表交叉校验**（阶段 4 闸门 4-A2）。
+删任何端点前，该检查会直接指出前端是否还在调它。

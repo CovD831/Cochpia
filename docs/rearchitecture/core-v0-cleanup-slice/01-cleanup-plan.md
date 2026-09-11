@@ -321,10 +321,48 @@ history section。
 
 ### 闸门
 
-- [ ] 每批删除后全量冒烟通过
-- [ ] `client/src/main.jsx` 中所有 api 调用都能在路由表找到
-- [ ] `npm test` + `npm run build` 全绿
-- [ ] `episodeGrouping` 双定义消除
+- [x] 每批删除后全量冒烟通过（377 / 372 pass / 0 fail）
+- [x] `client/src/main.jsx` 中所有 api 调用都能在路由表找到
+      （`npm run check:routes` 新增交叉校验：**零失配**）
+- [x] `npm test` + `npm run build` 全绿
+- [x] `episodeGrouping` 双定义消除（见下方修正）
+
+### 实施记录（2026-09-11）
+
+> 动删之前逐条复核引用，**发现本节多处以「零引用 / 前端零调用」为依据的
+> 删除判定是错的**——被判为死代码的模块实际都接在活链路上。
+> 完整证据见 `06-legacy-module-disposition.md` 的「修正案」。
+> 老板裁决：**只删无对外承诺的端点**；退役 service-worker **全删**。
+
+**批次 A（死代码，已执行）**
+
+| 项 | 依据 |
+|---|---|
+| `server/mcp-client.js` + 测试 | `/mcp` 端点是**内联实现**，此文件只被自己的测试引用 |
+| `server/memory-module-service-worker.js` + 测试 | 非测试代码零引用（已退役） |
+| `memory-module-flags.js` 的 `episodeGrouping` 影子键 | 见下 |
+
+**批次 B（无对外承诺的端点，已执行）**
+
+| 端点 | 依据 |
+|---|---|
+| `GET /api/memory/dream` | 前端 0 引用、0 测试、无文档承诺 |
+| `GET /api/personality/audit` | 同上 |
+| `POST /api/personality/rollback` | 同上（连带删除死 import `createPersonalityRollbackAudit`） |
+
+路由总数 96 → 93。
+
+**不改动（前提有误，均为活功能）**：`/api/music/*` + music 两个模块、
+`stdio-mcp-client.js`、`client/src/pipoya/`、`client/src/characters/`、
+`/api/export`、`/api/import`、`/api/sync` + `sync-service.js`、
+`/api/memories*`（README 有承诺）、`auto-memory.js`（AR-211）。
+
+**AR-209 的正确解法**（与原计划相反）：`memory-module-flags.js` **是活的**
+（`memory-module-runtime.js` / `memory-module-extraction-worker.js` 在用），
+不能删。真正死的是 `memory-module-service-worker.js`。
+`episodeGrouping` 的唯一生效默认值在 `memory-extraction.js`（**true**）；
+flags 里那个 `false` 是喂给死代码的影子键，已删。现由
+`memory-module-flags.test.js` 断言「flags 不得定义 episodeGrouping」钉住。
 
 ### 回滚
 
@@ -393,3 +431,48 @@ sections 实现，但输出仍是扁平对象），避免一次性改动所有�
 | `scripts/chat-memory-smoke.js` | 1.4 | 闭环冒烟 |
 | `server/agent-schema.sql` | 2b | agents 表 |
 | `server/agent-life.js` | （R-021） | 不在本切片 |
+
+### 4.3 / 4.5 卫生清扫与拆分（2026-09-11，老板指令）
+
+**卫生清扫（已完成）**
+
+| 项 | 依据 |
+|---|---|
+| 删除 `WorkspaceOverflow` 组件（33 行） | 定义后**从未被渲染**；其"更多聊天操作"菜单的三个动作没有入口 |
+| 删除 `quickActionsOpen` state | 全文件只出现在声明处 |
+| 删除 `.workspace-overflow*` 12 条 CSS | 唯一引用者是刚删的组件 |
+| 删除 `.life-*` 死样式 146 条 | R-019 删掉游戏模块后遗留；JSX 零引用、无动态拼接 |
+
+CSS：**1037 → 879 条规则（−15.7KB）**。
+
+`life-*` 的移除只处理「选择器组每一段都含 `.life-`」的规则，
+与其他类共享的 2 条（`.event-launcher, ...` / `.life-need, .life-...`）**保留**，
+避免误伤同组里仍在用的类。
+
+**拆分（第一阶段已完成）**
+
+`client/src/main.jsx` **1060 → 979 行**。
+
+抽出 `client/src/chat/message-utils.js`：`asArray`、`providerModelOptions`、
+`modelErrorLabels`、`describeModelError`、`takeSegment`、`dateLabel`、
+`splitSegments`。这些是纯函数、无 React 依赖、无模块状态——**组件树不可能
+因这次搬动而改变**，所以是风险最低的第一步。
+
+**顺带补上缺失的单元测试**：`client/src/chat/message-utils.test.js`（9 项）。
+`takeSegment`/`splitSegments` 是阶段 3 分段渲染的核心，此前**只有浏览器端到端
+覆盖**——一个纯逻辑回归会表现为"没人断言的外观变化"。
+`npm test` 的 glob 扩展为 `node --test server/*.test.js client/src/chat/*.test.js`，
+并新增 `npm run test:client`。
+
+**尚未完成：`App()` 的分解**
+
+`App()` 仍是约 790 行的单函数（全部 state + handler + 一整段 JSX）。
+把它拆成 `chat/` / `settings/` 需要将 JSX 段落改造为显式 props 的组件，
+是真正意义上的重构，不是搬文件。**建议独立立项**，理由：
+
+1. 拆分本身不改行为，但改动面覆盖整个组件树——出错面远大于收益面
+2. 现有自动化（379 单测 + 8 项端到端）**覆盖不到设置面板、音乐、
+   角色编辑器等区域**，对这次重构给不出足够的安全网
+3. 阶段 4 的目标是"删掉没人用的东西"，这与"重组在用的东西"是两类风险
+
+建议的前置条件：先给设置面板/资料面板补端到端覆盖，再动。

@@ -22,57 +22,9 @@ import { ProfileProvider, useProfile } from './profile/ProfileProvider';
 import CharacterProfile from './profile/CharacterProfile';
 import AvatarPicker from './profile/AvatarPicker';
 import FeatherIcon from './icons/FeatherIcon';
+import { asArray, describeModelError, providerModelOptions, splitSegments, takeSegment, dateLabel } from './chat/message-utils.js';
 
-const asArray = value => Array.isArray(value) ? value : [];
-
-const providerModelOptions = provider => {
-  if (!provider) return [];
-  return [...new Set([...(provider.model ? [provider.model] : []), ...(provider.suggestedModels || [])])];
-};
-
-const modelErrorLabels = {
-  MODEL_NOT_CONFIGURED: '服务端尚未配置密钥',
-  MODEL_AUTH_FAILED: '鉴权失败，请检查服务端密钥',
-  MODEL_INSUFFICIENT_BALANCE: '模型账户余额不足，请充值或切换模型',
-  MODEL_NOT_FOUND: '模型不存在或当前账号无权访问',
-  MODEL_TIMEOUT: '请求超时，请稍后重试',
-  MODEL_CONNECTION_FAILED: '服务暂时不可达'
-};
-const describeModelError = error => modelErrorLabels[error.code] ? `${modelErrorLabels[error.code]}：${error.message}` : error.message;
-
-function takeSegment(buffer) {
-  const text = String(buffer || '');
-  if (!text.trim()) return null;
-  const match = text.match(/\r?\n+/);
-  if (match) {
-    return { segment: text.slice(0, match.index).trim(), rest: text.slice(match.index + match[0].length).trimStart() };
-  }
-  return null;
-}
-
-function dateLabel(iso) {
-  const d = new Date(iso);
-  const now = new Date();
-  const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  if (same(d, now)) return '今天';
-  if (same(d, yest)) return '昨天';
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
-function splitSegments(text) {
-  const segments = [];
-  let rest = String(text || '');
-  let guard = 0;
-  while (rest.trim() && guard < 200) {
-    const taken = takeSegment(rest);
-    if (!taken) { segments.push(rest.trim()); break; }
-    if (taken.segment) segments.push(taken.segment);
-    rest = taken.rest;
-    guard += 1;
-  }
-  return segments.length ? segments : [String(text || '').trim()].filter(Boolean);
-}
+// Pure message helpers moved to ./chat/message-utils.js (R-020 stage 4 split).
 
 const companionIntents = [
   { id: 'listen', label: '听我说' },
@@ -96,38 +48,6 @@ function GroupChatIdentity({ session, agents, onOpen }) {
     <span className="group-chat-avatar">{session.avatar || '群'}</span>
     <span><strong>{session.title}</strong><small>{members.length + 1} 位成员{session.description ? ` · ${session.description}` : ''}</small></span>
   </button>;
-}
-
-function WorkspaceOverflow({ isGroup, onGroupInfo, onState, onCloseState }) {
-  const [open, setOpen] = useState(false);
-  const [menuPosition, setMenuPosition] = useState(null);
-  const triggerRef = useRef(null);
-  const updateMenuPosition = () => {
-    const rect = triggerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setMenuPosition({
-      top: rect.bottom + 8,
-      left: Math.max(8, Math.min(rect.right - 150, window.innerWidth - 158))
-    });
-  };
-  useEffect(() => {
-    if (!open) return undefined;
-    updateMenuPosition();
-    window.addEventListener('resize', updateMenuPosition);
-    window.addEventListener('scroll', updateMenuPosition, true);
-    return () => {
-      window.removeEventListener('resize', updateMenuPosition);
-      window.removeEventListener('scroll', updateMenuPosition, true);
-    };
-  }, [open]);
-  return <div className="workspace-overflow">
-    <button ref={triggerRef} type="button" className="workspace-overflow-trigger" onClick={() => setOpen(current => !current)} aria-expanded={open} aria-label="更多聊天操作" title="更多聊天操作"><FeatherIcon name="moreHorizontal" size={20} /></button>
-    {open && <div className="workspace-overflow-menu workspace-overflow-menu-floating" style={menuPosition || undefined} role="menu">
-      {isGroup && <button type="button" onClick={() => { setOpen(false); onGroupInfo(); }}>群聊信息</button>}
-      <button type="button" onClick={() => { setOpen(false); onState(); }}>共同状态</button>
-      <button type="button" onClick={() => { setOpen(false); onCloseState(); }}>收起浮动窗口</button>
-    </div>}
-  </div>;
 }
 
 function AgentInfoCard({ agent, onSave, onRemove }) {
@@ -189,7 +109,6 @@ function App() {
   const [memory, setMemory] = useState({ count: 0, memories: [] });
   const [personality, setPersonality] = useState(null);
   const [growthEvidence, setGrowthEvidence] = useState([]);
-  const [syncCursor, setSyncCursor] = useState('');
   const [personalityHistory, setPersonalityHistory] = useState([]);
   const [models, setModels] = useState({ defaultProvider: 'mock', providers: [] });
   const [mode, setMode] = useState('companion');
@@ -210,7 +129,6 @@ function App() {
   const [growthOpen, setGrowthOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [reviewingEvidence, setReviewingEvidence] = useState(null);
-  const [quickActionsOpen, setQuickActionsOpen] = useState(false);
   const conversationRef = useRef(null);
   const nearBottomRef = useRef(true);
   const streamStateRef = useRef({ currentId: null, buffer: '', pausing: false, timer: null, counter: 0 });
@@ -428,11 +346,11 @@ function App() {
     return safeSessions;
   };
 
-  const syncWorkspace = async () => {
-    const result = await api(`/api/sync?limit=100${syncCursor ? `&cursor=${encodeURIComponent(syncCursor)}` : ''}`);
-    setSyncCursor(result.nextCursor || syncCursor);
-    return result;
-  };
+  // R-020 stage 4: `syncWorkspace` and its 30-second polling effect were
+  // removed with the /api/sync endpoint. The poll re-serialised every session,
+  // message and memory on the server every 30 seconds and then discarded the
+  // payload -- nothing ever applied the returned changes to UI state. If
+  // multi-device sync is wanted later, it needs a consumer, not just a poller.
 
   const startEditingMessage = message => {
     const original = messages.find(item => item.id === message.id) || message;
@@ -487,12 +405,6 @@ function App() {
       else await newSession();
     }).catch(err => setError(err.message));
   }, [authReady, user]);
-
-  useEffect(() => {
-    if (!authReady || (supabase && !user)) return undefined;
-    const interval = window.setInterval(() => { syncWorkspace().catch(err => setError(err.message)); }, 30_000);
-    return () => window.clearInterval(interval);
-  }, [authReady, user, syncCursor]);
 
   const modalOpen = settingsOpen || profileOpen || growthOpen || historyOpen || Boolean(pendingApproval);
 
