@@ -21,3 +21,4 @@ scripts/eval-progress.log
 # artifacts/*.json evidence files ARE committed (the cleanup docs cite them).
 artifacts/e2e-server.log
 artifacts/e2e-panels-server.log
+.certs/

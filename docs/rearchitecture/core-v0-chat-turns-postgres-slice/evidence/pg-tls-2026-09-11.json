@@ -1,0 +1,80 @@
+{
+  "evidence": "R-020 promotion — PostgreSQL endpoint Auth/TLS posture (live-check)",
+  "date": "2026-09-11",
+  "layer": "database connection — this is the layer promotion-prep originally required (SCRAM + sslmode, core-v0-live-check.js TLS=true)",
+  "endpoint": {
+    "form": "local PostgreSQL 17.11 (Homebrew) in production posture: ssl=on, listen 127.0.0.1:5433, hostssl-only rules",
+    "auth": "SCRAM-SHA-256 password (initdb -A scram-sha-256); no trust lines remain in pg_hba.conf",
+    "tls": "TLSv1.3; dedicated CA 'Cochpia PG Evidence CA (LAN-only)' (RSA-2048/SHA-256, generated with system LibreSSL after the vendor openssl shim chain was rejected as 'ca md too weak'); SAN DNS:localhost, IP:127.0.0.1",
+    "clientMode": "sslmode=verify-full with sslrootcert — strongest client posture; certificate and hostname actually validated, never disabled"
+  },
+  "authMethodNote": "live-check reports authMethod 'unknown' because pg_hba_file_rules is hidden from non-superusers by design; the actual pg_hba.conf rules are quoted below and were file-verified",
+  "pgHbaRules": [
+    "hostssl    all             all             127.0.0.1/32            scram-sha-256",
+    "hostssl    all             all             ::1/128                 scram-sha-256",
+    "hostssl    replication     all             127.0.0.1/32            scram-sha-256",
+    "hostssl    replication     all             ::1/128                 scram-sha-256"
+  ],
+  "honestLimits": [
+    "local instance, not a managed/cloud production database; no replication, no load",
+    "connection is loopback (the cross-machine transport evidence is the separate tls-lan run for the HTTP surface)",
+    "the SCRAM password is not archived here; re-running requires re-provisioning (commands below)"
+  ],
+  "liveCheck": {
+    "startedAt": "2026-09-11T15:42:05.036Z",
+    "checks": {
+      "authTls": {
+        "user": "cochpia",
+        "database": "cochpia",
+        "serverVersion": "PostgreSQL 17.11 (Homebrew) on aarch64-apple-darwin25.6.0",
+        "tlsEnabled": true,
+        "tlsVersion": "TLSv1.3",
+        "authMethod": "unknown",
+        "verdict": "TLS confirmed on this connection"
+      },
+      "r003LiveLock": {
+        "acquired": [
+          "client-1",
+          "client-2"
+        ],
+        "released": [
+          "client-1",
+          "client-2"
+        ],
+        "timeline": [
+          {
+            "event": "acquire",
+            "tag": "client-1",
+            "at": 1789141325220
+          },
+          {
+            "event": "release",
+            "tag": "client-1",
+            "at": 1789141325622
+          },
+          {
+            "event": "acquire",
+            "tag": "client-2",
+            "at": 1789141325623
+          },
+          {
+            "event": "release",
+            "tag": "client-2",
+            "at": 1789141326025
+          }
+        ],
+        "error": null,
+        "verdict": "mutual exclusion held: client-2 acquired the lock only after client-1 released it"
+      },
+      "contextIsolation": {
+        "spoofedTenantSchemaTables": 0,
+        "verdict": "row-level isolation is enforced by tenant_id columns in every query (see A-03); schema-level spoofing surface is empty"
+      }
+    },
+    "finishedAt": "2026-09-11T15:42:06.028Z"
+  },
+  "reproduce": {
+    "provision": "initdb -A scram-sha-256 --pwfile; postgresql.conf: ssl=on ssl_cert_file ssl_key_file port=5433 listen_addresses=127.0.0.1; pg_hba.conf: hostssl + scram-sha-256; start with env -i (macOS 'postmaster became multithreaded' when the sandbox-injected environment leaks threads)",
+    "run": "DATABASE_URL='postgresql://cochpia:<pw>@127.0.0.1:5433/cochpia?sslmode=verify-full&sslrootcert=pg-ca.pem' node scripts/core-v0-live-check.js"
+  }
+}

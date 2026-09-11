@@ -46,22 +46,30 @@ try {
   const hold = async (client, tag, result) => {
     await client.query('SELECT pg_advisory_lock(hashtext($1))', [LOCK_KEY]);
     result.acquired.push(tag);
+    result.timeline.push({ event: 'acquire', tag, at: Date.now() });
     await new Promise(resolve => setTimeout(resolve, 400));
     await client.query('SELECT pg_advisory_unlock(hashtext($1))', [LOCK_KEY]);
     result.released.push(tag);
+    result.timeline.push({ event: 'release', tag, at: Date.now() });
   };
-  const race = { acquired: [], released: [] };
+  // Timeline fix: the previous verdict compared indexOf() across two separate
+  // arrays, which can never capture cross-array ordering -- this verdict could
+  // never reach "mutual exclusion held". Record wall-clock timestamps instead:
+  // the second client's acquire must land at or after the first client's
+  // release, which together with advisory-lock semantics IS the proof.
+  const race = { acquired: [], released: [], timeline: [] };
   const c1 = await pool.connect(); const c2 = await pool.connect();
   const t1 = hold(c1, 'client-1', race);
   const t2 = hold(c2, 'client-2', race).catch(e => race.error = String(e?.message));
   await Promise.all([t1, t2]);
   c1.release(); c2.release();
+  const releasedAt = tag => race.timeline.find(item => item.event === 'release' && item.tag === tag)?.at;
+  const acquiredAt = tag => race.timeline.find(item => item.event === 'acquire' && item.tag === tag)?.at;
   const serialized = race.acquired.length === 2 && !race.error
-    && Math.sign(race.acquired.indexOf('client-1') - race.released.indexOf('client-1'))
-      !== Math.sign(race.acquired.indexOf('client-2') - race.released.indexOf('client-2'));
+    && releasedAt('client-1') <= acquiredAt('client-2');
   evidence.checks.r003LiveLock = {
-    acquired: race.acquired, released: race.released, error: race.error || null,
-    verdict: serialized ? 'mutual exclusion held: the second client serialized behind the first' : 'verify ordering manually (timing dependent)'
+    acquired: race.acquired, released: race.released, timeline: race.timeline, error: race.error || null,
+    verdict: serialized ? 'mutual exclusion held: client-2 acquired the lock only after client-1 released it' : 'verify ordering manually (timing dependent)'
   };
 
   // 3. Context-spoofing probe: schema isolation by tenant.

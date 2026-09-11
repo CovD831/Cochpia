@@ -230,6 +230,11 @@ const requireRequestState = () => {
 // preserved verbatim, anything else normalizes to CORE_V0_FAILED, and the
 // Retry-After header follows the retryable flag instead of per-route habits.
 const respondCoreV0Error = (res, error) => {
+  // Cause swallowing made a 500 CORE_V0_FAILED undiagnosable (the acceptance
+  // turn path 500'd in 2ms with nothing in the logs). Opt-in, off by default.
+  if (process.env.COCHPIA_DEBUG_CORE_ERROR === '1') {
+    console.error('[core-v0-error]', error?.stack || error?.message || String(error));
+  }
   const response = coreV0ErrorResponse(error);
   if (response.body.error.retryable) res.set('Retry-After', '1');
   return res.status(response.status).json(response.body);

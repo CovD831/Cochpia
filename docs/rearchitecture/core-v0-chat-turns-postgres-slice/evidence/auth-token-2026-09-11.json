@@ -1,0 +1,102 @@
+{
+  "evidence": "R-020 promotion — user-auth posture decision and cross-machine evidence",
+  "date": "2026-09-11",
+  "decision": "AUTH_MODE=token (boss approved): loopback stays open for the local UI; every off-box request must present COCHPIA_API_TOKEN (Bearer, timing-safe compare). Supabase multi-user (AUTH_MODE=required) remains available when a second real user exists.",
+  "enforcement": [
+    "edge: scripts/core-v0-tls-front.mjs rejects off-box requests without a valid token (401) — the front sees the real client address; behind it every connection is loopback",
+    "app: server/auth.js token mode — same rule for direct (non-fronted) deployments; fail-fast startup validation when AUTH_MODE=token without COCHPIA_API_TOKEN",
+    "credential domains: the edge accepts either COCHPIA_API_TOKEN or MEMORY_SERVICE_TOKEN; the latter is still fully verified by the /v1 boundary behind the gate (A-09/A-10 unchanged)"
+  ],
+  "runs": [
+    {
+      "check": "edge gate, no token, from B machine",
+      "result": "HTTP 401 (expected)"
+    },
+    {
+      "check": "app gate direct (0.0.0.0 bind): no token / wrong token / valid token / loopback",
+      "result": "401 / 401 / 200 / 200"
+    },
+    {
+      "check": "full acceptance over TLS+Bearer from B machine",
+      "passed": 14,
+      "total": 14,
+      "results": [
+        {
+          "id": "P-01",
+          "status": "passed",
+          "detail": "legacy and target fixtures share one scenario"
+        },
+        {
+          "id": "P-02",
+          "status": "passed",
+          "detail": "target route and idempotency header are present"
+        },
+        {
+          "id": "A-01",
+          "status": "passed",
+          "detail": "target turn creates one durable binding, admission, raw event and assistant commit"
+        },
+        {
+          "id": "A-02",
+          "status": "passed",
+          "detail": "exact replay returns the original receipt without new canonical facts"
+        },
+        {
+          "id": "A-03",
+          "status": "passed",
+          "detail": "conflicting idempotency replay is rejected before external calls"
+        },
+        {
+          "id": "A-04",
+          "status": "passed",
+          "detail": "application and Memory session binding keys are unique and immutable"
+        },
+        {
+          "id": "A-05",
+          "status": "passed",
+          "detail": "retrieval degradation is explicit and the turn still commits"
+        },
+        {
+          "id": "A-06",
+          "status": "passed",
+          "detail": "unknown admission remains pending until the same turn is retried"
+        },
+        {
+          "id": "A-07",
+          "status": "passed",
+          "detail": "commit failure leaves no visible assistant success"
+        },
+        {
+          "id": "A-08",
+          "status": "passed",
+          "detail": "restart reconciliation reuses the persisted turn and event identifiers"
+        },
+        {
+          "id": "A-09",
+          "status": "passed",
+          "detail": "direct Memory event write requires a verified service identity"
+        },
+        {
+          "id": "A-10",
+          "status": "passed",
+          "detail": "direct Memory mutation requires producer, correlation and idempotency context"
+        },
+        {
+          "id": "A-11",
+          "status": "passed",
+          "detail": "the public Memory governance write surface is gone, so no Core chat-event bypass path exists"
+        },
+        {
+          "id": "A-12",
+          "status": "passed",
+          "detail": "the legacy chat path is gone (404) and the target route completes the scenario twice -- JSON and SSE -- with durable checkpoints"
+        }
+      ]
+    }
+  ],
+  "honestLimits": [
+    "single shared credential: no per-user identity, no per-device revocation — matches the personal-instance threat model; revisit when a second real user exists",
+    "loopback stays open by design (same trust boundary as the local UI)",
+    "token value not archived here; evidence run used a throwaway LAN secret"
+  ]
+}

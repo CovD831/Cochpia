@@ -57,9 +57,17 @@ async function listen(app) {
 }
 
 async function request(base, route, options = {}) {
+  // Token-mode client: present the shared credential on every request, the
+  // same way the edge/app gate expects it. A-09 (no service identity) still
+  // holds -- it asserts the /v1 boundary's own rejection, which fires after
+  // the outer gate.
+  const explicitAuth = (options.headers || {}).authorization || (options.headers || {}).Authorization;
+  const auth = process.env.COCHPIA_API_TOKEN && !explicitAuth
+    ? { authorization: `Bearer ${process.env.COCHPIA_API_TOKEN}` }
+    : {};
   const response = await fetch(`${base}${route}`, {
     ...options,
-    headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...(options.headers || {}) }
+    headers: { ...(options.body ? { 'content-type': 'application/json' } : {}), ...(options.headers || {}), ...auth }
   });
   const text = await response.text();
   let body = null;
@@ -132,24 +140,66 @@ async function runUnitAcceptance() {
 }
 
 export async function runCoreV0Acceptance({ legacy, target }) {
-  process.env.AUTH_MODE = 'off';
+  // Remote-acceptance split (R-020 promotion TLS evidence). The assertions are
+  // identical in every mode; only where the two halves execute changes:
+  //   default                     in-process: seed + listen + assert (loopback)
+  //   COCHPIA_ACCEPTANCE_HOST=1   host side: seed + listen on a fixed loopback
+  //                               port, print ACCEPTANCE_HOST_READY, hold until
+  //                               SIGINT/SIGTERM. Returns [] -- invoke it via
+  //                               core-v0-acceptance-host.mjs, never via the
+  //                               outer foundation script (which validates the
+  //                               returned rows against A-01..A-12).
+  //   COCHPIA_ACCEPTANCE_BASE=…   client side: seeding and listening are
+  //                               skipped; every runtime assertion targets the
+  //                               given base (e.g. an https front on another
+  //                               machine). TLS trust comes from
+  //                               NODE_EXTRA_CA_CERTS -- never from disabling
+  //                               verification.
+  const clientBase = process.env.COCHPIA_ACCEPTANCE_BASE || '';
+  const hostMode = process.env.COCHPIA_ACCEPTANCE_HOST === '1';
+  if (hostMode && clientBase) throw new Error('COCHPIA_ACCEPTANCE_HOST and COCHPIA_ACCEPTANCE_BASE are mutually exclusive');
+  // Token-mode evidence runs set AUTH_MODE=token + COCHPIA_API_TOKEN in the
+  // host environment; the default stays 'off' for the canonical loopback run.
+  if (!process.env.AUTH_MODE) process.env.AUTH_MODE = 'off';
   process.env.STORAGE_PROVIDER = 'json';
   process.env.CORE_V0_ENABLED = 'true';
   process.env.MEMORY_SERVICE_TOKEN = 'acceptance-memory-service-token';
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'cochpia-core-v0-runtime-'));
-  process.env.COCHPIA_DATA_DIR = dataDir;
   const sessionId = target.request.sessionId;
-  const seed = {
-    sessions: [{ id: sessionId, title: 'Core v0 acceptance', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }],
-    messages: { [sessionId]: [] },
-    memoryModule: createMemoryModuleState(),
-    personality: { version: 1, traits: [{ key: 'warmth', label: '温度感', value: 0.68 }], summary: '验收人格', updatedAt: new Date().toISOString() },
-    evidence: []
-  };
-  await writeFile(path.join(dataDir, 'state.json'), JSON.stringify(seed, null, 2), 'utf8');
+  let server = null;
+  let base = clientBase;
+  if (!clientBase) {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'cochpia-core-v0-runtime-'));
+    process.env.COCHPIA_DATA_DIR = dataDir;
+    const seed = {
+      // R-020 stage 2a requires a calling agent identity for session-scoped
+      // Memory context; real sessions always carry agentId, so the seed must too.
+      sessions: [{ id: sessionId, agentId: 'acceptance-agent', title: 'Core v0 acceptance', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }],
+      messages: { [sessionId]: [] },
+      memoryModule: createMemoryModuleState(),
+      personality: { version: 1, traits: [{ key: 'warmth', label: '温度感', value: 0.68 }], summary: '验收人格', updatedAt: new Date().toISOString() },
+      evidence: []
+    };
+    await writeFile(path.join(dataDir, 'state.json'), JSON.stringify(seed, null, 2), 'utf8');
 
-  const { app } = await import(pathToFileURL(path.join(repoRoot, 'server/index.js')).href);
-  const { server, base } = await listen(app);
+    const { app } = await import(pathToFileURL(path.join(repoRoot, 'server/index.js')).href);
+    if (hostMode) {
+      const port = Number(process.env.COCHPIA_ACCEPTANCE_BIND_PORT || 8788);
+      const address = process.env.COCHPIA_ACCEPTANCE_BIND_ADDR || '127.0.0.1';
+      server = createServer(app);
+      await new Promise(resolve => server.listen(port, address, resolve));
+      process.stdout.write(`ACCEPTANCE_HOST_READY internal-base=http://${address}:${port}\n`);
+      await new Promise(resolve => {
+        const stop = () => {
+          server.closeAllConnections?.();
+          server.close(() => resolve());
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+      });
+      return [];
+    }
+    ({ server, base } = await listen(app));
+  }
   try {
     const targetBody = { sessionId: target.request.sessionId, message: target.request.message, channel: target.request.channel };
     const targetKey = target.request.headers['Idempotency-Key'];
@@ -207,15 +257,24 @@ export async function runCoreV0Acceptance({ legacy, target }) {
     const bypass = await request(base, '/api/memories', { method: 'POST', body: JSON.stringify({ sessionId, message: 'chat bypass' }) });
     const a11 = bypass.response.status === 404 && bypass.body?.error?.code === 'API_ROUTE_NOT_FOUND';
 
-    const legacyResponse = await request(base, legacy.path, {
+    // R-020 stage 3 deleted the legacy /api/chat/stream surface; the client now
+    // drives companion chat exclusively through /api/chat/turns, which serves
+    // SSE on the same route. Following the A-11 precedent: the deleted legacy
+    // path is pinned as 404 (the stronger form), while the streaming half of
+    // this check rides the target route's own SSE transport -- so A-12 still
+    // proves a full turn completes over the wire with a durable assistant commit.
+    const legacyGone = await request(base, legacy.path, { method: 'POST', body: JSON.stringify({ sessionId: legacy.request.sessionId, message: target.request.message }) });
+    const sse = await request(base, target.path, {
       method: 'POST',
-      body: JSON.stringify({ sessionId: legacy.request.sessionId, message: target.request.message, channel: legacy.request.channel, provider: 'mock' })
+      headers: { Accept: 'text/event-stream', 'Idempotency-Key': `${targetKey}-sse` },
+      body: JSON.stringify(targetBody)
     });
-    const hasDoneEvent = typeof legacyResponse.text === 'string' && legacyResponse.text.includes('event: done');
+    const hasDoneEvent = typeof sse.text === 'string' && sse.text.includes('event: done');
     const afterLegacy = await request(base, '/api/export');
     const legacyMessages = afterLegacy.body?.state?.messages?.[sessionId] || [];
     const checkpointPass = ['turnId', 'applicationMessageId', 'eventId', 'sourceRevision'].every(key => firstTurn?.[key]);
-    const a12 = legacyResponse.response.status === 200
+    const a12 = legacyGone.response.status === 404
+      && sse.response.status === 200
       && hasDoneEvent
       && legacyMessages.some(message => message.role === 'assistant' && message.content)
       && checkpointPass;
@@ -229,9 +288,9 @@ export async function runCoreV0Acceptance({ legacy, target }) {
       result('A-09', a09, 'direct Memory event write requires a verified service identity'),
       result('A-10', a10, 'direct Memory mutation requires producer, correlation and idempotency context'),
       result('A-11', a11, 'the public Memory governance write surface is gone, so no Core chat-event bypass path exists'),
-      result('A-12', a12, 'legacy and target paths both complete the scenario with target checkpoints; legacy gaps remain explicit')
+      result('A-12', a12, 'the legacy chat path is gone (404) and the target route completes the scenario twice -- JSON and SSE -- with durable checkpoints')
     ];
   } finally {
-    await new Promise(resolve => server.close(resolve));
+    if (server) await new Promise(resolve => server.close(resolve));
   }
 }

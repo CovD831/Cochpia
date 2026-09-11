@@ -1,0 +1,109 @@
+{
+  "evidence": "R-020 promotion — application HTTP surface over TLS, cross-machine",
+  "date": "2026-09-11",
+  "topology": {
+    "server_A": "172.20.10.4 (this Mac): acceptance host on 127.0.0.1:8788 + TLS front on 0.0.0.0:8443",
+    "client_B": "172.20.10.5 (abaabadeMacBook-Air, macOS 26.3, node v22.22.2 shipped via rsync)",
+    "network": "phone hotspot LAN 172.20.10.0/28 — client traffic crosses a real network boundary (non-loopback)"
+  },
+  "tls": {
+    "form": "TLSv1.3 terminated at a dedicated front process (scripts/core-v0-tls-front.mjs), app traffic plain on loopback behind it",
+    "certificate": "self-signed CA 'Cochpia Acceptance CA (LAN-only)'; server cert SAN = IP:172.20.10.4, IP:127.0.0.1, DNS:abaabadeMacBook-Air.local",
+    "client_validation": "real chain validation via NODE_EXTRA_CA_CERTS; verification never disabled (no NODE_TLS_REJECT_UNAUTHORIZED)"
+  },
+  "honest_limits": [
+    "LAN form, not public-internet production: no real domain, no public CA, no load",
+    "AUTH_MODE=off — unchanged from the canonical acceptance env; the user-auth form for production is still an open boss decision",
+    "model = server default (mock-compatible), identical to the canonical acceptance runs, so transport is the only variable vs the recorded A-01..A-12 evidence",
+    "the PostgreSQL-endpoint TLS gap (SCRAM + sslmode=require, core-v0-live-check.js) is a different layer and remains open"
+  ],
+  "runs": [
+    {
+      "run": 1,
+      "passed": 14,
+      "total": 14,
+      "results": [
+        {
+          "id": "P-01",
+          "status": "passed",
+          "detail": "legacy and target fixtures share one scenario"
+        },
+        {
+          "id": "P-02",
+          "status": "passed",
+          "detail": "target route and idempotency header are present"
+        },
+        {
+          "id": "A-01",
+          "status": "passed",
+          "detail": "target turn creates one durable binding, admission, raw event and assistant commit"
+        },
+        {
+          "id": "A-02",
+          "status": "passed",
+          "detail": "exact replay returns the original receipt without new canonical facts"
+        },
+        {
+          "id": "A-03",
+          "status": "passed",
+          "detail": "conflicting idempotency replay is rejected before external calls"
+        },
+        {
+          "id": "A-04",
+          "status": "passed",
+          "detail": "application and Memory session binding keys are unique and immutable"
+        },
+        {
+          "id": "A-05",
+          "status": "passed",
+          "detail": "retrieval degradation is explicit and the turn still commits"
+        },
+        {
+          "id": "A-06",
+          "status": "passed",
+          "detail": "unknown admission remains pending until the same turn is retried"
+        },
+        {
+          "id": "A-07",
+          "status": "passed",
+          "detail": "commit failure leaves no visible assistant success"
+        },
+        {
+          "id": "A-08",
+          "status": "passed",
+          "detail": "restart reconciliation reuses the persisted turn and event identifiers"
+        },
+        {
+          "id": "A-09",
+          "status": "passed",
+          "detail": "direct Memory event write requires a verified service identity"
+        },
+        {
+          "id": "A-10",
+          "status": "passed",
+          "detail": "direct Memory mutation requires producer, correlation and idempotency context"
+        },
+        {
+          "id": "A-11",
+          "status": "passed",
+          "detail": "the public Memory governance write surface is gone, so no Core chat-event bypass path exists"
+        },
+        {
+          "id": "A-12",
+          "status": "passed",
+          "detail": "the legacy chat path is gone (404) and the target route completes the scenario twice -- JSON and SSE -- with durable checkpoints"
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "passed": 14,
+      "total": 14,
+      "note": "independent host/front processes and fresh data dir; identical result"
+    }
+  ],
+  "reproduce": {
+    "server_A": "COCHPIA_ACCEPTANCE_HOST=1 node scripts/core-v0-acceptance-host.mjs   # + node scripts/core-v0-tls-front.mjs",
+    "client_B": "COCHPIA_ACCEPTANCE_BASE=https://172.20.10.4:8443 NODE_EXTRA_CA_CERTS=…/ca.pem CORE_V0_ACCEPTANCE_MODULE=./scripts/core-v0-runtime-acceptance.js node scripts/core-v0-foundation-acceptance.js"
+  }
+}
