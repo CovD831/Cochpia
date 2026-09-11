@@ -12,7 +12,21 @@ export async function processExtractionEvent({ state, memory, event, workerId, m
   const extracted = await extractCandidates({ event: sourceEvent, modelGateway, allowSensitiveModelInput });
   assertLease();
   if (extracted.status === 'blocked_s3' || extracted.status === 'quarantined_sensitive_input' || extracted.status === 'invalid_event') return { status: extracted.status, candidateCount: 0 };
-  const context = { tenantId: sourceEvent.tenantId, subjectUserId: sourceEvent.userId, actorType: 'system', actorId: workerId, callerAgentId: 'cochpia', sessionId: sourceEvent.sessionId };
+  // C-6 (R-020): the drain is a system behaviour that acts on behalf of the
+  // data subject, not on behalf of a particular agent. Its actor is therefore
+  // the user -- the same identity the nine governance assertions require, and
+  // the only one promoteCandidate accepts. The source event's own agent is
+  // carried alongside so scope filtering still sees it, but it must never
+  // become the actor: an agent-actor context would be refused by
+  // assertUserGovernanceActor and every candidate would stall at 'candidate'.
+  const context = {
+    tenantId: sourceEvent.tenantId,
+    subjectUserId: sourceEvent.userId,
+    actorType: 'user',
+    actorId: sourceEvent.userId,
+    callerAgentId: sourceEvent.callerAgentId || sourceEvent.agentId || null,
+    sessionId: sourceEvent.sessionId
+  };
   let candidateCount = 0;
   for (const candidate of extracted.candidates) {
     assertLease();

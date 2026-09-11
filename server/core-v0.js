@@ -228,6 +228,7 @@ export function createCoreV0Store({ state, persist = async () => {} } = {}) {
       memoryStatus: turn.memoryStatus || 'available',
       recalledCount: Number(turn.recalledCount ?? 0),
       memoryAnswerability: turn.memoryAnswerability ?? null,
+      memoryDegradedReason: turn.memoryDegradedReason || null,
       receiptId: commit.receiptId
     };
     return message;
@@ -293,9 +294,14 @@ export function createInProcessMemoryPort({ memoryModule, context } = {}) {
 
     async ensureSessionBinding({ bindingKey }) {
       try {
+        // C-11: no constant fallback. A missing agent means the request never
+        // resolved one, which is a context error, not something to paper over.
+        if (!baseContext.callerAgentId) {
+          throw new CoreV0Error('MEMORY_AGENT_CONTEXT_REQUIRED', 'A calling agent identity is required to bind a Memory session', { status: 400 });
+        }
         const result = await memoryModule.createSession(baseContext, {
           idempotency_key: `core-v0:binding:${bindingKey}`,
-          callerAgentId: baseContext.callerAgentId || 'cochpia'
+          callerAgentId: baseContext.callerAgentId
         });
         const session = result?.session || result;
         if (!session?.id) throw new Error('Memory session receipt did not contain a session id');
@@ -350,7 +356,12 @@ export function createInProcessMemoryPort({ memoryModule, context } = {}) {
 
     async retrieveContext({ query, memorySessionId, tokenBudget = 1800 }) {
       try {
-        const bundle = await memoryModule.contextBundleAsync({ ...baseContext, sessionId: memorySessionId }, {
+        // C-7: the reply is assembled for one agent, so the read is narrowed to
+        // that agent's relationship/life memories. readScope only ever shrinks
+        // visibility, and it is derived from the server-resolved callerAgentId,
+        // never from request input (I-12/I-13).
+        const readScope = baseContext.callerAgentId ? { agentId: baseContext.callerAgentId } : undefined;
+        const bundle = await memoryModule.contextBundleAsync({ ...baseContext, sessionId: memorySessionId, readScope }, {
           query: String(query || '').slice(0, 1000),
           purpose: 'answer_user_query',
           tokenBudget
@@ -447,6 +458,7 @@ function pendingResult(turn, memoryStatus = 'pending') {
     applicationMessageId: turn.applicationMessageId,
     assistantMessageId: turn.assistantMessageId,
     memoryStatus,
+    memoryDegradedReason: turn.memoryDegradedReason || null,
     receiptId: turn.pendingReceiptId || turn.admissionReceiptId || `admission:${turn.turnId}`,
     retryable: true
   };
@@ -496,6 +508,9 @@ export function createCoreV0TurnService({
       memoryStatus: turn.memoryStatus || 'available',
       recalledCount: Number(turn.recalledCount ?? 0),
       memoryAnswerability: turn.memoryAnswerability ?? null,
+      // R-020: a degraded retrieval must be visible on the response, not only
+      // in a log line. null on the healthy path so the field is always present.
+      memoryDegradedReason: turn.memoryDegradedReason || null,
       receiptId: runtimeStore.findCommit(turn.commitId)?.receiptId || null
     }),
     replay
@@ -787,9 +802,15 @@ export function createCoreV0TurnService({
       turn.memoryAnswerability = result?.answerability || 'not_found';
       return result || { status: 'available', recalled: [], bundle: null };
     } catch (error) {
+      // R-020 stage 1.2: the turn must not fail because memory did (that
+      // decision stands), but the degrade has to be visible. It is recorded
+      // on the turn, in the response, and in the metrics counter; a bare
+      // catch here previously hid a broken retrieval for two iterations.
+      const code = error?.code || 'MEMORY_RETRIEVE_FAILED';
       turn.memoryStatus = 'degraded';
       turn.memoryAnswerability = 'degraded';
-      return { status: 'degraded', recalled: [], bundle: null, errorCode: error.code || 'MEMORY_RETRIEVE_FAILED' };
+      turn.memoryDegradedReason = code;
+      return { status: 'degraded', recalled: [], bundle: null, errorCode: code, degradedReason: code };
     }
   };
 

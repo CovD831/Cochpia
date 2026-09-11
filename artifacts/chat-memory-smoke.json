@@ -1,0 +1,63 @@
+{
+  "startedAt": "2026-09-10T12:04:51.418Z",
+  "mode": "local-in-process-mock-model",
+  "database": null,
+  "checks": [
+    {
+      "id": "C1",
+      "ok": true,
+      "detail": "stating turn committed and the raw event is durable",
+      "data": {
+        "status": "committed",
+        "memoryStatus": "available",
+        "rawEventCount": 1
+      }
+    },
+    {
+      "id": "C2",
+      "ok": true,
+      "detail": "before the drain the probe recalls nothing (guard holds)",
+      "data": null
+    },
+    {
+      "id": "C3",
+      "ok": true,
+      "detail": "drain promoted 2 assertion(s)",
+      "data": {
+        "status": "drained",
+        "extracted": 2,
+        "promoted": 2,
+        "failed": 0,
+        "activeAssertions": 2
+      }
+    },
+    {
+      "id": "C4",
+      "ok": true,
+      "detail": "the loop closes: probe recalled 3 item(s)",
+      "data": {
+        "status": "committed",
+        "memoryStatus": "available",
+        "recalledCount": 3
+      }
+    },
+    {
+      "id": "C5",
+      "ok": true,
+      "detail": "re-draining adds no duplicate assertions (2 -> 2)",
+      "data": null
+    },
+    {
+      "id": "C6",
+      "ok": true,
+      "detail": "a memory failure degrades the turn visibly and never blocks it",
+      "data": null
+    }
+  ],
+  "finishedAt": "2026-09-10T12:04:51.434Z",
+  "summary": {
+    "passed": 6,
+    "total": 6,
+    "ok": true
+  }
+}

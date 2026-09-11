@@ -4,7 +4,11 @@ import { routeMemoryQuery } from './memory-module-query-router.js';
 import { PaginationCursorError, assertCursorBinding, decodeOpaqueCursor, pageNewestFirst } from './memory-module-pagination.js';
 import { numericSourceRevision } from './memory-module-event-order.js';
 
-export const MEMORY_SCOPES = Object.freeze(['user', 'relationship', 'session']);
+// C-8 (R-020 2a): 'life' is the agent's own life (events, mood, routine),
+// as opposed to 'relationship' (the shared history between the user and the
+// agent). The enum and its ownership rules land now so R-021 can write into it;
+// the dedicated bundle partition (agentLife) is R-021's to add.
+export const MEMORY_SCOPES = Object.freeze(['user', 'relationship', 'session', 'life']);
 export const MEMORY_STATUSES = Object.freeze([
   'candidate',
   'pending_confirmation',
@@ -21,7 +25,11 @@ const sensitivityRank = { S0: 0, S1: 1, S2: 2, S3: 3 };
 const allowedRoles = new Set(['user', 'agent', 'system', 'tool', 'imported']);
 const allowedContentTypes = new Set(['plain_text', 'structured', 'tool_output', 'imported']);
 const allowedAssertionContentTypes = new Set([...allowedContentTypes, 'quoted_content']);
-const allowedPurposes = new Set(['answer_user_query', 'proactive_mention', 'profile_view', 'governance']);
+// C-9 (R-020 2a): life_generation reads the agent's own recent memory to write
+// its daily events. It is a read-only purpose and deliberately maps to
+// 'retrieve' -- never to 'mention' -- so generating a life event can never by
+// itself authorise a proactive mention (I-14).
+const allowedPurposes = new Set(['answer_user_query', 'proactive_mention', 'profile_view', 'governance', 'life_generation']);
 const allowedDirectQueryPolicies = new Set(['allow', 'require_confirmation', 'deny']);
 const allowedMentionPolicies = new Set(['mentionable', 'contextualizable_only', 'do_not_mention']);
 const allowedStorageDirectives = new Set(['default', 'do_not_store']);
@@ -210,6 +218,24 @@ export function isSecretMemoryContent(content) {
   return detectS3(content);
 }
 
+// C-7 (R-020 2a): the read-side scope narrowing. `readScope` is an optional,
+// server-injected view restriction that shrinks what a caller can see without
+// touching actorType. It exists because actorType 'user' bypasses every
+// relationship-scope check (hasGrant short-circuits on the first line), so a
+// user-actor context would hand agent A the memories of agent B. Changing
+// actorType to 'agent' instead is not an option: promoteCandidate and the nine
+// governance assertions require a user actor, and the extraction drain depends
+// on them. Invariants: readScope only narrows (I-12) and never changes
+// actorType (I-11).
+function normalizeReadScope(input) {
+  if (input == null) return null;
+  const raw = input.readScope ?? input.read_scope;
+  if (raw == null) return null;
+  const agentId = raw.agentId ?? raw.agent_id ?? raw;
+  if (agentId == null || String(agentId).trim() === '') return null;
+  return { agentId: normalizeId(agentId, 'read_scope_agent_id') };
+}
+
 function contextOf(context = {}) {
   const tenantId = normalizeId(context.tenantId ?? context.tenant_id, 'tenant_id');
   const subjectUserId = normalizeId(context.subjectUserId ?? context.userId ?? context.user_id, 'user_id');
@@ -223,6 +249,7 @@ function contextOf(context = {}) {
     actorType,
     actorId,
     callerAgentId: callerAgentId ? normalizeId(callerAgentId, 'caller_agent_id') : null,
+    readScope: normalizeReadScope(context),
     producer: context.producer ?? context.producer_id ?? null,
     correlationId: context.correlationId ?? context.correlation_id ?? null,
     sessionId: context.sessionId ?? context.session_id ?? null,
@@ -237,6 +264,10 @@ function scopeOf(input, context, { requireExpiresAt = false } = {}) {
   const sessionId = input.sessionId ?? input.session_id ?? input.scope?.session_id ?? (scopeType === 'session' ? context.sessionId : null);
   if (scopeType === 'user' && (relationshipAgentId || sessionId)) throw new MemoryModuleError('INVALID_SCOPE', 'user scope cannot include relationship_agent_id or session_id');
   if (scopeType === 'relationship' && !relationshipAgentId) throw new MemoryModuleError('INVALID_SCOPE', 'relationship scope requires relationship_agent_id');
+  // C-8: life scope belongs to one agent, exactly like relationship scope, and
+  // is never session-bound.
+  if (scopeType === 'life' && !relationshipAgentId) throw new MemoryModuleError('INVALID_SCOPE', 'life scope requires relationship_agent_id');
+  if (scopeType === 'life' && sessionId) throw new MemoryModuleError('INVALID_SCOPE', 'life scope cannot include session_id');
   if (scopeType === 'session' && !sessionId) throw new MemoryModuleError('INVALID_SCOPE', 'session scope requires session_id');
   const expiresAt = asDate(input.expiresAt ?? input.expires_at, 'expires_at', { required: scopeType === 'session' || requireExpiresAt });
   return {
@@ -273,6 +304,7 @@ function purposePermission(purpose) {
   if (purpose === 'governance') return 'govern';
   if (purpose === 'proactive_mention') return 'mention';
   if (purpose === 'answer_user_query') return 'contextualize';
+  if (purpose === 'life_generation') return 'retrieve';
   return 'retrieve';
 }
 
@@ -343,6 +375,12 @@ function canSee(state, context, assertion, purpose, { allowGovernance = false } 
   if (purpose === 'proactive_mention' && assertion.mentionPolicy !== 'mentionable') return false;
   if (assertion.scopeType === 'relationship' && assertion.relationshipAgentId !== context.callerAgentId && context.actorType === 'agent') return false;
   if (assertion.scopeType === 'session' && (assertion.sessionId !== context.sessionId || assertion.relationshipAgentId !== context.callerAgentId) && context.actorType === 'agent') return false;
+  // C-7: a narrowed read scope hides other agents' relationship and life
+  // memories. It only ever subtracts visibility (I-12); a user-actor context
+  // has already passed the actorType guards above, so this is the only place
+  // the per-agent view can be enforced for that actor type.
+  if (context.readScope && (assertion.scopeType === 'relationship' || assertion.scopeType === 'life')
+    && assertion.relationshipAgentId !== context.readScope.agentId) return false;
   return hasGrant(state, context, assertion, purposePermission(purpose));
 }
 
@@ -803,7 +841,14 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   const createSession = async (rawContext, input = {}) => {
     const context = contextOf(rawContext);
     requestPayloadTenantMatches(context, input);
-    const callerAgentId = normalizeId(input.callerAgentId ?? input.caller_agent_id ?? context.callerAgentId ?? 'cochpia', 'caller_agent_id');
+    // C-11: a session must name its owning agent. The previous 'cochpia'
+    // default meant every caller collapsed onto one memory identity, which made
+    // relationship-scope isolation unenforceable.
+    const requestedAgentId = input.callerAgentId ?? input.caller_agent_id ?? context.callerAgentId ?? null;
+    if (requestedAgentId == null || String(requestedAgentId).trim() === '') {
+      throw new MemoryModuleError('MEMORY_AGENT_CONTEXT_REQUIRED', 'A calling agent identity is required to create a Memory session', { status: 400 });
+    }
+    const callerAgentId = normalizeId(requestedAgentId, 'caller_agent_id');
     const expiresAt = asDate(input.expiresAt ?? input.expires_at, 'expires_at') || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const session = {
       id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, callerAgentId,
@@ -1404,6 +1449,11 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const core = pinned.map(item => serializeAssertion(state, state.assertions.find(assertion => assertion.id === item.memoryId), { pinVersion: true, versionIdOverride: item.versionId }));
     const profile = all.filter(item => item.scope.type === 'user' && !item.pinned);
     const relationships = all.filter(item => item.scope.type === 'relationship');
+    // C-8: the agent's own life is partitioned separately from the shared
+    // relationship. Both are agent-owned and both honour readScope/hasGrant,
+    // but keeping them apart is what lets R-021 inject life texture without
+    // mixing it into "what we have together".
+    const agentLife = all.filter(item => item.scope.type === 'life');
     const currentState = activeSession
       ? state.currentStates
         .filter(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId && item.sessionId === activeSession.id)
@@ -1417,13 +1467,13 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       const text = String(value ?? '');
       return text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text;
     };
-    const bundle = { answerability: retrieved.answerability, consistency: retrieved.consistency, serviceMode: retrieved.serviceMode, queryRoute: retrieved.queryRoute || 'unknown', policyResult: retrieved.policyResult, coreMemory: core, userProfile: profile, relationshipProfile: relationships, currentState, relevantEpisodes: episodes, evidence: [...retrieved.items.map(item => ({ memoryId: item.memoryId, versionId: item.versionId, sourceRefs: item.sourceRefs })), ...episodes.map(episode => ({ episodeId: episode.episodeId, sourceRefs: episode.sourceRefs }))], uncertainties: retrieved.uncertainties || [], blocks: retrieved.blocks, snapshotId: randomUUID(), profileSnapshotId: snapshot?.id || (activeSession ? null : randomUUID()), privacyEpoch: state.redactionEpochs[userKey(context)] || 0, grantVersion: state.grantVersion, consistencyToken: retrieved.consistencyToken, sourceVersions: retrieved.items.map(item => item.versionId).filter(Boolean), indexWatermarks: { canonical: state.sequence }, tokenBudget, tokenCount: 0, truncated: false, tokenizerId: 'approx-json-v1' };
+    const bundle = { answerability: retrieved.answerability, consistency: retrieved.consistency, serviceMode: retrieved.serviceMode, queryRoute: retrieved.queryRoute || 'unknown', policyResult: retrieved.policyResult, coreMemory: core, userProfile: profile, relationshipProfile: relationships, agentLife, currentState, relevantEpisodes: episodes, evidence: [...retrieved.items.map(item => ({ memoryId: item.memoryId, versionId: item.versionId, sourceRefs: item.sourceRefs })), ...episodes.map(episode => ({ episodeId: episode.episodeId, sourceRefs: episode.sourceRefs }))], uncertainties: retrieved.uncertainties || [], blocks: retrieved.blocks, snapshotId: randomUUID(), profileSnapshotId: snapshot?.id || (activeSession ? null : randomUUID()), privacyEpoch: state.redactionEpochs[userKey(context)] || 0, grantVersion: state.grantVersion, consistencyToken: retrieved.consistencyToken, sourceVersions: retrieved.items.map(item => item.versionId).filter(Boolean), indexWatermarks: { canonical: state.sequence }, tokenBudget, tokenCount: 0, truncated: false, tokenizerId: 'approx-json-v1' };
     // Evidence is provenance metadata; trim it before content-bearing memory fields.
     while (bundle.evidence.length > 1 && estimate(bundle) > tokenBudget) {
       bundle.evidence.pop();
       bundle.truncated = true;
     }
-    for (const key of ['userProfile', 'relationshipProfile', 'relevantEpisodes']) {
+    for (const key of ['userProfile', 'relationshipProfile', 'agentLife', 'relevantEpisodes']) {
       while (bundle[key].length && estimate(bundle) > tokenBudget) {
         bundle[key].pop();
         bundle.truncated = true;
@@ -1433,6 +1483,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       bundle.coreMemory = bundle.coreMemory.map(item => ({ ...item, content: clip(item.content, maxChars), structuredData: maxChars < 64 ? {} : item.structuredData }));
       bundle.currentState = bundle.currentState.map(item => ({ ...item, value: clip(item.value, maxChars) }));
       bundle.relevantEpisodes = bundle.relevantEpisodes.map(item => ({ ...item, title: clip(item.title, maxChars), summary: clip(item.summary, maxChars) }));
+      bundle.agentLife = bundle.agentLife.map(item => ({ ...item, content: clip(item.content, maxChars) }));
       bundle.uncertainties = bundle.uncertainties.map(item => ({ ...item, values: Array.isArray(item.values) ? item.values.map(value => clip(value, maxChars)) : item.values }));
       bundle.truncated = true;
     }

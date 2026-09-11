@@ -16,3 +16,7 @@ uploads/
 # User-provided media: publish only after ownership/license is confirmed
 client/public/306155_medium.mp4
 scripts/eval-progress.log
+
+# e2e run output: the log belongs to whoever ran it, not to the repo. The
+# artifacts/*.json evidence files ARE committed (the cleanup docs cite them).
+artifacts/e2e-server.log

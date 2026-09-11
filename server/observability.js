@@ -20,13 +20,23 @@ export function createRateLimiter({ windowMs = 60_000, max = 120, now = () => Da
 
 export function createObservability({ rateLimitMax = 120, logger = console } = {}) {
   const rateLimiter = createRateLimiter({ max: rateLimitMax });
-  const metrics = { requests: 0, errors: 0, rateLimited: 0, totalLatencyMs: 0, statusCounts: {} };
+  const metrics = { requests: 0, errors: 0, rateLimited: 0, totalLatencyMs: 0, statusCounts: {}, memoryDegraded: 0, memoryDegradeReasons: {} };
   const latencyWindow = [];
   const latencyWindowSize = 2048;
   const percentile = ratio => {
     if (!latencyWindow.length) return 0;
     const sorted = [...latencyWindow].sort((left, right) => left - right);
     return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio))];
+  };
+  // R-020 stage 1.2: memory degradation used to be swallowed by a bare catch.
+  // The conversation still must not be blocked (that decision stands), but a
+  // silent degrade hid a real retrieval break for two iterations. Every
+  // degrade is now counted and attributed to its cause.
+  const recordMemoryDegrade = reason => {
+    const code = String(reason || 'MEMORY_DEGRADED').slice(0, 100);
+    metrics.memoryDegraded += 1;
+    metrics.memoryDegradeReasons[code] = (metrics.memoryDegradeReasons[code] || 0) + 1;
+    return code;
   };
   const middleware = (req, res, next) => {
     const startedAt = Date.now();
@@ -61,9 +71,11 @@ export function createObservability({ rateLimitMax = 120, logger = console } = {
   };
   return {
     middleware,
+    recordMemoryDegrade,
     getMetrics: () => ({
       ...metrics,
       statusCounts: { ...metrics.statusCounts },
+      memoryDegradeReasons: { ...metrics.memoryDegradeReasons },
       averageLatencyMs: metrics.requests ? Math.round(metrics.totalLatencyMs / metrics.requests) : 0,
       p50LatencyMs: percentile(0.50),
       p95LatencyMs: percentile(0.95),

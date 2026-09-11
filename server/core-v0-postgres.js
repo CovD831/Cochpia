@@ -573,9 +573,14 @@ export function createPostgresMemoryPort({ repository, context: rawContext, retr
 
   return {
     async ensureSessionBinding({ bindingKey }) {
+      // C-11: no constant fallback. Binding without an agent identity would
+      // collapse every agent onto one memory identity.
+      if (!context.callerAgentId) {
+        throw coreError('MEMORY_AGENT_CONTEXT_REQUIRED', 'A calling agent identity is required to bind a Memory session', { status: 400 });
+      }
       const result = await runMutation('session_binding', memory => memory.createSession(context, {
         idempotency_key: `core-v0:binding:${bindingKey}`,
-        callerAgentId: context.callerAgentId || 'cochpia'
+        callerAgentId: context.callerAgentId
       }));
       if (result?.status === 'pending') return result;
       const session = result?.session || result;
@@ -635,11 +640,15 @@ export function createPostgresMemoryPort({ repository, context: rawContext, retr
     async retrieveContext({ query, memorySessionId, tokenBudget = 1800 }) {
       return runRead('retrieve', async () => {
         const readContext = contextWithSession(context, memorySessionId);
+        // C-7: narrow the read to the calling agent's own relationship/life
+        // memories. Derived from the server-resolved callerAgentId, so it can
+        // only subtract visibility (I-12/I-13).
+        const scopedContext = context.callerAgentId ? { ...readContext, readScope: { agentId: context.callerAgentId } } : readContext;
         const state = typeof repository.loadContextBundleState === 'function'
-          ? await repository.loadContextBundleState(readContext, { purpose: 'answer_user_query', query: String(query || '').slice(0, 1000) })
-          : await repository.load(readContext);
+          ? await repository.loadContextBundleState(scopedContext, { purpose: 'answer_user_query', query: String(query || '').slice(0, 1000) })
+          : await repository.load(scopedContext);
         const memory = createMemoryModule(state, async () => {} , moduleOptions);
-        const bundle = await memory.contextBundleAsync(readContext, { query: String(query || '').slice(0, 1000), purpose: 'answer_user_query', tokenBudget });
+        const bundle = await memory.contextBundleAsync(scopedContext, { query: String(query || '').slice(0, 1000), purpose: 'answer_user_query', tokenBudget });
         return { status: 'available', bundle, recalled: memoryBundleToRecalled(bundle), answerability: bundle.answerability || 'not_found' };
       });
     }

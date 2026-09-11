@@ -1,4 +1,4 @@
-import { createMemoryModule, createMemoryModuleState } from './memory-module.js';
+import { createMemoryModule, createMemoryModuleState, MemoryModuleError } from './memory-module.js';
 import { createMemoryModuleRouter } from './memory-module-api.js';
 import { resolveMemoryFeatureFlags } from './memory-module-flags.js';
 import { createChatMemoryAdapter } from './chat-memory.js';
@@ -52,7 +52,13 @@ export function createMemoryModuleRuntime({
   persistState = async () => {},
   getUser = () => ({ id: 'local-user' }),
   featureFlags = resolveMemoryFeatureFlags(process.env),
-  tenantId = process.env.MEMORY_TENANT_ID || 'local-tenant'
+  tenantId = process.env.MEMORY_TENANT_ID || 'local-tenant',
+  // C-11 (R-020 2a): resolves the calling agent for the ordinary chat path,
+  // where no Memory service identity and no dev header are present. It must be
+  // synchronous -- context construction happens on the synchronous path -- and
+  // must never throw: a missing value returns null and the caller applies the
+  // single failure rule below.
+  resolveAgentId = null
 } = {}) {
   if (typeof getState !== 'function') throw new TypeError('Memory Module runtime requires getState');
 
@@ -72,13 +78,41 @@ export function createMemoryModuleRuntime({
     const allowDevelopmentAgentHeaders = process.env.NODE_ENV !== 'production' && process.env.MEMORY_ALLOW_UNTRUSTED_AGENT_HEADERS === 'true';
     const subjectUserId = serviceIdentity?.subjectUserId || user.id;
     const actorType = serviceIdentity ? 'agent' : (allowDevelopmentAgentHeaders ? (req.get('x-memory-actor-type') || 'user') : 'user');
-    const callerAgentId = serviceIdentity?.serviceId || (allowDevelopmentAgentHeaders ? (req.get('x-caller-agent-id') || req.get('x-agent-id') || 'cochpia') : 'cochpia');
+    // Priority: service identity > development header > the session's agent.
+    // There is no constant fallback by design (I-15/I-16): a missing agent is
+    // an error, not a default. The previous 'cochpia' fallback made every
+    // agent share one memory identity, which silently defeated relationship
+    // scope isolation.
+    const headerAgentId = allowDevelopmentAgentHeaders
+      ? (req.get('x-caller-agent-id') || req.get('x-agent-id') || null)
+      : null;
+    const resolvedAgentId = serviceIdentity?.serviceId
+      || headerAgentId
+      || (typeof resolveAgentId === 'function' ? resolveAgentId(req) : null);
+    const callerAgentId = resolvedAgentId ? String(resolvedAgentId).trim() : '';
+    // R-020 stage 2a correction: the agent requirement applies to
+    // *session-scoped* chat contexts, where memory has to be filtered per
+    // agent. It does NOT apply to the user-level views (the memory overview and
+    // dream), which carry no session and are deliberately agent-agnostic --
+    // they are the display/governance view over everything the user owns.
+    //
+    // Requiring an agent unconditionally broke those routes with a 400, and
+    // because the client's startup refresh uses Promise.all, that single
+    // failure blanked the entire home page (no sessions, no agents). The
+    // requirement is therefore tied to the presence of a session, which is
+    // exactly the situation in which per-agent scoping is meaningful.
+    const sessionHint = req.body?.session_id ?? req.body?.sessionId
+      ?? req.query?.session_id ?? req.query?.sessionId ?? null;
+    const requiresAgent = chat && Boolean(sessionHint);
+    if (!callerAgentId && requiresAgent) {
+      throw new MemoryModuleError('MEMORY_AGENT_CONTEXT_REQUIRED', 'A calling agent identity is required for Memory context', { status: 400 });
+    }
     return {
       tenantId: serviceIdentity?.tenantId || tenantId,
       subjectUserId,
       actorType,
       actorId: actorType === 'user' ? subjectUserId : callerAgentId,
-      callerAgentId,
+      callerAgentId: callerAgentId || null,
       producer: serviceIdentity?.producer || null,
       correlationId: serviceIdentity?.correlationId || null,
       sessionId: chat ? null : req.body?.session_id || req.query?.session_id || null

@@ -1,0 +1,73 @@
+{
+  "startedAt": "2026-09-10T12:04:45.971Z",
+  "mode": "local-in-process-mock-model",
+  "database": null,
+  "checks": [
+    {
+      "id": "S0",
+      "ok": true,
+      "detail": "turn service constructed with a bound session",
+      "data": null
+    },
+    {
+      "id": "S1",
+      "ok": true,
+      "detail": "turn committed (turn:59cc1125-9daa-4ac1-9934-39bcd2f83a18)",
+      "data": {
+        "status": "committed",
+        "memoryStatus": "available",
+        "recalledCount": 0,
+        "memoryAnswerability": "not_found"
+      }
+    },
+    {
+      "id": "S2",
+      "ok": true,
+      "detail": "assistant message stored (我听见了：“我在学尤克里里，今天练了半小时”。这是我们共同经历的一个新片段。我会...)",
+      "data": {
+        "role": "assistant"
+      }
+    },
+    {
+      "id": "S3",
+      "ok": true,
+      "detail": "raw event durable (bb1e1f47-fc9a-4bc2-8a43-f1f406b13fff)",
+      "data": {
+        "rawEventCount": 1,
+        "eventRole": "user"
+      }
+    },
+    {
+      "id": "S4",
+      "ok": true,
+      "detail": "same key replayed without a second write",
+      "data": {
+        "replayFlag": true,
+        "messagesAfter": 2,
+        "messagesBefore": 2
+      }
+    },
+    {
+      "id": "S5",
+      "ok": true,
+      "detail": "conflicting payload rejected",
+      "data": null
+    },
+    {
+      "id": "S6",
+      "ok": true,
+      "detail": "second turn committed (turn:88a6a686-0e15-4053-a953-4f69b7345499)",
+      "data": {
+        "status": "committed",
+        "memoryStatus": "available",
+        "recalledCount": 0
+      }
+    }
+  ],
+  "finishedAt": "2026-09-10T12:04:45.982Z",
+  "summary": {
+    "passed": 7,
+    "total": 7,
+    "ok": true
+  }
+}

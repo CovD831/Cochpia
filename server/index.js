@@ -79,10 +79,28 @@ const state = new Proxy(baseState, {
   ownKeys(target) { return Reflect.ownKeys(requestContext.getStore()?.state || target); },
   getOwnPropertyDescriptor(target, property) { return { configurable: true, enumerable: true, value: (requestContext.getStore()?.state || target)[property], writable: true }; }
 });
+// C-11 (R-020 2a): resolve the calling agent for the ordinary chat path.
+// Synchronous by contract (context construction is synchronous) and
+// non-throwing: a session with no bound agent yields null, and the Memory
+// runtime turns that into MEMORY_AGENT_CONTEXT_REQUIRED. The previous
+// constant 'cochpia' fallback let every agent share one memory identity,
+// which defeated relationship-scope isolation.
+const resolveAgentIdForRequest = req => {
+  try {
+    const requestState = requestContext.getStore()?.state;
+    const sessionId = req?.body?.sessionId ?? req?.body?.session_id ?? req?.query?.sessionId ?? null;
+    if (!requestState || !sessionId) return null;
+    const session = (requestState.sessions || []).find(item => item.id === sessionId);
+    return session?.agentId ? String(session.agentId).trim() : null;
+  } catch {
+    return null;
+  }
+};
 const memoryRuntime = createMemoryModuleRuntime({
   getState: () => requestContext.getStore()?.state || baseState,
   persistState: () => saveState(state),
-  getUser: () => requestContext.getStore()?.user || { id: 'local-user' }
+  getUser: () => requestContext.getStore()?.user || { id: 'local-user' },
+  resolveAgentId: resolveAgentIdForRequest
 });
 const agents = createAgentService(state, () => saveState(state));
 const growthEvidence = createGrowthEvidenceService(state, () => saveState(state));
@@ -265,6 +283,9 @@ app.post('/api/chat/turns', async (req, res) => {
   try {
     const { service, drainExtraction } = await coreV0ServiceForRequest(req);
     const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
+    // R-020 stage 1.2: a degraded retrieval is counted so it is visible even
+    // when the turn itself commits successfully.
+    if (result?.memoryStatus === 'degraded') observability.recordMemoryDegrade(result.memoryDegradedReason);
     // R-007b: the drain fires after the response is written and never blocks
     // it. A stated fact enters the retrieval corpus at most one turn later
     // (eventual consistency); crashes are covered by the durable outbox.
@@ -321,7 +342,17 @@ app.get('/api/sessions', (req, res) => {
   res.json(req.query.paginated === 'true' ? { ...result, items } : items);
 });
 app.post('/api/sessions', async (req, res) => {
-  const session = { id: randomUUID(), title: String(req.body?.title || '新的相遇').slice(0, 80), description: String(req.body?.description || '').trim().slice(0, 300), kind: req.body?.kind === 'group' ? 'group' : 'private', agentIds: Array.isArray(req.body?.agentIds) ? req.body.agentIds.map(String).slice(0, 20) : [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), mode: 'companion', companionIntent: 'listen', ...defaultModelSelection() };
+  const kind = req.body?.kind === 'group' ? 'group' : 'private';
+  const agentIds = Array.isArray(req.body?.agentIds) ? req.body.agentIds.map(String).slice(0, 20) : [];
+  // C-10 (R-020 2a): a private session must name its agent. Without one the
+  // Memory session cannot resolve a callerAgentId, and every agent would end
+  // up sharing one memory identity. Group sessions keep using agentIds[].
+  const requestedAgentId = String(req.body?.agentId ?? '').trim();
+  if (kind !== 'group') {
+    if (!requestedAgentId) return fail(res, 400, 'SESSION_AGENT_UNBOUND', 'A private session requires agentId');
+    if (!agents.get(requestedAgentId)) return fail(res, 400, 'AGENT_NOT_FOUND', 'Agent not found');
+  }
+  const session = { id: randomUUID(), title: String(req.body?.title || '新的相遇').slice(0, 80), description: String(req.body?.description || '').trim().slice(0, 300), kind, agentIds, agentId: kind === 'group' ? null : requestedAgentId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), mode: 'companion', companionIntent: 'listen', ...defaultModelSelection() };
   state.sessions.unshift(session); state.messages[session.id] = []; await saveState(state); res.status(201).json(session);
 });
 app.patch('/api/sessions/:id', async (req, res) => {
@@ -863,13 +894,16 @@ async function handleChatStream(req, res, { regenerateMessageId = null, retry = 
   let recalled = [];
   let memoryBundle = null;
   let userEvent = null;
+  let memoryDegradedReason = null;
   try {
     userEvent = await chatMemory.recordTurn({ eventId: `chat:${sessionId}:${userMessage.id}`, content: userMessage.content, eventRole: 'user', channel: activeChannel });
     const retrieved = await chatMemory.retrieve(userMessage.content);
     recalled = retrieved.recalled;
     memoryBundle = retrieved.bundle;
   } catch (error) {
-    console.error(JSON.stringify({ event: 'memory_chat_retrieve_failed', code: error.code || 'MEMORY_MODULE_RETRIEVE_FAILED' }));
+    memoryDegradedReason = error.code || 'MEMORY_MODULE_RETRIEVE_FAILED';
+    observability.recordMemoryDegrade(memoryDegradedReason);
+    console.error(JSON.stringify({ event: 'memory_chat_retrieve_failed', code: memoryDegradedReason }));
   }
   const assistantMessage = { id: randomUUID(), role: 'assistant', content: '', createdAt: new Date().toISOString(), regeneratedFrom: regeneration?.assistant.id || null, channel: activeChannel };
   if (regeneration) {

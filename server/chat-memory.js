@@ -28,6 +28,7 @@ export function memoryBundleToRecalled(bundle = {}) {
   for (const item of bundle.coreMemory || []) addMemoryItem(items, item, { type: 'core' });
   for (const item of bundle.userProfile || []) addMemoryItem(items, item, { type: item.memoryType || 'profile' });
   for (const item of bundle.relationshipProfile || []) addMemoryItem(items, item, { type: 'relationship' });
+  for (const item of bundle.agentLife || []) addMemoryItem(items, item, { type: 'life' });
   for (const item of bundle.currentState || []) addMemoryItem(items, item, { type: 'current_state', summary: item.content || item.value });
   for (const item of bundle.relevantEpisodes || []) addMemoryItem(items, item, { type: 'episode', summary: item.summary || item.title });
   return uniqueItems(items);
@@ -94,7 +95,10 @@ export function createChatMemoryAdapter({ memoryModule, state, context, persistS
 
   const retrieve = async query => {
     await ensureLegacyImport();
-    const bundle = await memoryModule.contextBundleAsync(context, {
+    // C-7: narrow the read to the calling agent's own relationship/life
+    // memories. Derived from the server-resolved callerAgentId only.
+    const readScope = context?.callerAgentId ? { agentId: context.callerAgentId } : undefined;
+    const bundle = await memoryModule.contextBundleAsync({ ...context, readScope }, {
       query: String(query || '').slice(0, 1000),
       purpose: 'answer_user_query',
       tokenBudget: 1800
