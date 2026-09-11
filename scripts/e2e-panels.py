@@ -264,13 +264,13 @@ CHECKS.insert(0, CHECKS.pop())
 
 # Settings panel (模型目录): wired in stage 4 -- previously it had no `true`
 # call anywhere in the client, i.e. it could never be opened. The entry is the
-# topbar 模型设置 button. This check exists because wiring without coverage is
+# channel-bar 模型设置 button (Chat 页). This check exists because wiring without coverage is
 # how a panel ends up dead again.
-@check("P9 模型设置面板可从 topbar 打开")
+@check("P9 模型设置面板可从频道栏打开")
 def check_settings_panel(browser):
     context, page = fresh_page(browser)
     try:
-        open_page(page, "Chat")  # the topbar lives in main-panel, shown on Chat
+        open_page(page, "Chat")  # the channel bar lives in main-panel, shown on Chat
         # force: ambient animation keeps this button out of the actionability window
         page.click("button[aria-label='模型设置']", timeout=10000, force=True)
         time.sleep(0.8)
