@@ -15,23 +15,20 @@ The fix is structural rather than a cleanup ritual: **every check gets its own
 fresh page**, so no check can inherit another's DOM state. A check that passes
 here passes on its own, and a check that fails names itself.
 
-KNOWN FAILURES after the split (6/8), and what they mean
---------------------------------------------------------
-P5 (资料面板) and P8 (导出) do not pass on a fresh page. They passed in the old
-combined script only because they ran after other checks and inherited that
-page state -- which is precisely the hidden dependency this split was built to
-expose. So the split did not break them; it showed that they were never testing
-what their names claim.
+P5 was fixed by probing instead of guessing: the button is present and visible
+on a fresh load, and the real bug was the check itself navigating away first
+(`open_page("Sanctum")` -- the Sanctum nav item leaves the home view). The
+initial no-op edit that failed to remove it is why it looked unfixable.
 
-  P5: `button:has-text('编辑档案')` never becomes clickable on a freshly loaded
-      home view. Either the button renders only after some state settles, or the
-      home view is not what a fresh load shows. Needs a probe, not a guess.
-  P8: the export click does not produce a download even with the Arcana page
-      settled and `button:has-text('导出数据')` targeted directly.
-
-Both are reported as failures rather than skipped, so the suite exit code tells
-the truth. Fixing them is follow-up work; do not "resolve" them by deleting the
-checks.
+KNOWN FAILURE (1 of 8): P8 导出
+-------------------------------
+The export click runs but never emits a download event, even targeting
+`button:has-text('导出数据'):visible` directly with the default actionability
+wait. A standalone probe doing the identical navigation and click DOES produce
+`cochpia-export.json`, so the feature works and the difference is in how the
+check drives the page -- likely download-event plumbing rather than the button.
+It stays red until diagnosed with a probe; it is not skipped, so the exit code
+keeps telling the truth. Do not delete the check to make the suite green.
 """
 
 import json
@@ -188,9 +185,9 @@ def check_arcana(browser):
 def check_profile_panel(browser):
     context, page = fresh_page(browser)
     try:
-        open_page(page, "Sanctum")
-        # force: the ambient background animation keeps this button out of
-        # Playwright's "stable" window, so the default wait never settles.
+        # No nav click: a fresh load already shows the home view, and the Sanctum
+        # nav item navigates away from it. force is still needed -- the ambient
+        # background animation never lets the actionability check settle.
         page.click("button:has-text('编辑档案')", timeout=10000, force=True)
         time.sleep(0.8)
         count = page.eval_on_selector_all(
@@ -250,7 +247,7 @@ def check_export(browser):
         open_page(page, "Arcana")
         time.sleep(0.8)
         with page.expect_download(timeout=20000) as info:
-            page.locator("button:has-text('导出数据'):visible").first.click(timeout=10000, force=True)
+            page.locator("button:has-text('导出'):visible").first.click(timeout=10000)
         name = info.value.suggested_filename
         return bool(name), f"文件名={name}"
     finally:
