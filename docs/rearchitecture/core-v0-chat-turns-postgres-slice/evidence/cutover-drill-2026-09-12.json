@@ -1,0 +1,66 @@
+{
+  "evidence": "R-020 promotion — cutover drill (JSON -> PostgreSQL -> rollback), full walk on isolated copies",
+  "date": "2026-09-12",
+  "isolation": "entire drill ran on a repo copy at /tmp/cutover-drill + a dedicated PostgreSQL 17.11 instance (port 5434, TLSv1.3 + SCRAM + hostssl-only) — the real server/data/state.json was never touched",
+  "steps": [
+    {
+      "step": "P1 live-check against drill PG (sslmode=verify-full)",
+      "result": "PASS — tlsEnabled=true, TLSv1.3"
+    },
+    {
+      "step": "P2 schema",
+      "result": "PASS — normalized-schema.sql applied (9 statements, 0 errors); note the migration script also applies the schema itself"
+    },
+    {
+      "step": "P3 seed backup + sha256",
+      "result": "PASS — seed-state.json checksummed"
+    },
+    {
+      "step": "§3.1 migration --dry-run",
+      "result": "PASS — counts 2/3/3/1/1 match seed"
+    },
+    {
+      "step": "§3.2 real migration",
+      "result": "PASS — cochpia_sessions=2, cochpia_messages=3, cochpia_memories=3, cochpia_growth_evidence=1, cochpia_personality_traits=1"
+    },
+    {
+      "step": "§3.3 dual-read spot check",
+      "result": "PASS — row counts and content match the seed"
+    },
+    {
+      "step": "§3.4 switch to postgres + /api/ready",
+      "result": "PASS — 200 with CORE_V0_AUTO_MIGRATE=true"
+    },
+    {
+      "step": "§4.2 export from PG form",
+      "result": "PASS — /api/export returns the full state including data written during the PG window"
+    },
+    {
+      "step": "§4.3 rollback to json + read-back",
+      "result": "PASS — sessions=2, messages=5 (seed 3 + window 2): window data survived the rollback"
+    }
+  ],
+  "findings": [
+    {
+      "id": "D-1",
+      "severity": "process",
+      "finding": "the drill seed initially lacked agentId on sessions, which broke the turn path in PG form (MEMORY_AGENT_CONTEXT_REQUIRED). Real sessions carry agentId, and with it in the cochpia_state jsonb the turn commits (verified: 200, status=committed). Lesson recorded: seed/fixture data must mirror real shapes."
+    },
+    {
+      "id": "D-2",
+      "severity": "architecture fact",
+      "finding": "the PostgreSQL runtime read/write surface is a single cochpia_state jsonb row (store.js loadState/persist) — the normalized tables (cochpia_sessions/messages/...) are NOT in the runtime path; they are a reconciliation copy written by the migration script only. Rollback and accounting must be based on the jsonb, not the normalized tables."
+    },
+    {
+      "id": "D-3",
+      "severity": "non-blocking gap",
+      "finding": "normalized cochpia_sessions has no agent_id column and the migration script does not carry agentId into it — the reconciliation copy silently loses agent ownership (R-020 stage 2a concept never reached the legacy schema). Non-blocking because the runtime uses the jsonb, but nobody should trust the normalized copy for agent scoping."
+    },
+    {
+      "id": "D-4",
+      "severity": "note",
+      "finding": "the migration script hardcodes server/data/state.json and ignores COCHPIA_DATA_DIR — a real cutover must run from the deployment layout, and a COCHPIA_DATA_DIR-aware fix is advisable before any real run."
+    }
+  ],
+  "verdict": "drill passed: migration, switch, window writes, export, rollback and read-back all verified on isolated copies"
+}

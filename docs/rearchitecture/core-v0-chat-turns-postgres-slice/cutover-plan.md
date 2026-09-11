@@ -3,6 +3,12 @@
 > 前置：本计划是 promotion gate 的最后一块成文物。Gate 其余项见
 > `promotion-prep.md`。**当前阶段为本地开发，本计划仅在 promotion
 > 触发时执行，不安排任何生产部署动作。**
+>
+> 更新（2026-09-11 晚）：S1 的 TLS/SCRAM 证据已采集（`evidence/pg-tls-2026-09-11.json`）；
+> 用户鉴权形态已拍板并实施（AUTH_MODE=token，`evidence/auth-token-2026-09-11.json`）；
+> JSON→PG 迁移脚本已存在（`server/migrate-json-to-postgres.js`，支持 --dry-run），
+> 前置条件 4-B「需要单独的迁移脚本」的前提已变化；
+> §4 回滚描述中 legacy `/api/chat/stream` 已在 R-020 阶段 3 删除，见下方修正。
 
 ## 1. 切换对象（代码事实）
 
@@ -44,8 +50,12 @@
 **触发条件**（任一）：turn 失败率异常升高、drain 连续 failed、Memory
 服务不可用且影响对话主链路、数据完整性疑点。
 
-**动作**：`STORAGE_PROVIDER=json` + 重启。legacy 路径立即可用（A-12），
-PG 不动。
+**动作**：`STORAGE_PROVIDER=json` + 重启。PG 不动。
+
+~~legacy 路径立即可用（A-12）~~ —— **已过时（2026-09-11 修正）**：R-020
+阶段 3 删除了 legacy `/api/chat/stream`，聊天只有 turns 一条路由。回滚后的
+可用面 = turns 路由在 json 形态下照常工作（A-12 现钉住的是「legacy 路由
+404 + turns 双传输完成场景」）。
 
 **数据分叉的诚实声明**：回滚后新对话写入 JSON，PG 窗口内的对话留在
 PG——**两边从此分叉**。再次切换（re-promote）时 PG 数据完整保留
@@ -61,6 +71,14 @@ CONTEXT_TURNS 保持 0（A-D 两轮观察后再议）。
 ## 6. 状态
 
 - [x] 切换对象与开关核实（代码事实）
-- [ ] 老板评审本计划
-- [ ] 生产形态端点就绪 → S1 证据
+- [x] S1 证据：生产形态 PG 端点 live-check（TLSv1.3 + SCRAM + 锁互斥，2026-09-11）
+- [x] 用户鉴权形态拍板：AUTH_MODE=token（本机免票/跨机口令）+ 双机 TLS+Bearer 证据
+- [x] **演练通过（2026-09-12）**：隔离副本上完整走通 迁移→切换→窗口写入→导出→回退→读回，
+      窗口期数据回退零丢失。证据与发现见 `evidence/cutover-drill-2026-09-12.json`：
+      · 架构事实——PG 运行时读写面是 `cochpia_state` 单行 jsonb 快照，
+        normalized 表只是迁移对账副本（对账/回退以 jsonb 为准）
+      · 非阻塞缺口——normalized 对账副本缺 agent_id（阶段 2a 概念未进 legacy
+        schema），不要用它做 agent 作用域判断
+      · 建议真切换前让迁移脚本感知 COCHPIA_DATA_DIR（当前硬编码 server/data）
+- [ ] 老板评审本计划（尤其：前置条件 4 的冷启动 vs 全量迁移——迁移脚本现已存在）
 - [ ] promotion trigger 满足 → 执行
