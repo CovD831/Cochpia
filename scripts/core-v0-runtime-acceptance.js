@@ -198,8 +198,14 @@ export async function runCoreV0Acceptance({ legacy, target }) {
       body: JSON.stringify({ event_id: 'acceptance-context-event', content: 'direct write' })
     });
     const a10 = missingWriteContext.response.status === 400 && missingWriteContext.body?.error?.code === 'MEMORY_WRITE_CONTEXT_REQUIRED';
+    // R-020 stage 4 deleted the public /api/memories governance surface, so the
+    // chat-event bypass it used to reject is now *impossible* rather than merely
+    // forbidden. That is a strictly stronger form of the same property, which is
+    // what A-11 is actually about: no path into the chat stream except the turn
+    // route. Asserting 404 (the app's API_ROUTE_NOT_FOUND) pins the stronger
+    // state; the old 400/MEMORY_CHAT_BYPASS_FORBIDDEN cannot be reached any more.
     const bypass = await request(base, '/api/memories', { method: 'POST', body: JSON.stringify({ sessionId, message: 'chat bypass' }) });
-    const a11 = bypass.response.status === 400 && bypass.body?.error?.code === 'MEMORY_CHAT_BYPASS_FORBIDDEN';
+    const a11 = bypass.response.status === 404 && bypass.body?.error?.code === 'API_ROUTE_NOT_FOUND';
 
     const legacyResponse = await request(base, legacy.path, {
       method: 'POST',
@@ -222,7 +228,7 @@ export async function runCoreV0Acceptance({ legacy, target }) {
       ...unitResults.filter(item => ['A-05', 'A-06', 'A-07', 'A-08'].includes(item.id)),
       result('A-09', a09, 'direct Memory event write requires a verified service identity'),
       result('A-10', a10, 'direct Memory mutation requires producer, correlation and idempotency context'),
-      result('A-11', a11, 'Memory governance route rejects Core chat-event bypass payloads'),
+      result('A-11', a11, 'the public Memory governance write surface is gone, so no Core chat-event bypass path exists'),
       result('A-12', a12, 'legacy and target paths both complete the scenario with target checkpoints; legacy gaps remain explicit')
     ];
   } finally {

@@ -17,7 +17,7 @@ npm run dev
 - Model catalog: http://localhost:8787/api/models
 - MCP endpoint: POST http://localhost:8787/mcp
 
-Core v0 的目标聊天入口为 `POST /api/chat/turns`，需要 `Idempotency-Key`，并由 `CORE_V0_ENABLED=true` 显式开启。它先完成 Memory admission，再构建有界上下文、调用 Mock Model，最后提交 assistant message；旧的 `/api/chat/stream` 暂时保留用于兼容和对照。命中密钥等不应进入模型的内容策略时，请求会在创建持久化 turn 前被拒绝。
+Core v0 的聊天入口为 `POST /api/chat/turns`，需要 `Idempotency-Key`，并由 `CORE_V0_ENABLED=true` 显式开启（turns 是唯一的伴侣链路，该开关关闭时聊天不可用）。它先完成 Memory admission，再构建有界上下文、调用模型，最后提交 assistant message。带 `Accept: text/event-stream` 时同一路由以 SSE 返回（分段文本 / `Last-Event-ID` 重连 / 取消走 `DELETE /api/chat/turns/:runId`）。工作模式（Pi RPC + 本地工具 + 审批流）是独立路由 `POST /api/chat/work`，模式切换也归它。旧的 `/api/chat/stream|regenerate|retry` 已在 R-020 阶段 3 删除。命中密钥等不应进入模型的内容策略时，请求会在创建持久化 turn 前被拒绝。
 
 主应用直达 `/v1` 的写入是 internal-only：本地验收可使用显式 `MEMORY_SERVICE_TOKEN`，生产环境必须配置 `MEMORY_SERVICE_JWT_SECRET`、`MEMORY_SERVICE_ISSUER` 和 `MEMORY_SERVICE_AUDIENCE`，并携带 `producer`、correlation ID 和 `Idempotency-Key`。浏览器不应调用这条边界。
 

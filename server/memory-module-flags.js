@@ -1,9 +1,15 @@
+// Feature flags that gate the *retired* extraction service worker and the
+// extraction worker. Deliberately does NOT carry `episodeGrouping`: that option
+// belongs to the extraction pipeline, which owns its default
+// (memory-extraction.js: MEMORY_EPISODE_GROUPING !== 'false', i.e. on). Keeping
+// a second, opposite default here (false) was a shadow definition that no live
+// code read -- memory-module.js never consults episodeGrouping -- so it could
+// only ever mislead. One option, one default.
 export const MEMORY_FEATURE_DEFAULTS = Object.freeze({
   autoExtract: false,
   autoProfileUpdate: false,
   hybridRetrieval: false,
   vectorRetrieval: false,
-  episodeGrouping: false,
   proactiveMention: false
 });
 

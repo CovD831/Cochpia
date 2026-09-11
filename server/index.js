@@ -14,10 +14,9 @@ import { authenticateRequest, authMode, validateAuthStorage } from './auth.js';
 import { buildRuntimeContext } from './runtime-context.js';
 import { createSseEvent, formatSseEvent, replaySseEvents } from './sse.js';
 import { createTurnStreamHandler } from './turn-stream.js';
-import { applyPersonalityChange, createPersonalityRollbackAudit } from './personality.js';
+import { applyPersonalityChange } from './personality.js';
 import { queryCollection } from './collection-query.js';
 import { createAgentService } from './agent-service.js';
-import { collectSyncChanges } from './sync-service.js';
 import { createObservability } from './observability.js';
 import { createMusicService } from './music-service.js';
 import { createNeteaseMusicAdapter } from './netease-music-adapter.js';
@@ -196,17 +195,12 @@ const send = (res, event, data, run) => {
   return true;
 };
 const fail = (res, status, code, message) => res.status(status).json({ error: { code, message } });
-const coreEventFields = new Set([
-  'message', 'turnId', 'turn_id', 'eventId', 'event_id', 'sourceRevision', 'source_revision',
-  'memorySessionId', 'memory_session_id', 'applicationMessageId', 'application_message_id',
-  'assistantMessageId', 'assistant_message_id', 'bindingKey', 'binding_key'
-]);
-const rejectCoreChatBypass = body => {
-  const input = body && typeof body === 'object' ? body : {};
-  const field = Object.keys(input).find(key => coreEventFields.has(key));
-  if (field) return `Core chat field ${field} is not accepted by the Memory governance route`;
-  return null;
-};
+// `rejectCoreChatBypass` and its `coreEventFields` set lived here to stop
+// chat-shaped payloads entering through the public /api/memories governance
+// routes. R-020 stage 4 deleted those routes, so both the guard and the fields
+// list are gone with them: the bypass path no longer exists, which is the
+// stronger form of what the guard was protecting. If a governance write route
+// is ever reintroduced, it must bring this guard back.
 const getSession = id => state.sessions.find(session => session.id === id);
 const getMessage = (sessionId, messageId) => state.messages[sessionId]?.find(message => message.id === messageId);
 const touchSession = session => { if (session) session.updatedAt = new Date().toISOString(); };
@@ -539,26 +533,6 @@ app.get('/api/agents', (_, res) => res.json(agents.list()));
 app.post('/api/agents', async (req, res) => { try { res.status(201).json(await agents.create(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_AGENT', error.message); } });
 app.patch('/api/agents/:id', async (req, res) => { try { const agent = await agents.update(req.params.id, req.body || {}); agent ? res.json(agent) : fail(res, 404, 'AGENT_NOT_FOUND', 'Agent not found'); } catch (error) { fail(res, 400, 'INVALID_AGENT', error.message); } });
 app.delete('/api/agents/:id', async (req, res) => { const removed = await agents.remove(req.params.id); removed ? res.status(204).end() : fail(res, 404, 'AGENT_NOT_FOUND', 'Agent not found'); });
-app.get('/api/sync', (req, res) => {
-  try { return res.json({ version: 1, syncedAt: new Date().toISOString(), ...collectSyncChanges(state, { cursor: req.query.cursor, limit: req.query.limit }) }); }
-  catch (error) { return fail(res, 400, 'INVALID_SYNC_CURSOR', error.message); }
-});
-app.get('/api/memories', async (req, res) => {
-  const memories = await compatibilityMemoryForRequest(req).list(req.query.paginated === 'true' ? { ...req.query, limit: 100 } : req.query);
-  if (req.query.paginated !== 'true') return res.json(memories);
-  const result = queryCollection(memories, { search: req.query.search, limit: req.query.limit, offset: req.query.offset, text: item => `${item.summary} ${item.type} ${item.source}` });
-  return res.json(result);
-});
-app.post('/api/memories', async (req, res) => {
-  const bypass = rejectCoreChatBypass(req.body);
-  if (bypass) return fail(res, 400, 'MEMORY_CHAT_BYPASS_FORBIDDEN', bypass);
-  try { res.status(201).json(await compatibilityMemoryForRequest(req).hold(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_MEMORY', error.message); }
-});
-app.get('/api/memories/export', async (req, res) => {
-  const memories = await compatibilityMemoryForRequest(req).exportMemories();
-  res.set('Content-Disposition', 'attachment; filename="cochpia-memories.json"');
-  res.json({ exportedAt: new Date().toISOString(), version: 1, memories });
-});
 app.get('/api/export', async (req, res) => {
   await memoryRuntime.prepareForRequest(req);
   res.set('Content-Disposition', 'attachment; filename="cochpia-export.json"');
@@ -604,22 +578,6 @@ app.patch('/api/preferences', async (req, res) => {
     return fail(res, 400, 'INVALID_PREFERENCES', error.message);
   }
 });
-app.post('/api/memories/batch', async (req, res) => {
-  const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(String).filter(Boolean))] : [];
-  if (!ids.length) return fail(res, 400, 'INVALID_MEMORY_BATCH', 'At least one memory id is required');
-  if (req.body?.action !== 'revoke') return fail(res, 400, 'INVALID_MEMORY_BATCH_ACTION', 'Only revoke is supported');
-  const compatibility = compatibilityMemoryForRequest(req);
-  const results = await Promise.all(ids.map(id => compatibility.revoke(id)));
-  res.json({ requested: ids.length, revoked: results.filter(Boolean).length, memories: results.filter(Boolean) });
-});
-app.post('/api/memories/:id/revoke', async (req, res) => { const item = await compatibilityMemoryForRequest(req).revoke(req.params.id); item ? res.json(item) : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); });
-app.get('/api/memories/:id', async (req, res) => { const item = await compatibilityMemoryForRequest(req).get(req.params.id); item ? res.json(item) : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); });
-app.patch('/api/memories/:id', async (req, res) => {
-  const bypass = rejectCoreChatBypass(req.body);
-  if (bypass) return fail(res, 400, 'MEMORY_CHAT_BYPASS_FORBIDDEN', bypass);
-  try { const item = await compatibilityMemoryForRequest(req).update(req.params.id, req.body || {}); item ? res.json(item) : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); } catch (error) { fail(res, 400, 'INVALID_MEMORY', error.message); }
-});
-app.delete('/api/memories/:id', async (req, res) => { const removed = await compatibilityMemoryForRequest(req).remove(req.params.id); removed ? res.status(204).end() : fail(res, 404, 'MEMORY_NOT_FOUND', 'Memory not found'); });
 app.get('/api/memory/overview', async (req, res) => {
   try {
     const { memories } = await chatMemoryForRequest(req).overview();
@@ -665,7 +623,6 @@ app.get('/api/chat/work/:runId', (req, res) => {
   attachStreamResponse(run, res, req.get('last-event-id') || req.query.afterEventId || '');
   if (run.finished) res.end();
 });
-app.get('/api/memory/dream', async (req, res) => res.json({ memories: await compatibilityMemoryForRequest(req).dream(req.query.limit), generatedAt: new Date().toISOString() }));
 app.get('/api/profile', (_, res) => res.json(state.profile));
 app.patch('/api/profile', async (req, res) => {
   try {
@@ -763,7 +720,6 @@ app.get('/api/personality/history', (_, res) => res.json(state.personalityHistor
   summary: version.summary,
   updatedAt: version.updatedAt
 }))));
-app.get('/api/personality/audit', (_, res) => res.json(state.personalityAudit || []));
 app.get('/api/growth/evidence', (req, res) => {
   const status = req.query.status ? String(req.query.status) : '';
   if (status && !['draft', 'confirmed', 'rejected'].includes(status)) return fail(res, 400, 'INVALID_EVIDENCE_STATUS', 'Invalid evidence status');
@@ -820,15 +776,6 @@ app.post('/api/growth/evidence/batch', async (req, res) => {
     await saveState(state);
     return res.json({ requested: ids.length, status: requestedStatus, updated: items.length, personalityChanges, items });
   } catch (error) { return fail(res, 400, 'INVALID_EVIDENCE_STATUS', error.message); }
-});
-app.post('/api/personality/rollback', async (req, res) => {
-  const version = Number(req.body?.version);
-  const snapshot = state.personalityHistory.find(item => item.version === version);
-  if (!snapshot) return fail(res, 404, 'PERSONALITY_VERSION_NOT_FOUND', 'Personality version not found');
-  const fromVersion = state.personality.version;
-  state.personality = { version: snapshot.version, traits: structuredClone(snapshot.traits), summary: snapshot.summary, updatedAt: new Date().toISOString() };
-  state.personalityAudit.unshift(createPersonalityRollbackAudit({ fromVersion, toVersion: snapshot.version }));
-  await saveState(state); res.json({ ...state.personality, audit: state.personalityAudit[0] });
 });
 
 // Mode switching lived here as a local helper until stage 3. It now lives in

@@ -4,7 +4,7 @@ This document records the first executable slice of `memory-module-roadmap-v3.md
 
 ## Boundary
 
-The new contract is exposed below `/v1`. The existing `/api/memories` endpoints remain temporarily available for the current Cochpia UI and are not the V1 canonical model.
+The new contract is exposed below `/v1`. The legacy `/api/memories` endpoints were **removed in R-020 stage 4** (2026-09-11): the Cochpia UI they were kept for no longer called them, and as a public write surface they bypassed the admission boundary this contract establishes. `/v1` is now the only Memory API. Reads for the UI go through `/api/memory/overview`.
 
 The V1 service owns memory data behind an API boundary. Callers provide an authenticated subject context; `tenant_id` and `user_id` in request bodies are validated against that context and cannot replace it.
 
