@@ -338,6 +338,40 @@ def main():
             page.keyboard.press("Escape")
             time.sleep(0.5)
 
+            # Inspector floating window and the two panels inside it.
+            # This entry point did not exist until stage 4: the growth / history
+            # panels live behind a window that starts closed (closed: true), and
+            # without a way to reach them their extraction could not be verified.
+            # The buttons are labelled 查看时间线 / 查看版本, not after the panel
+            # headings (成长证据 / 人格版本) -- the headings are spans, not controls.
+            open_page("Arcana")
+            inspector_opener = page.locator("button:has-text('查看共同状态'):visible")
+            inspector_opener.first.click(timeout=10000)
+            time.sleep(0.9)
+            record(
+                "S11 inspector 浮动窗口可打开",
+                visible(".inspector"),
+                "inspector 可见" if visible(".inspector") else "inspector 不可见",
+            )
+
+            def open_inspector_panel(trigger, title_id):
+                page.click(f"button:has-text('{trigger}'):visible", timeout=8000)
+                time.sleep(0.8)
+                sel = f"[aria-labelledby='{title_id}']"
+                ok = page.locator(sel).count() > 0 and visible(sel)
+                if ok:
+                    page.keyboard.press("Escape")
+                    time.sleep(0.4)
+                return ok
+
+            growth_ok = open_inspector_panel("查看时间线", "growth-title")
+            history_ok = open_inspector_panel("查看版本", "history-title")
+            record(
+                "S12 成长时间线 / 人格版本面板可打开",
+                growth_ok and history_ok,
+                f"成长{'✓' if growth_ok else '✗'}; 人格版本{'✓' if history_ok else '✗'}",
+            )
+
             # Export: the UI button is wired to /api/export, which stage 4
             # deliberately kept while deleting /api/memories/export. There are
             # two export buttons (an Arcana page section and a sidebar footer);
