@@ -262,6 +262,25 @@ def check_export(browser):
 CHECKS.insert(0, CHECKS.pop())
 
 
+# Settings panel (模型目录): wired in stage 4 -- previously it had no `true`
+# call anywhere in the client, i.e. it could never be opened. The entry is the
+# topbar 模型设置 button. This check exists because wiring without coverage is
+# how a panel ends up dead again.
+@check("P9 模型设置面板可从 topbar 打开")
+def check_settings_panel(browser):
+    context, page = fresh_page(browser)
+    try:
+        open_page(page, "Chat")  # the topbar lives in main-panel, shown on Chat
+        # force: ambient animation keeps this button out of the actionability window
+        page.click("button[aria-label='模型设置']", timeout=10000, force=True)
+        time.sleep(0.8)
+        sel = "[aria-labelledby='settings-title']"
+        ok = page.locator(sel).count() > 0 and visible(page, sel)
+        return ok, "settings-title 面板可见" if ok else "模型设置面板不可见"
+    finally:
+        context.close()
+
+
 def main():
     env = dict(os.environ)
     env.update({

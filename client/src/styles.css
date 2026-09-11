@@ -260,18 +260,6 @@ body.modal-open { overflow:hidden; }
 .model-dock { z-index:4; }
 .inspector { min-width:0; overflow-y:auto; }
 .inspector h2, .topbar h1 { overflow-wrap:anywhere; }
-.task-launcher { position:fixed; z-index:6; right:320px; bottom:20px; border:1px solid var(--border-default); border-radius:var(--radius-sm); background:var(--surface-panel); color:var(--text-body); padding:8px 11px; box-shadow:var(--shadow-sm); font-size:11px; }
-.task-launcher span { color:var(--action-primary); margin-left:5px; }
-.task-form { display:flex; gap:10px; padding:18px 22px; border-bottom:1px solid var(--border-default); }
-.task-form input { flex:1; min-width:0; border:1px solid var(--border-default); border-radius:var(--radius-sm); background:var(--surface-elevated); color:var(--text-strong); padding:10px 12px; }
-.task-list { display:grid; gap:0; padding:0 22px 24px; }
-.task-row { display:flex; align-items:center; gap:12px; border-top:1px solid var(--border-default); padding:14px 0; }
-.task-row > div { display:grid; gap:4px; min-width:0; }
-.task-row strong { color:var(--text-strong); font-size:13px; overflow-wrap:anywhere; }
-.task-row small { color:var(--text-muted); font-size:10px; }
-.task-row.completed strong { color:var(--text-muted); text-decoration:line-through; }
-.task-check { flex:0 0 28px; width:28px; height:28px; border:1px solid var(--border-default); border-radius:50%; background:transparent; color:var(--action-primary); font-size:15px; padding:0; }
-.task-check:hover { border-color:var(--action-primary); }
 .compact-empty { padding:0; }
 .material-preview { margin-top:24px; padding-top:24px; border-top:1px solid var(--border-default); }
 .material-preview-surface { position:relative; display:grid; gap:5px; min-height:82px; margin:0 0 14px; padding:15px; overflow:hidden; border:1px solid rgba(255,255,255,var(--material-border-opacity)); border-radius:var(--preview-material-radius, var(--material-radius)); background:radial-gradient(circle at 20% 0%, rgba(255,255,255,var(--material-highlight-opacity)), transparent 55%), rgba(255,255,255,var(--material-opacity)); box-shadow:inset 0 1px rgba(255,255,255,var(--material-highlight-opacity)), 0 12px 28px rgba(0,0,0,var(--material-shadow-opacity)); backdrop-filter:blur(var(--material-blur)) saturate(var(--material-saturation)); filter:brightness(var(--material-brightness)); transition:background-color .35s ease, border-color .35s ease, box-shadow .35s ease, border-radius .35s ease; }
@@ -501,7 +489,7 @@ html[data-animation="disabled"] .ambient-layer *, html[data-animation="disabled"
   .conversation, .conversation *, .composer { transition:none !important; animation:none !important; scroll-behavior:auto !important; }
 }
 @media (max-width: 960px) { .model-dock { right:16px; max-width:calc(100vw - 242px); } }
-@media (max-width: 620px) { .model-dock { top:93px; left:16px; right:16px; max-width:none; }.model-dock select + select { min-width:92px; max-width:112px; }.model-dock .model-dock-info { display:none; }.settings-backdrop { padding:0; place-items:end; }.settings-panel { max-height:88vh; border-radius:10px 10px 0 0; }.settings-header { padding:18px; }.provider-row { display:grid; gap:12px; }.provider-actions { justify-content:space-between; align-items:center; }.provider-actions button { min-height:40px; }.task-launcher { right:16px; bottom:16px; }.task-form { padding:14px 18px; }.task-form button { min-height:40px; }.task-list { padding-left:18px; padding-right:18px; } }
+@media (max-width: 620px) { .model-dock { top:93px; left:16px; right:16px; max-width:none; }.model-dock select + select { min-width:92px; max-width:112px; }.model-dock .model-dock-info { display:none; }.settings-backdrop { padding:0; place-items:end; }.settings-panel { max-height:88vh; border-radius:10px 10px 0 0; }.settings-header { padding:18px; }.provider-row { display:grid; gap:12px; }.provider-actions { justify-content:space-between; align-items:center; }.provider-actions button { min-height:40px; } }
 @media (max-width: 960px) { .conversation { height:calc(100vh - 104px); } }
 @media (max-width: 620px) { .conversation { height:calc(100vh - 86px); padding-bottom:120px; background:color-mix(in srgb, var(--surface-canvas) 88%, transparent); } .message { grid-template-columns:32px minmax(0,1fr); gap:10px; } .bubble { font-size:14px; } .topbar { position:relative; z-index:1; } }
 @media (max-width: 620px) { .companion-intent-bar { left:16px; right:16px; bottom:82px; transform:none; max-width:none; border-radius:14px; padding:7px 8px; } .companion-intent-label { display:none; } .companion-intent-options { width:100%; } .companion-intent { min-height:40px; padding:7px 12px; } }
@@ -699,10 +687,8 @@ h1, h2, .brand strong, .empty-state h2, .inspector h2, .settings-header h2, .bub
 .topbar { display:none; }
 .app-shell { grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(0, 1fr); }
 .model-dock { display:none; }
-.task-launcher { position:absolute; right:34px; bottom:22px; }
 .event-launcher { position:absolute; right:136px; bottom:22px; }
 .quick-actions { position:absolute; right:24px; bottom:18px; z-index:6; display:flex; align-items:center; gap:8px; }
-.quick-actions .task-launcher { position:static; }
 .quick-actions-toggle { width:38px; height:38px; border:1px solid var(--border-default); border-radius:50%; background:var(--surface-elevated); color:var(--text-body); box-shadow:var(--shadow-sm); font-size:18px; line-height:1; }
 .quick-actions-toggle:hover, .quick-actions-toggle:focus-visible { color:var(--text-strong); border-color:var(--action-primary); }
 .main-panel { padding-left:150px; padding-right:24px; padding-bottom:16px; }
@@ -728,12 +714,6 @@ h1, h2, .brand strong, .empty-state h2, .inspector h2, .settings-header h2, .bub
 .send-button { flex:0 0 36px; width:36px; height:36px; align-self:center; margin:0; border-radius:50%; background:var(--action-primary); color:var(--on-action); font-size:18px; }
 .send-button:hover { background:var(--action-primary-hover); }
 .composer-note { display:none; }
-
-/* 任务与日历等待重做：旧入口和旧面板不再参与当前界面。 */
-.event-launcher, .quick-actions .task-launcher, .task-form, .event-form,
-.settings-backdrop:has(#task-title), .settings-backdrop:has(#event-title),
-.life-calendar-legacy, .aube-mini:nth-child(2),
-.companion-intent-bar, .companion-intent-collapsed { display:none !important; }
 .upload-button { flex:0 0 36px; width:36px; height:36px; border:0; border-radius:50%; background:transparent; color:var(--text-muted); font-size:16px; display:grid; place-items:center; cursor:pointer; }
 .upload-button:hover { background:var(--surface-elevated); color:var(--text-strong); }
 .upload-button:disabled { opacity:.4; cursor:not-allowed; }
