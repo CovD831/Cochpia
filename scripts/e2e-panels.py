@@ -254,6 +254,14 @@ def check_export(browser):
         context.close()
 
 
+# Export runs first, deliberately. Probing showed P8 passes alone and fails when
+# it is the eighth check even though every check gets a fresh browser -- so the
+# exhaustion is in the Playwright driver process, not in any page (most likely
+# file descriptors: a download needs one for its temp file). Moving it first is
+# the cheap fix; the real one is running each check in its own subprocess.
+CHECKS.insert(0, CHECKS.pop())
+
+
 def main():
     env = dict(os.environ)
     env.update({
@@ -287,14 +295,19 @@ def main():
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as pw:
-            browser = pw.chromium.launch()
+            # A fresh browser per check, not just a fresh page. Probing showed the
+            # export download stops firing once seven contexts have been opened and
+            # closed in the same browser -- browser-level state, invisible to the
+            # page, which is why the earlier page-level isolation was not enough.
             for name, fn in CHECKS:
+                browser = pw.chromium.launch()
                 try:
                     ok, detail = fn(browser)
                 except Exception as exc:  # a check that cannot run is a failed check, named
                     ok, detail = False, f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
+                finally:
+                    browser.close()
                 record(name, ok, detail)
-            browser.close()
     finally:
         server.terminate()
         try:
