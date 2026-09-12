@@ -1,0 +1,37 @@
+{
+  "evidence": "R-004 promotion gate re-run after cutover + auth enablement",
+  "date": "2026-09-12",
+  "whyRerun": "promotion-prep.md itself records that the gate scripts are not part of any regression run and broke silently three times (stages 2a/3/4). The recorded '12/12 passed' was a 2026-09-09 snapshot, so the gate was re-executed instead of trusted.",
+  "found": [
+    {
+      "case": "A-12",
+      "harness": "scripts/core-v0-chat-turns-acceptance.js",
+      "status": "fail",
+      "detail": "ERR_ASSERTION",
+      "rootCause": "The assertion still required the legacy route app.post('/api/chat/stream') to be PRESENT in server/index.js. R-020 stage 3 deleted the legacy companion surface, so the assertion could only fail. Nothing caught it because this harness is not part of npm test.",
+      "note": "There are TWO A-01..A-12 implementations. core-v0-runtime-acceptance.js was updated during stage 3 (its A-12 pins legacy-404 + SSE completion on the target route) and it is the harness that produced the LAN/TLS evidence. core-v0-chat-turns-acceptance.js kept the pre-stage-3 A-12. Duplicate matrices drift: recommend collapsing to a single source of truth."
+    },
+    {
+      "case": "P-09",
+      "harness": "scripts/core-v0-postgres-acceptance.js",
+      "status": "fail",
+      "detail": "P-09_COMPATIBILITY",
+      "rootCause": "Same stale requirement: the compatibility pin demanded that app.post('/api/chat/stream') exist in server/index.js."
+    }
+  ],
+  "fix": [
+    "A-12 now pins the post-stage-3 contract (mirrors server/stage3-cleanup.test.js C-2/C-3): the retired routes must be ABSENT (chat/stream, chat/regenerate, chat/retry, chat/stream/:runId), app.post('/api/chat/turns') must be registered, and the flag-off refusal must still raise CORE_V0_DISABLED.",
+    "P-09 now requires turns registered AND the legacy stream route absent."
+  ],
+  "after": {
+    "acceptance:core-v0-chat-turns": "A-01..A-12 - 12/12 passed",
+    "acceptance:core-v0 (runtime harness)": "P-01, P-02, A-01..A-12 - 14/14 passed",
+    "core-v0-postgres-acceptance.js": "P-01..P-09 passed (L-01/L-02 remain pending; they require the live endpoint posture)",
+    "acceptance:core-v0-postgres (incl. rollback rehearsal)": "passed - P-10 passed; evidence closeEpoch=1, closeStatus=timed_out, repairStatus=completed, externalReceiptStatus=completed, activeLeasesAfterRehearsal=0, postCloseAdmission=CORE_ADMISSION_CLOSED",
+    "npm test": "392 tests / 387 pass / 0 fail / 5 skipped"
+  },
+  "notRerun": [
+    "core-v0-postgres-live-acceptance.js (PG endpoint TLS / SCRAM live check) was NOT re-run: it connects with DATABASE_URL, i.e. the production instance on 5433, and creates then drops a scoped schema. Left as a boss decision.",
+    "The dual-machine TLS acceptance was not re-run: it needs the second machine on the same hotspot."
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "evidence": "production .env enabled AUTH_MODE=token (boss decision, 2026-09-12)",
+  "date": "2026-09-12",
+  "decision": "Boss chose to actually enable the token posture in .env over keeping AUTH_MODE=off and rewriting the gate wording. Rationale: the promotion gate table claimed the auth form was '决定并实施', while the running configuration had neither AUTH_MODE nor COCHPIA_API_TOKEN, so the runtime did not match the claim (server/auth.js defaults to 'off').",
+  "change": {
+    "file": "repo-main/.env (gitignored)",
+    "added": ["AUTH_MODE=token", "COCHPIA_API_TOKEN=<64 hex chars, generated with /usr/bin/openssl rand -hex 32>"],
+    "backup": ".env.bak-20260912-auth (contains the previous .env; now ignored by the new .env.bak* gitignore rule)",
+    "rollback": "remove the AUTH_MODE / COCHPIA_API_TOKEN block and restart, or restore .env.bak-20260912-auth"
+  },
+  "wiringVerification": {
+    "method": "load .env into process.env, then dynamic import server/auth.js and exercise authenticateRequest with synthetic sockets. No server boot, no pg import.",
+    "authMode()": "token",
+    "authRequired()": false,
+    "validateAuthStorage('postgres')": "ok - no AUTH_CONFIGURATION_INVALID (the fail-fast requires COCHPIA_API_TOKEN, which is present)",
+    "authenticateRequest": {
+      "127.0.0.1": "allow, local=true",
+      "::1": "allow, local=true",
+      "::ffff:127.0.0.1": "allow, local=true",
+      "172.20.10.5 (off-box, no bearer)": "deny AUTH_REQUIRED 401"
+    }
+  },
+  "regression": {
+    "npm test": "392 tests / 387 pass / 0 fail / 5 skipped"
+  },
+  "honestLimits": [
+    "The app process was not running at the time. The new .env takes effect on the next start.",
+    "vite dev proxies /api to localhost:8787, so a browser on another machine loading the vite page still reaches the app as loopback and is NOT gated. Only direct :8787 and the TLS front :8443 requests are gated. This is a development-posture limitation, not a production one.",
+    "No dual-machine TLS+Bearer re-run today. The credential path itself was last exercised on 2026-09-11 (evidence/auth-token-2026-09-11.json); today's verification covers the wiring of this machine's configuration."
+  ]
+}
