@@ -458,7 +458,20 @@ async function productionModelBoundary() {
 async function rollbackContract() {
   const source = await readFile(resolve(repoRoot, 'server/index.js'), 'utf8');
   assert.match(source, /CORE_V0_ENABLED/);
-  assert.equal(source.includes("app.post('/api/chat/stream'"), true);
+  // R-020 stage 3 deleted the legacy companion surface, so this case now pins
+  // the stronger contract (same precedent as A-11; mirrors
+  // stage3-cleanup.test.js C-2/C-3): the retired routes must be ABSENT and the
+  // turns route must be registered. The previous assertion required the legacy
+  // route to be present -- it rotted the moment stage 3 landed, and this script
+  // is not part of any regression run, so nothing caught it.
+  for (const removed of [
+    "app.post('/api/chat/stream'",
+    "app.post('/api/chat/regenerate'",
+    "app.post('/api/chat/retry'",
+    "app.get('/api/chat/stream/:runId'"
+  ]) {
+    assert.equal(source.includes(removed), false, `${removed} must be gone`);
+  }
   assert.equal(source.includes("app.post('/api/chat/turns'"), true);
   const state = baseState();
   const service = createCoreV0TurnService({

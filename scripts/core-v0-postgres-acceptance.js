@@ -105,7 +105,10 @@ async function shapedAcceptance() {
   results.push({ id: 'P-08', status: 'passed' });
 
   const serverSource = await readFile(resolve(root, 'server/index.js'), 'utf8');
-  check(serverSource.includes("app.post('/api/chat/turns'") && serverSource.includes("app.post('/api/chat/stream'") && serverSource.includes("app.use('/v1'") && serverSource.includes('saveState'), 'P-09_COMPATIBILITY');
+  // R-020 stage 3 retired the legacy companion stream, so the compatibility pin
+  // is now "turns registered AND legacy gone" (mirrors stage3-cleanup.test.js
+  // C-2/C-3). The old form required the legacy route to still be present.
+  check(serverSource.includes("app.post('/api/chat/turns'") && !serverSource.includes("app.post('/api/chat/stream'") && serverSource.includes("app.use('/v1'") && serverSource.includes('saveState'), 'P-09_COMPATIBILITY');
   results.push({ id: 'P-09', status: 'passed' });
   return results;
 }
