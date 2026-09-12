@@ -65,4 +65,4 @@ MacBook Air（172.20.10.5）经 SSH 用 openpilotair 密钥跑验收客户端。
 | 应用 HTTP 面 TLS 证据 | **已采集**（LAN 双机形态，两次一致） |
 | PostgreSQL 端点 TLS 证据（SCRAM + sslmode，live-check TLS=true） | **已采集**（本机生产姿态实例：TLSv1.3 + SCRAM-SHA-256 + hostssl-only + verify-full 客户端；R-003 锁互斥升级为时间戳实证） |
 | 用户鉴权形态 | **已拍板并实施**（AUTH_MODE=token：本机免票/跨机口令；双机 TLS+Bearer 实跑 14/14，`evidence/auth-token-2026-09-11.json`） |
-| cutover / rollback 计划 | 成文 + **演练通过**（2026-09-12 隔离副本全链路：迁移→切换→窗口写入→回退→读回，窗口数据零丢失；发现 normalized 对账副本缺 agent_id 等 4 项，见 `evidence/cutover-drill-2026-09-12.json`）。**剩老板评审** |
+| cutover / rollback 计划 | 成文 + 演练通过 + **已执行真实切换**（2026-09-12，方案 B 全量迁移：134 会话/170 消息入生产 PG，备份+校验和在案，启动器自动拉起 PG；turn 全链路（建会话带 agentId → Memory 上下文 → 按会话模型分发）验证通过；**当前聊天报错是 henryai 网关 deepseek-v4-flash 无健康账号（上游问题，与切换无关，json 形态同样失败）**；见 `evidence/cutover-executed-2026-09-12.json`） |

@@ -1,0 +1,44 @@
+{
+  "evidence": "R-020 promotion — REAL cutover executed (decision B: full migration)",
+  "date": "2026-09-12",
+  "decision": "Option B (full migration) approved by boss after: drill passed on isolated copies + real-data pre-flight passed (134 sessions / 170 messages / 1 personality version migrated with zero failures; PG-form read-back complete)",
+  "productionPosture": {
+    "pg": "PostgreSQL 17.11, data dir /Users/abab/Documents/ChatGPT/cochpia/pg-data (persistent), port 5433, TLSv1.3 + SCRAM-SHA-256 + hostssl-only, certs in repo .certs/ (365 days, gitignored)",
+    "lifecycle": "desktop launcher (Cochpia.command) auto-starts PG via pg_isready/pg_ctl before the app; stop-write window was clean (8787 not listening)",
+    "config": ".env: STORAGE_PROVIDER=postgres + DATABASE_URL (sslmode=verify-full + sslrootcert) + CORE_V0_AUTO_MIGRATE=true; rollback = remove that block + restart (json path untouched)"
+  },
+  "steps": [
+    {
+      "step": "P3 backup + sha256",
+      "result": "state.json.bak-20260912, checksums match (96422777…)"
+    },
+    {
+      "step": "P1 live-check against production PG",
+      "result": "tlsEnabled=true, TLSv1.3"
+    },
+    {
+      "step": "migration (real data)",
+      "result": "134 sessions / 170 messages / 1 personality version migrated, zero failures"
+    },
+    {
+      "step": "config switch + launcher update",
+      "result": ".env switched; launcher auto-starts PG"
+    },
+    {
+      "step": "end-to-end via launcher (headless)",
+      "result": "/api/ready 200; export read-back 134/170; cochpia_state row present; core_v0 tables auto-created (AUTO_MIGRATE)"
+    }
+  ],
+  "notes": [
+    "backup lives at server/data/state.json.bak-20260912 (gitignored)",
+    "CORE_V0_AUTO_MIGRATE=true left on (idempotent); can be flipped off now that the schema exists",
+    "one legacy session lacks agentId (133/134 have it) — that session will 500 if used in PG form until its agentId is backfilled",
+    "normalized tables are a reconciliation copy only (see cutover-drill findings D-2/D-3)",
+    "turn path fully verified on PG form: agent/session creation (agentId persisted), Memory context resolution, model dispatch by session provider (deepseek). The final smoke turn failed with MODEL_CONNECTION_FAILED — root cause: the henryai gateway reports 'model is not available for any verified account' for deepseek-v4-flash (an upstream account issue, same 503 seen the previous day; misclassified into the CONNECTION_FAILED fallback bucket). NOT a cutover regression — the identical call fails the same way on the json form."
+  ],
+  "verification": [
+    "create agent 201 / create session 201 (agentId persisted to jsonb)",
+    "turn reaches the model layer with session-scoped Memory context (no agent-identity error)",
+    "verification sessions cleaned from the jsonb afterwards (sessions back to 134, zero leftovers)"
+  ]
+}
