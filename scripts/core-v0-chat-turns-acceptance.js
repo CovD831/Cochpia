@@ -23,6 +23,7 @@ import {
   resetCoreV0ProductionSchemaCache
 } from '../server/core-v0-production.js';
 import { createMemoryModule, createMemoryModuleState } from '../server/memory-module.js';
+import { routeSurfaceViolations } from '../server/chat-route-contract.js';
 
 // Readiness now inspects columns as well as tables, so the controlled doubles
 // must answer information_schema.columns too. The required-column manifest is
@@ -458,21 +459,21 @@ async function productionModelBoundary() {
 async function rollbackContract() {
   const source = await readFile(resolve(repoRoot, 'server/index.js'), 'utf8');
   assert.match(source, /CORE_V0_ENABLED/);
-  // R-020 stage 3 deleted the legacy companion surface, so this case now pins
-  // the stronger contract (same precedent as A-11; mirrors
-  // stage3-cleanup.test.js C-2/C-3): the retired routes must be ABSENT and the
-  // turns route must be registered. The previous assertion required the legacy
-  // route to be present -- it rotted the moment stage 3 landed, and this script
-  // is not part of any regression run, so nothing caught it.
-  for (const removed of [
-    "app.post('/api/chat/stream'",
-    "app.post('/api/chat/regenerate'",
-    "app.post('/api/chat/retry'",
-    "app.get('/api/chat/stream/:runId'"
-  ]) {
-    assert.equal(source.includes(removed), false, `${removed} must be gone`);
-  }
-  assert.equal(source.includes("app.post('/api/chat/turns'"), true);
+  // R-020 stage 3 deleted the legacy companion surface. The route surface is
+  // defined once in server/chat-route-contract.js: this case and P-09 used to
+  // keep private copies of the literals and both rotted the moment stage 3
+  // landed, because neither harness is part of `npm test`.
+  const routeViolations = routeSurfaceViolations(source);
+  assert.deepEqual(
+    routeViolations.resurrected,
+    [],
+    `retired companion routes must be gone, found: ${routeViolations.resurrected.join(' | ')}`
+  );
+  assert.deepEqual(
+    routeViolations.missing,
+    [],
+    `required chat routes are missing: ${routeViolations.missing.join(' | ')}`
+  );
   const state = baseState();
   const service = createCoreV0TurnService({
     state,

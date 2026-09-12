@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import { detectModeSwitch, isWorkRouteMessage, MODE_SWITCH_SAMPLES } from './mode-switch.js';
+import { routeSurfaceViolations } from './chat-route-contract.js';
 
 const serverSource = () => readFile(new URL('./index.js', import.meta.url), 'utf8');
 
@@ -72,29 +73,18 @@ test('C-1: the legacy chat stream handler no longer exists', async () => {
 
 test('C-2: the legacy companion endpoints are not registered', async () => {
   const source = await serverSource();
-  for (const route of [
-    "app.post('/api/chat/stream'",
-    "app.post('/api/chat/regenerate'",
-    "app.post('/api/chat/retry'",
-    "app.post('/api/chat/cancel'",
-    "app.get('/api/chat/stream/:runId'"
-  ]) {
-    assert.equal(source.includes(route), false, `${route} must be gone`);
-  }
+  const { resurrected } = routeSurfaceViolations(source);
+  assert.deepEqual(
+    resurrected,
+    [],
+    `retired companion routes must be gone, found: ${resurrected.join(' | ')}`
+  );
 });
 
 test('C-3: the returning endpoints exist', async () => {
   const source = await serverSource();
-  for (const route of [
-    "app.post('/api/chat/turns'",
-    "app.post('/api/chat/work'",
-    "app.post('/api/chat/work/cancel'",
-    "app.get('/api/chat/work/:runId'",
-    "app.get('/api/chat/turns/:runId'",
-    "app.delete('/api/chat/turns/:runId'"
-  ]) {
-    assert.ok(source.includes(route), `${route} must be registered`);
-  }
+  const { missing } = routeSurfaceViolations(source);
+  assert.deepEqual(missing, [], `required chat routes are missing: ${missing.join(' | ')}`);
 });
 
 test('C-4: work mode keeps its engine and approval flow', async () => {
