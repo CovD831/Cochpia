@@ -1,32 +1,38 @@
 // Probe: is there a cross-agent retrieval leak that read-scope narrowing misses?
 //
-// VERDICT as of 2026-09-12: YES, the leak is real. Run it and read the output.
+// VERDICT as of 2026-09-12: the gap was real and is now CLOSED. This script
+// asserts the closed behaviour, so it fails loudly if the leak returns.
 //
-// Why it exists. R-020 stage 2a enforces agent isolation by narrowing the READ
+// Background. R-020 stage 2a enforces agent isolation by narrowing the READ
 // scope (`readScope = { agentId }`, injected server-side from the session) while
-// deliberately keeping actorType 'user'. That narrows the `relationship` and
-// `life` partitions (see agent-scope-2a.test.js R-2/R-3/L-3) and, by design,
-// never hides `user`-scope memories (R-4 -- governance and export need that).
+// deliberately keeping actorType 'user'. That narrows by OWNER on the
+// `relationship` and `life` partitions and, by design, never hides `user`-scope
+// memories (agent-scope-2a.test.js R-4 -- governance and export need that).
 //
-// The gap is that scope and provenance are different axes. An assertion that
-// merely LANDED on scope 'user' can still be something the user told agent A in
-// private. Nothing in the write path records where an assertion came from:
-// sanitizeMetadata's allow-list has no source_agent_id, so even the raw event
-// carries no provenance. Agent B therefore retrieves A's private material
-// verbatim, and readScope cannot tell the difference.
+// The gap was that scope and origin are different axes: an assertion that merely
+// LANDED on scope 'user' can still be something the user told agent A in private.
+// Measured on 2026-09-12, before the fix:
 //
-// Upstream (ksys404/Cochpia, commit 92225a6 "scope retrieval by agent to stop
-// cross-agent persona leak", 2026-09-04) fixed the same bug independently by
-// tagging raw events with metadata.source_agent_id at WRITE time and filtering
-// retrieval by provenance, with an explicit back-compat rule (untagged legacy
-// memories stay visible to every agent).
+//     { "rawEventMetadata": {}, "provenanceFieldPresent": false,
+//       "agentA_sees": true, "agentB_sees": true, "leak": true }
 //
-// This script is the reproducible evidence for that finding. It is not wired
-// into `npm test` on purpose: it asserts the CURRENT behaviour, and pinning a
-// leak as expected would be worse than not testing it. When the leak is fixed,
-// this script becomes the regression test -- flip the assertion at the bottom.
+// The fix (same shape as upstream ksys404/Cochpia 92225a6 "scope retrieval by
+// agent to stop cross-agent persona leak"):
 //
-// Run: node scripts/probe-agent-scope-leak.mjs
+//   1. memory-module.js recordEvent tags the raw event with
+//      metadata.source_agent_id, taken server-side from the resolved
+//      callerAgentId. It is deliberately NOT in the metadata allow-list, so a
+//      request body cannot forge it.
+//   2. memory-module.js canSee hides, in a narrowed read, any assertion whose
+//      tagged origin points at a different agent.
+//   3. Untagged origins never block. The pre-existing history carries no tag and
+//      hiding it would silently erase the user's own memories.
+//
+// Residual window: memories written before 2026-09-12 carry no tag and stay
+// visible to every agent, exactly as before. Closing that fully would need a
+// one-off backfill, which has not been done.
+//
+// Run: node scripts/probe-agent-scope-leak.mjs   (exits 1 if the leak returns)
 
 import { createMemoryModule, createMemoryModuleState } from '../server/memory-module.js';
 
@@ -83,23 +89,28 @@ const bundleFor = async ctx => {
 
 const asA = await bundleFor(userCtx('agent-a', { agentId: 'agent-a' }));
 const asB = await bundleFor(userCtx('agent-b', { agentId: 'agent-b' }));
+const governance = await bundleFor(userCtx('agent-a'));
 const visible = bundle => [...bundle.userProfile, ...bundle.relationshipProfile].some(c => c.includes('离职'));
 
 const rawEvent = (state.rawEvents || []).find(event => event.id === recorded.rawEventId);
 const report = {
-  promoted: created.memory.memoryId,
   rawEventMetadata: rawEvent?.metadata ?? null,
   provenanceFieldPresent: Object.hasOwn(rawEvent?.metadata ?? {}, 'source_agent_id'),
   agentA_sees: visible(asA),
   agentB_sees: visible(asB),
+  governanceViewSees: visible(governance),
   leak: visible(asB)
 };
 
 console.log(JSON.stringify(report, null, 2));
 
-// Current, deliberately unfixed behaviour: B does see it. Once provenance
-// tagging lands, this assertion flips and the script graduates into a test.
-if (!report.leak) {
-  console.error('UNEXPECTED: the leak appears to be closed. Move this probe into npm test as a regression.');
-  process.exitCode = 2;
+const problems = [];
+if (report.provenanceFieldPresent !== true) problems.push('the raw event carries no provenance tag');
+if (report.agentA_sees !== true) problems.push('agent A can no longer see its own material (over-narrowing)');
+if (report.leak !== false) problems.push("agent B still retrieves agent A's private material (LEAK)");
+if (report.governanceViewSees !== true) problems.push('the un-narrowed governance view lost visibility (over-narrowing)');
+
+if (problems.length) {
+  console.error(`REGRESSION:\n- ${problems.join('\n- ')}`);
+  process.exitCode = 1;
 }
