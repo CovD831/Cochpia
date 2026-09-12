@@ -29,3 +29,9 @@ artifacts/e2e-panels-server.log
 
 # openssl -CAserial residue left by TLS cert generation (see .certs/)
 .srl
+
+# Agent-run bookkeeping (team-runs manifests, deviation ledgers). Process
+# metadata for a session, not project content: the handoff files and
+# docs/rearchitecture/ already carry what the next session needs. Kept on
+# disk, not in history.
+.workbuddy/
