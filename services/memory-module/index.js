@@ -107,7 +107,38 @@ app.use((req, res, next) => {
 const contextFromRequest = req => {
   const tenantId = String(req.get('x-memory-tenant-id') || '').trim();
   const subjectUserId = String(req.get('x-memory-user-id') || req.get('x-subject-user-id') || '').trim();
-  const actorType = String(req.get('x-memory-actor-type') || 'agent').trim();
+  // L2 contract 2c section 4.4.B, revised 2026-09-12 (owner ruling: option (3),
+  // a dev-only opt-in double gate). The actor type is NOT read from
+  // `x-memory-actor-type` by default: the default stays the fixed literal
+  // 'agent', so any caller holding the service token cannot become the data
+  // subject -- a user actor takes actorId = subjectUserId (below), which passes
+  // hasGrant on its first line (server/memory-module.js:352) and skips the
+  // provenance filter (server/memory-module.js:406), the same leak the
+  // in-process read routes were fixed for.
+  //
+  // The header is honoured ONLY under the same double gate the in-process
+  // runtime uses (server/memory-module-runtime.js:78): NODE_ENV !== 'production'
+  // AND MEMORY_ALLOW_UNTRUSTED_ACTOR_HEADER === 'true'. The gate is deliberately
+  // its own variable -- NOT MEMORY_ALLOW_UNTRUSTED_AGENT_HEADERS, which governs
+  // the agent-id header (a different threat). Even with the gate open the value
+  // is validated against the actor enum before use, mirroring assertEnum at
+  // server/memory-module.js:243 (which every module method also applies through
+  // contextOf), so a header-derived value can never become an illegal actorType.
+  //
+  // Net effect: the escalation stays impossible from outside the deployment --
+  // it needs the deployer's explicit dev-only env opt-in -- and the default
+  // shape is byte-identical to the previous hardening. NOTE: a user actor is
+  // therefore reachable only from a verified service identity or this explicit
+  // opt-in, never from an untrusted header on its own.
+  const allowUntrustedActorHeader = process.env.NODE_ENV !== 'production' && process.env.MEMORY_ALLOW_UNTRUSTED_ACTOR_HEADER === 'true';
+  let actorType = 'agent';
+  if (allowUntrustedActorHeader) {
+    const requestedActorType = String(req.get('x-memory-actor-type') || '').trim();
+    if (requestedActorType) {
+      if (!['user', 'agent', 'system'].includes(requestedActorType)) throw new MemoryModuleError('INVALID_ACTOR_TYPE', 'Invalid actor_type');
+      actorType = requestedActorType;
+    }
+  }
   const callerAgentId = String(req.get('x-memory-agent-id') || req.get('x-caller-agent-id') || '').trim();
   if (!tenantId || !subjectUserId || !callerAgentId) throw new MemoryModuleError('MEMORY_CONTEXT_REQUIRED', 'Trusted tenant, subject user, and caller agent context are required', { status: 400 });
   return {

@@ -263,7 +263,13 @@ export function createMemoryModuleRuntime({
     router() {
       return createMemoryModuleRouter({
         memoryModuleForRequest: req => this.prepareForRequest(req),
-        contextFromRequest
+        contextFromRequest,
+        // L2 contract 2c section 4.3 (owner ruling B): THIS is the in-process
+        // deployment (server/index.js:187), where the actor is 'user' and the
+        // two read routes must narrow to the caller's own agent. The standalone
+        // service builds its own router (services/memory-module/index.js:180)
+        // and deliberately does not pass this flag.
+        narrowRead: true
       });
     }
   };

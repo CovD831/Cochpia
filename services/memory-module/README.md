@@ -17,6 +17,8 @@ Apply `server/memory-module-schema.sql` before serving traffic, or set `MEMORY_M
 
 The trusted API caller must provide `x-memory-tenant-id`, `x-memory-user-id`, and `x-memory-agent-id` after authenticating the end user. These headers are only trusted behind the service-token boundary; the public Cochpia API must derive them from its own authentication context and never forward client-controlled tenant/user fields.
 
+Actor type is fixed server-side to `agent` and is **not** read from `x-memory-actor-type`. A caller holding the service token therefore cannot downgrade itself to the data-subject actor, which would pass `hasGrant` on its first line and bypass the provenance filter. The one exception is an explicit, dev-only opt-in: setting `MEMORY_ALLOW_UNTRUSTED_ACTOR_HEADER=true` **and** running with `NODE_ENV !== 'production'` makes the service read `x-memory-actor-type` (validated against `user`/`agent`/`system`). Never enable it in a deployment — it exists so local smoke scripts can exercise the user-actor read path.
+
 The service does not expose PostgreSQL credentials or tables to callers. Retrieval, governance, and context-building all pass through the same policy checks as the in-process `/v1` adapter.
 
 During an expand/contract rollout, `MEMORY_MODULE_SUPPORTED_OUTBOX_SCHEMA_VERSIONS=1,2` can keep a worker compatible with the current and previous event schemas. Any other explicit schema version is dead-lettered before business processing with `UNSUPPORTED_OUTBOX_SCHEMA`.

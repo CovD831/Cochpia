@@ -34,9 +34,40 @@ function mutationInput(req) {
   return key ? { ...body, idempotency_key: key } : body;
 }
 
-export function createMemoryModuleRouter({ memoryModuleForRequest, contextFromRequest }) {
+export function createMemoryModuleRouter({ memoryModuleForRequest, contextFromRequest, narrowRead = false }) {
   if (typeof memoryModuleForRequest !== 'function' || typeof contextFromRequest !== 'function') throw new TypeError('Memory Module router requires memoryModuleForRequest and contextFromRequest');
   const router = express.Router();
+  // L2 contract 2c section 4.3 + 4.4.A (2026-09-12, owner ruling B). The three
+  // generic read routes below used to carry a callerAgentId without ever
+  // deriving a readScope. In the in-process deployment (server/index.js:187)
+  // the actor resolves to 'user' (memory-module-runtime.js:80 -- only a service
+  // identity makes it 'agent'), and a user actor passes hasGrant on its first
+  // line (memory-module.js:352). So readScope is the ONLY narrowing instrument
+  // there, and its absence skips the entire provenance filter
+  // (memory-module.js:406): agent B could retrieve what the user confided to
+  // agent A. Reproduced through this router before the fix.
+  //
+  // Section 4.4.A added `GET /memories` to the ruling: the same document cited
+  // this file as `:55-57` in one place and `:56-57` in another, and `:55` (the
+  // list/`memory.list` route) is structurally identical to its two neighbours.
+  //
+  // `narrowRead` is opt-in, and only the in-process runtime sets it
+  // (memory-module-runtime.js `router()`). Two deliberate non-choices:
+  //
+  //   - It is NOT inferred inside `run()`. `run()` is shared by every route, so
+  //     narrowing there would also reach the write routes (/events, POST
+  //     /memories, /sessions, /access-grants), governance (/governance/*) and
+  //     every mutation route -- a semantic change the ruling does not cover.
+  //   - It is NOT enabled for the standalone service
+  //     (services/memory-module/index.js:180), whose default actor is 'agent'
+  //     and which the ruling left as-is (contract section 4.3 row 1).
+  //
+  // The injected scope only ever subtracts visibility (I-12) and never touches
+  // actorType (I-11): a missing callerAgentId, or an already-present readScope,
+  // returns the context untouched.
+  const readContext = context => (narrowRead && context?.callerAgentId && !context.readScope)
+    ? { ...context, readScope: { agentId: context.callerAgentId } }
+    : context;
   const run = (handler, { status = 200 } = {}) => async (req, res) => {
     const requestId = req.requestId || randomUUID();
     try {
@@ -52,9 +83,10 @@ export function createMemoryModuleRouter({ memoryModuleForRequest, contextFromRe
   router.post('/sessions', run((memory, context, req) => memory.createSession(context, mutationInput(req)), { status: 201 }));
   router.post('/access-grants', run((memory, context, req) => memory.grantUserScope(context, mutationInput(req)), { status: 201 }));
   router.post('/memories', run((memory, context, req) => memory.hold(context, mutationInput(req)), { status: 201 }));
-  router.get('/memories', run((memory, context, req) => memory.list(context, { ...bodyOrQuery(req), returnPage: true })));
-  router.post('/retrieve', run((memory, context, req) => (memory.retrieveAsync || memory.retrieve).call(memory, context, req.body || {})));
-  router.post('/context-bundles', run((memory, context, req) => (memory.contextBundleAsync || memory.contextBundle).call(memory, context, req.body || {})));
+  // The three read routes that go through `readContext` (contract 2c 4.3 + 4.4.A).
+  router.get('/memories', run((memory, context, req) => memory.list(readContext(context), { ...bodyOrQuery(req), returnPage: true })));
+  router.post('/retrieve', run((memory, context, req) => (memory.retrieveAsync || memory.retrieve).call(memory, readContext(context), req.body || {})));
+  router.post('/context-bundles', run((memory, context, req) => (memory.contextBundleAsync || memory.contextBundle).call(memory, readContext(context), req.body || {})));
   router.get('/confirmations', run((memory, context, req) => memory.listConfirmations(context, { ...(req.query || {}), returnPage: true })));
   router.get('/deletion-operations/:id', run((memory, context, req) => {
     const operation = memory.getDeletionOperation(context, req.params.id);
