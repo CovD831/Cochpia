@@ -22,3 +22,10 @@ scripts/eval-progress.log
 artifacts/e2e-server.log
 artifacts/e2e-panels-server.log
 .certs/
+
+# Env backups carry secrets; they are rollback aids, not repo content
+# (.env itself is ignored near the top of this file)
+.env.bak*
+
+# openssl -CAserial residue left by TLS cert generation (see .certs/)
+.srl
