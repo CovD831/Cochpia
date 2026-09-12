@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -88,6 +89,15 @@ def main():
         "MOCK_REPLY_TEXT": REPLY_TEXT,
         "MOCK_STREAM_DELAY_MS": "260",
     })
+    # With STORAGE_PROVIDER=json the store writes <repo>/server/data/state.json
+    # by default (server/store.js:9-10). That file is the pre-cutover rollback
+    # and reconciliation copy, so an unguarded run silently overwrites it with
+    # test data. Default to a throwaway directory; an explicit COCHPIA_DATA_DIR
+    # in the caller's environment still wins.
+    if not env.get("COCHPIA_DATA_DIR"):
+        run_data_dir = Path(tempfile.mkdtemp(prefix="cochpia-e2e-acceptance-"))
+        env["COCHPIA_DATA_DIR"] = str(run_data_dir)
+        print(f"isolated COCHPIA_DATA_DIR={run_data_dir}", flush=True)
     log_path = REPO / "artifacts" / "e2e-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("w")

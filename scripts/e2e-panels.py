@@ -22,6 +22,8 @@ initial no-op edit that failed to remove it is why it looked unfixable.
 
 KNOWN FAILURE (1 of 8): P8 导出
 -------------------------------
+[STALE as of 2026-09-13 -- kept for the record, see the UPDATE note below.]
+
 The export click runs but never emits a download event, even targeting
 `button:has-text('导出数据'):visible` directly with the default actionability
 wait. A standalone probe doing the identical navigation and click DOES produce
@@ -29,12 +31,20 @@ wait. A standalone probe doing the identical navigation and click DOES produce
 check drives the page -- likely download-event plumbing rather than the button.
 It stays red until diagnosed with a probe; it is not skipped, so the exit code
 keeps telling the truth. Do not delete the check to make the suite green.
+
+UPDATE 2026-09-13: P8 passes. Running the suite 9/9 required only
+`python -m playwright install chromium`; the earlier red was a missing browser
+binary, not a defect in the export or in this check. The original diagnosis
+above ("download-event plumbing") was therefore wrong -- the environment was
+never in a state where the question could be asked. Nothing in this file was
+changed to make it pass.
 """
 
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -294,6 +304,15 @@ def main():
         "MOCK_REPLY_TEXT": "探针回复",
         "MOCK_STREAM_DELAY_MS": "120",
     })
+    # With STORAGE_PROVIDER=json the store writes <repo>/server/data/state.json
+    # by default (server/store.js:9-10). That file is the pre-cutover rollback
+    # and reconciliation copy, so an unguarded run silently overwrites it with
+    # test data. Default to a throwaway directory; an explicit COCHPIA_DATA_DIR
+    # in the caller's environment still wins.
+    if not env.get("COCHPIA_DATA_DIR"):
+        run_data_dir = Path(tempfile.mkdtemp(prefix="cochpia-e2e-panels-"))
+        env["COCHPIA_DATA_DIR"] = str(run_data_dir)
+        print(f"isolated COCHPIA_DATA_DIR={run_data_dir}", flush=True)
     log_path = REPO / "artifacts" / "e2e-panels-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("w")
