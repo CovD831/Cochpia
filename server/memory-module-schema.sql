@@ -143,7 +143,7 @@ END $$;
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'memory_assertions_current_version_fk'
+    SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'memory_assertions_current_version_fk'
   ) THEN
     ALTER TABLE memory_assertions
       ADD CONSTRAINT memory_assertions_current_version_fk
@@ -682,104 +682,104 @@ ALTER TABLE current_state_sources ALTER COLUMN user_id SET NOT NULL;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'raw_events_subject_key') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'raw_events_subject_key') THEN
     ALTER TABLE raw_events ADD CONSTRAINT raw_events_subject_key UNIQUE (tenant_id, id, user_id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memory_assertions_subject_key') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'memory_assertions_subject_key') THEN
     ALTER TABLE memory_assertions ADD CONSTRAINT memory_assertions_subject_key UNIQUE (tenant_id, id, user_id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_snapshots_subject_key') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_snapshots_subject_key') THEN
     ALTER TABLE profile_snapshots ADD CONSTRAINT profile_snapshots_subject_key UNIQUE (tenant_id, id, user_id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_projections_subject_key') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_projections_subject_key') THEN
     ALTER TABLE profile_projections ADD CONSTRAINT profile_projections_subject_key UNIQUE (tenant_id, id, user_id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'current_states_subject_key') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'current_states_subject_key') THEN
     ALTER TABLE current_states ADD CONSTRAINT current_states_subject_key UNIQUE (tenant_id, id, user_id);
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'raw_events_session_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'raw_events_session_subject_fk') THEN
     ALTER TABLE raw_events ADD CONSTRAINT raw_events_session_subject_fk
       FOREIGN KEY (tenant_id, user_id, session_id) REFERENCES memory_sessions (tenant_id, user_id, id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'memory_assertions_session_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'memory_assertions_session_subject_fk') THEN
     ALTER TABLE memory_assertions ADD CONSTRAINT memory_assertions_session_subject_fk
       FOREIGN KEY (tenant_id, user_id, session_id) REFERENCES memory_sessions (tenant_id, user_id, id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_snapshots_session_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_snapshots_session_subject_fk') THEN
     ALTER TABLE profile_snapshots ADD CONSTRAINT profile_snapshots_session_subject_fk
       FOREIGN KEY (tenant_id, user_id, session_id) REFERENCES memory_sessions (tenant_id, user_id, id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'index_documents_session_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'index_documents_session_subject_fk') THEN
     ALTER TABLE index_documents ADD CONSTRAINT index_documents_session_subject_fk
       FOREIGN KEY (tenant_id, user_id, session_id) REFERENCES memory_sessions (tenant_id, user_id, id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'episodes_session_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'episodes_session_subject_fk') THEN
     ALTER TABLE episodes ADD CONSTRAINT episodes_session_subject_fk
       FOREIGN KEY (tenant_id, user_id, session_id) REFERENCES memory_sessions (tenant_id, user_id, id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'current_states_session_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'current_states_session_subject_fk') THEN
     ALTER TABLE current_states ADD CONSTRAINT current_states_session_subject_fk
       FOREIGN KEY (tenant_id, user_id, session_id) REFERENCES memory_sessions (tenant_id, user_id, id) ON DELETE CASCADE;
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_snapshot_items_snapshot_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_snapshot_items_snapshot_subject_fk') THEN
     ALTER TABLE profile_snapshot_items ADD CONSTRAINT profile_snapshot_items_snapshot_subject_fk
       FOREIGN KEY (tenant_id, snapshot_id, user_id) REFERENCES profile_snapshots (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_snapshot_items_assertion_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_snapshot_items_assertion_subject_fk') THEN
     ALTER TABLE profile_snapshot_items ADD CONSTRAINT profile_snapshot_items_assertion_subject_fk
       FOREIGN KEY (tenant_id, assertion_id, user_id) REFERENCES memory_assertions (tenant_id, id, user_id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_snapshot_items_version_assertion_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_snapshot_items_version_assertion_fk') THEN
     ALTER TABLE profile_snapshot_items ADD CONSTRAINT profile_snapshot_items_version_assertion_fk
       FOREIGN KEY (tenant_id, assertion_id, version_id) REFERENCES assertion_versions (tenant_id, assertion_id, id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_projection_items_projection_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_projection_items_projection_subject_fk') THEN
     ALTER TABLE profile_projection_items ADD CONSTRAINT profile_projection_items_projection_subject_fk
       FOREIGN KEY (tenant_id, projection_id, user_id) REFERENCES profile_projections (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_projection_items_assertion_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_projection_items_assertion_subject_fk') THEN
     ALTER TABLE profile_projection_items ADD CONSTRAINT profile_projection_items_assertion_subject_fk
       FOREIGN KEY (tenant_id, assertion_id, user_id) REFERENCES memory_assertions (tenant_id, id, user_id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_projection_items_version_assertion_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_projection_items_version_assertion_fk') THEN
     ALTER TABLE profile_projection_items ADD CONSTRAINT profile_projection_items_version_assertion_fk
       FOREIGN KEY (tenant_id, assertion_id, version_id) REFERENCES assertion_versions (tenant_id, assertion_id, id);
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_projection_sources_projection_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_projection_sources_projection_subject_fk') THEN
     ALTER TABLE profile_projection_sources ADD CONSTRAINT profile_projection_sources_projection_subject_fk
       FOREIGN KEY (tenant_id, projection_id, user_id) REFERENCES profile_projections (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_projection_sources_assertion_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_projection_sources_assertion_subject_fk') THEN
     ALTER TABLE profile_projection_sources ADD CONSTRAINT profile_projection_sources_assertion_subject_fk
       FOREIGN KEY (tenant_id, assertion_id, user_id) REFERENCES memory_assertions (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'profile_projection_sources_version_assertion_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'profile_projection_sources_version_assertion_fk') THEN
     ALTER TABLE profile_projection_sources ADD CONSTRAINT profile_projection_sources_version_assertion_fk
       FOREIGN KEY (tenant_id, assertion_id, version_id) REFERENCES assertion_versions (tenant_id, assertion_id, id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'current_state_sources_state_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'current_state_sources_state_subject_fk') THEN
     ALTER TABLE current_state_sources ADD CONSTRAINT current_state_sources_state_subject_fk
       FOREIGN KEY (tenant_id, current_state_id, user_id) REFERENCES current_states (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'current_state_sources_raw_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'current_state_sources_raw_subject_fk') THEN
     ALTER TABLE current_state_sources ADD CONSTRAINT current_state_sources_raw_subject_fk
       FOREIGN KEY (tenant_id, raw_event_id, user_id) REFERENCES raw_events (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'confirmation_candidate_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'confirmation_candidate_subject_fk') THEN
     ALTER TABLE confirmation_requests ADD CONSTRAINT confirmation_candidate_subject_fk
       FOREIGN KEY (tenant_id, candidate_assertion_id, user_id) REFERENCES memory_assertions (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'confirmation_candidate_version_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'confirmation_candidate_version_fk') THEN
     ALTER TABLE confirmation_requests ADD CONSTRAINT confirmation_candidate_version_fk
       FOREIGN KEY (tenant_id, candidate_assertion_id, candidate_version_id) REFERENCES assertion_versions (tenant_id, assertion_id, id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pin_assertion_subject_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'pin_assertion_subject_fk') THEN
     ALTER TABLE pins ADD CONSTRAINT pin_assertion_subject_fk
       FOREIGN KEY (tenant_id, assertion_id, user_id) REFERENCES memory_assertions (tenant_id, id, user_id) ON DELETE CASCADE;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pin_version_assertion_fk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE n.nspname = current_schema() AND c.conname = 'pin_version_assertion_fk') THEN
     ALTER TABLE pins ADD CONSTRAINT pin_version_assertion_fk
       FOREIGN KEY (tenant_id, assertion_id, pinned_version_id) REFERENCES assertion_versions (tenant_id, assertion_id, id);
   END IF;
