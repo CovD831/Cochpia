@@ -663,14 +663,34 @@ async function runLive(config, fixture) {
       ? await recorder.reconcile({
         repairAttemptId: gateRepair.repair_attempt_id,
         receiptLookup: async ({ repair }) => {
+          // The recorder writes whatever status we hand back straight into
+          // core_v0_repair_attempts.external_receipt_status, whose domain is
+          // unknown | pending | completed | failed (validateReceiptStatus in
+          // server/core-v0-postgres.js). The Memory side speaks its own
+          // vocabulary (it reports 'not_found' for a missing receipt), so the
+          // status must be normalised at this boundary. Anything not
+          // representable in the Core domain means "no authoritative receipt
+          // yet", i.e. 'unknown' -- returning it raw makes reconcile throw
+          // REPAIR_METADATA_INVALID (2026-09-12, twice).
+          const coreReceiptStatuses = new Set(['unknown', 'pending', 'completed', 'failed']);
+          const toCoreReceiptStatus = value => {
+            const normalized = String(value || '').toLowerCase();
+            if (coreReceiptStatuses.has(normalized)) return normalized;
+            if (String(process.env.CORE_V0_LIVE_DEBUG || '').toLowerCase() === 'true') {
+              console.error(JSON.stringify({ event: 'live_receipt_status_normalised', from: normalized || null, to: 'unknown' }));
+            }
+            return 'unknown';
+          };
           const row = (await scopedPool.query('SELECT event_id,source_revision FROM core_v0_turn_admissions WHERE tenant_id=$1 AND subject_user_id=$2 AND turn_id=$3', [context.tenantId, context.subjectUserId, repair.turn_id])).rows[0];
-          if (!row) return { authoritative: true, status: 'not_found', turnId: repair.turn_id };
+          // An absent admission row means there is no authoritative receipt yet;
+          // the absence itself is authoritative, so the flag stays true.
+          if (!row) return { authoritative: true, status: 'unknown', turnId: repair.turn_id };
           const receipt = await memoryPort.getRawEventReceipt({ eventId: row.event_id, sourceRevision: row.source_revision });
           const payload = receipt?.receipt || receipt;
           return {
             ...receipt,
             authoritative: receipt?.authoritative === true,
-            status: receipt?.status || payload?.status || 'unknown',
+            status: toCoreReceiptStatus(receipt?.status || payload?.status),
             receiptId: receipt?.receiptId || payload?.receiptId || payload?.rawEventId || receipt?.rawEventId || null,
             turnId: repair.turn_id
           };
