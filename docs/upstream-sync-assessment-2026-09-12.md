@@ -93,8 +93,28 @@ workflows、music MCP、xiaohongshu tools；客户端新增 WorkbenchPage。
 **可吸收点（不需合并即可做）**：把「写入侧 `source_agent_id` 溯源 + 检索期按来源过滤」
 作为 R-020 记忆隔离的补强。理由：**单靠读侧 scope 收窄，一条本属 A agent 的断言若
 在 topic 上被 B 命中，仍可能进入 B 的上下文**；有来源标记才能从数据面把这条路堵死。
-低成本验证路径：在本仓构造「A agent 写入 → B agent 同 topic 查询」的对照用例，
-看现有 `readScope` 是否已能挡住；挡不住再立项补打标。
+
+### 已验证：假设成立，缺口是真的（2026-09-12）
+
+对照用例已落地并可复跑：`scripts/probe-agent-scope-leak.mjs`。走 drain 的真实路径
+（raw event → candidate → user actor promote），断言落成 `scopeType='user'`，然后让
+agent B 带 `readScope = { agentId: 'agent-b' }` 检索：
+
+```json
+{ "rawEventMetadata": {}, "provenanceFieldPresent": false,
+  "agentA_sees": true, "agentB_sees": true, "leak": true }
+```
+
+- **B 检索到了 A 私聊产生的断言**，readScope 没有挡住。
+- **写入侧无任何来源标记**：`rawEventMetadata` 为空，`sanitizeMetadata` 的白名单里
+  没有 `source_agent_id` —— 今天连「打标」这个动作都做不到。
+- 机制：`readScope` 只收窄 `relationship` / `life` 域；`user` 域按设计对任何 scope 可见
+  （`agent-scope-2a.test.js` R-4 明确要求如此，因为治理/导出视图需要看全）。
+  **作用域与来源是两个维度**，2a 只处理了前者。
+
+结论：这不是 2a 的实现 bug，而是**范围缺口**——写入侧溯源需要单独立项，不能算作
+promotion 的收尾项。在补上之前，任何「记忆已按 agent 隔离」的表述都应限定为
+「relationship / life 域已隔离，user 域未按来源隔离」。
 
 ## 4. 结论与建议路径
 
