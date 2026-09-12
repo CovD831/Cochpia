@@ -326,12 +326,23 @@ CREATE TABLE IF NOT EXISTS index_documents (
 CREATE INDEX IF NOT EXISTS index_documents_filter_idx ON index_documents (tenant_id, user_id, scope_type, index_status, sensitivity);
 
 -- Native lexical retrieval must not fall back to a full table scan at scale.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+--
+-- The extension target and the operator class are schema-qualified on purpose.
+-- When this file is applied through a schema-scoped pool (see
+-- scripts/core-v0-postgres-live-acceptance.js, which pins search_path to its
+-- isolated schema), an unqualified CREATE EXTENSION is a no-op if pg_trgm
+-- already exists in "public", and an unqualified `gin_trgm_ops` then cannot be
+-- resolved -> SQLSTATE 42704, which blocked the live acceptance run on
+-- 2026-09-12. Do not "fix" this by widening search_path to include public:
+-- public holds the production core_v0_* / memory_* tables, so a widened path
+-- would let CREATE TABLE IF NOT EXISTS resolve to them and the isolated run
+-- would silently read and write production rows.
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;
 CREATE INDEX IF NOT EXISTS index_documents_search_tsv_idx
   ON index_documents USING gin (to_tsvector('simple', search_text))
   WHERE index_status = 'active';
 CREATE INDEX IF NOT EXISTS index_documents_search_trgm_idx
-  ON index_documents USING gin (search_text gin_trgm_ops)
+  ON index_documents USING gin (search_text public.gin_trgm_ops)
   WHERE index_status = 'active';
 
 CREATE TABLE IF NOT EXISTS episodes (
