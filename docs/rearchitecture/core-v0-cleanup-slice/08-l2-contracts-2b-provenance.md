@@ -106,9 +106,17 @@ visible  ⟺  ∀ source ∈ sources(assertion) :  ¬tagged(source) ∨ source =
 
 ## 7. 残余风险（明确列出，不隐瞒）
 
+> **2026-09-12 追加勘定**：第 1 条所述回填动作**经实测关闭**——无对象可回填
+> （两处 assertion 表均为 0），且"当时只有一个 agent"的假定**双向皆被证伪**。
+> 完整实测见 `core-v0-chat-turns-postgres-slice/promotion-statement.md` §8。
+> 下列原文保留以存历史。
+
 1. **历史数据窗口**：2026-09-12 之前写入的记忆无标记，仍对全部 agent 可见。
    要完全闭合需一次性回填（`source_agent_id` 在语义上不可事后推导——除非假定
    "当时只会有一个 agent"）。**未做回填。**
+   → **勘定后关闭**：回填目标集为空（历史断言数为 0）；历史 raw event 无 agent 维度来源
+   （`metadata.producer` 恒为组件名 `companion-core`）；窗口约 18 小时且活动全部来自
+   验收/探针。**隔离机制尚未被历史数据考验过**——这与"缺陷不存在"是两回事。
 2. **多来源断言保守处理**：同时源自 A 与 B 的断言会对 A、B **都**隐藏。
    更细的做法是逐来源归属，但会显著提高复杂度，暂不做。
 3. **只看当前版本**：若断言的当前版本无 `raw_event` 来源（例如纯手工修正版本），
@@ -116,6 +124,12 @@ visible  ⟺  ∀ source ∈ sources(assertion) :  ¬tagged(source) ∨ source =
    现在是什么"，与检索语义一致。
 4. **`relationship` / `life` 域叠加**：这两域已有 C-7 的拥有者判定，C-15 会再叠一层。
    正常情况下不会触发（拥有者与来源一致），但二者不一致时以更严格者为准。
+5. **chat 路径未端到端实测**（2026-09-12 勘定时发现）→ **已于同日补验**，见
+   `09-l2-contracts-2c-readscope-e2e.md`。结论：`callerAgentId → readScope` 的推导在
+   **三处**注入点均正确（原文档只列两处，第三处为 `core-v0.js:363`），反事实核验成立
+   （6 个定向变异全部使对应用例变红，无交叉污染）。
+   **证据边界**：验证止于 `contextFromRequest`；其上游 `server/index.js:95-105
+   resolveAgentIdForRequest` 仍是桩、全仓无覆盖，**该链路未验**。
 
 ## 8. 被拒绝的方案
 

@@ -1,0 +1,99 @@
+{
+  "evidence": "Historical provenance-backfill window — empirically closed (no assertions to backfill)",
+  "date": "2026-09-12",
+  "question": "Can the pre-2026-09-12 memory be backfilled with source_agent_id, on the assumption that only one agent was writing?",
+  "verdict": "CLOSED — nothing to backfill. The assumption is falsified in both directions. The mechanism is NOT proven unnecessary; it is simply untested by historical data (the target set is empty).",
+  "gate": {
+    "GATE": "PASS",
+    "COUNTERFACTUAL": "ESTABLISHED",
+    "AUDIT": "DONE",
+    "DEVIATION": "Main orchestrator first measured the frozen pre-cutover json snapshot instead of the runtime surface; evidence-auditor re-measured against PostgreSQL. Conclusion unchanged, evidence path corrected."
+  },
+
+  "method": {
+    "primaryDegraded": {
+      "path": "server/data/state.json",
+      "mtime": "2026-09-11T21:12 local",
+      "assessment": "STALE. Predates the 2b implementation (server/memory-module.js, 2026-09-12T14:20) and the PostgreSQL cutover (2026-09-12). It is the frozen pre-cutover snapshot; state.json.bak-20260912 accompanies it. Measuring this file to prove 'the production database has no assertions' is methodologically invalid.",
+      "note": "This measurement was performed first and produced the same 0-counts by coincidence, not by method. Recorded here so the correction is auditable."
+    },
+    "authoritative": {
+      "surface": "PostgreSQL 17.11 @127.0.0.1:5433, database cochpia",
+      "why": "Runtime read/write surface per the documented architecture fact: the single-row cochpia_state jsonb is the runtime face; normalised tables are a reconciliation copy.",
+      "row_updated_at": "2026-09-11T18:36Z (= 2026-09-12T02:36 local, the cutover write). No writes since.",
+      "caveat": "This is 'as of cutover with no subsequent writes', not a live probe. Stated because the distinction matters."
+    }
+  },
+
+  "measured": {
+    "pg": {
+      "memory_assertions": 0,
+      "assertion_versions": 0,
+      "assertion_version_sources": 0,
+      "memory_scope_grants": 0,
+      "raw_events": 127,
+      "raw_events_with_source_agent_id": 0,
+      "raw_events_with_empty_metadata": 0,
+      "metadata_producer_distribution": { "companion-core": 127 },
+      "metadata_producer_interpretation": "Component name, NOT an agent identity. No agent-dimension provenance exists anywhere in the historical raw events."
+    },
+    "json_snapshot_agreeing": {
+      "assertions": 0,
+      "assertionVersionSources": 0,
+      "scopeGrants": 0,
+      "rawEvents": 127,
+      "memoryModuleSessions": 82,
+      "note": "Same counts as PG; used only as corroboration, not as the basis of the verdict."
+    },
+    "window": {
+      "memory_data_from": "2026-09-10T18:41Z",
+      "memory_data_to": "2026-09-11T12:53Z",
+      "duration_hours": 18,
+      "agents_total": 87,
+      "agents_by_name": { "验收助手": 49, "面板验收": 22, "探针": 15, "探针A": 1 },
+      "agents_createdat_range": "2026-09-10T18:30:54Z ~ 2026-09-11T12:52:59Z",
+      "top_level_sessions": 134,
+      "top_level_sessions_distinct_agentId": 51,
+      "top_level_sessions_dominant_agentId_share": "555c643d-97e0-49f7-9f07-759c74e2aec7 = 84",
+      "memory_callerAgentId_distinct": 42,
+      "important_scope_note": "Top-level sessions date back to 2026-09-06, but they produced NO memory-module data. The entire 'pre-2026-09-12 history' is this 18-hour block of acceptance/probe activity."
+    }
+  },
+
+  "assumption_falsified": {
+    "claim_under_test": "'Only one agent was writing during that period', the sole basis on which a backfill could be justified.",
+    "direction_1_literal": "FALSE — 42 distinct callerAgentId, 51 distinct sessions.agentId, 87 agent records in the window.",
+    "direction_2_attributable": "FALSE — raw events carry no agent dimension (producer is a component name), and the 87 agent records are largely indistinguishable by name (49x '验收助手', 22x '面板验收'), all created inside one 18-hour span.",
+    "shape_inference": "Consistent with an acceptance/probe harness repeatedly recreating agents, not with genuine concurrent multi-agent writing.",
+    "inference_confidence": "REASONABLE BUT NOT FULLY PROVEN — the recreation script was not traced line by line. Flagged as unverified."
+  },
+
+  "counterfactual": {
+    "status": "ESTABLISHED",
+    "method": "Directed mutation on a /tmp copy. No project file was modified.",
+    "results": [
+      { "mutation": "remove the C-15 read-side source filter", "observed": "agentB_sees=true, leak=true, exit 1" },
+      { "mutation": "remove the write-side tagging", "observed": "provenanceFieldPresent=false, leak=true" }
+    ],
+    "interpretation": "The 2b mechanism is live and effective. Leakage is real for untagged data; there is simply no untagged data to leak, because the assertion table is empty.",
+    "explicit_caution": "This must NOT be reported as 'the isolation problem is solved'. The correct meaning is: the isolation mechanism has not yet been exercised by historical data."
+  },
+
+  "consequence": {
+    "todo_closed": "The 'backfill historical provenance' item is CLOSED, not deferred. Leaving an unexecutable todo in the record is itself a form of documentation rot.",
+    "normalised_statement": "…memory isolation: relationship/life scopes are isolated by owner; new data is additionally isolated by origin (2b); historical data contains no assertions requiring origin isolation (assertion tables empty, historical raw events carry no agent origin, and all of it originated from acceptance/probe activity over an ~18-hour window).",
+    "forbidden_statement": "Do not state that the origin-isolation problem has disappeared.",
+    "forward_obligation": "Any future assertion must still be written through the C-13 tagging path, or the window described in promotion-statement §7 reappears in a form the instruments cannot detect."
+  },
+
+  "residual_uncertainty": [
+    "The harness-recreation shape inference is unverified (see above).",
+    "The two readScope injection points (server/chat-memory.js, server/core-v0-postgres.js) were NOT end-to-end tested. Verification was component-level probe plus P-0~P-5 unit regression only. Status: pending independent audit."
+  ],
+
+  "provenance": {
+    "measuredBy": "Main orchestrator (Han Chengyu) + independent re-measurement and counterfactual by evidence-auditor (Yan Chongwen)",
+    "independence": "The auditor re-measured against a different surface than the orchestrator used, and found the orchestrator's original surface invalid. Numbers agreed; method did not.",
+    "sourceBundle": "repo-main @ codex/core-v0-foundation 4c67144, working tree clean at measurement time"
+  }
+}
