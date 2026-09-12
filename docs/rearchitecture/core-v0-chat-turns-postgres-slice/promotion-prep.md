@@ -117,15 +117,59 @@ promotion-prep 自己在 09-11 就警告过「闸门脚本不在任何常规回�
 
 | 项 | 为什么没跑 |
 |---|---|
-| `acceptance:core-v0-postgres-live`（PG 端点 TLS live check） | **它用生产 `DATABASE_URL`（5433）建/删隔离 schema**。动生产库需老板明确点头，本次未执行 |
 | 双机 TLS 验收（`tls-lan`） | 需要第二台机器接同一热点 |
 | UI 聊天端到端 | 上游 henryai 网关 deepseek-v4-flash 无健康账号（`400 model_unavailable`），非本仓问题 |
 
+### 4.1 live 验收已重跑：**未通过**，两处失败均已定位（2026-09-12）
+
+老板点头后执行了两次（生产 `DATABASE_URL` @5433，隔离 schema，跑完自动 DROP；
+事后核实：无残留 `core_v0_live_*` schema，`public` 表数仍为 44，生产数据未被触碰）。
+完整记录见 `evidence/live-acceptance-attempt-2026-09-12.json`。
+
+1. **第一次 `42704`**——PG 日志：`operator class "gin_trgm_ops" does not exist for
+   access method "gin"`。root cause：`server/memory-module-schema.sql` 的
+   `CREATE EXTENSION IF NOT EXISTS pg_trgm` 在扩展**已存在于 `public`** 时被跳过，
+   而 `gin_trgm_ops` 未加 schema 限定，隔离 schema 里解析不到。**已修复**（扩展目标与
+   operator class 均加 `public.` 限定）。文件内同时注明**禁止**改用放宽 `search_path`
+   的绕法：`public` 有 44 张生产表（含 `core_v0_*`、`memory_*`），放宽后
+   `CREATE TABLE IF NOT EXISTS` 会解析到生产表，「隔离」运行将静默读写生产数据且报通过。
+2. **第二次 `REPAIR_METADATA_INVALID`**（说明第 1 处修复生效，前进到 repair 阶段）。
+   已定位为语义不一致：`scripts/core-v0-postgres-live-acceptance.js:667` 的
+   `receiptLookup` 查不到时返回 `status: 'not_found'`，而
+   `server/core-v0-postgres.js:686-690` 的 `validateReceiptStatus` 只接受
+   `unknown|pending|completed|failed`。**未修**——「receipt 状态域是否包含
+   `not_found`」属语义决策，留老板拍板。
+
+**同两次运行暴露的两处配置不一致（未修）**：
+
+- **L-01 在当前姿态下结构上不可达**：`live-acceptance.js:698` 要求
+  `authRequired && storagePostgres && supabaseConfigured`（即 `AUTH_MODE=required`
+  + `SUPABASE_URL`）。本部署**刻意**选 `AUTH_MODE=token` 单用户姿态 → L-01 恒为
+  `pending`（`AUTH_STORAGE_CONFIGURATION_REQUIRED`）。需要么给 L-01 写书面豁免
+  （说明 token 姿态已覆盖其意图），要么部署 Supabase。
+- **TLS 严格性检测看不见 URL 形式的配置**：`server/db-ssl.js` 只读 `DATABASE_SSL`
+  / `DATABASE_CA`，**不解析** `DATABASE_URL` 的 `sslmode`。本部署用
+  `sslmode=verify-full&sslrootcert=...`（实际连接确实严格校验），但检测器报
+  `sslConfiguration: configured_incomplete_or_non_strict` → 即便 AUTH 条件满足，
+  L-01 仍会卡在 `STRICT_TLS_CONFIGURATION_REQUIRED`。修法二选一：`.env` 补
+  `DATABASE_SSL=true` + `DATABASE_CA=<repo>/.certs/prod-pg-ca.pem`，或让检测器解析 URL。
+
+**对闸门结论的影响**：09-12 已重跑转绿的四组矩阵（fixture A-01~A-12、runtime
+14/14、PG P-01~P-09、回滚演练 P-10）不受影响；**L-01/L-02 这一对仍未取得有效证据**，
+原因是上述开放决策与姿态差异，**不以「pending」冒充通过**。
+
 ### 5. 剩余动作
 
-1. 老板确认后提交本批改动（闸门脚本修复 + 证据 + 本文档更新 + 上游同步评估）。
-2. 视需要重跑 `acceptance:core-v0-postgres-live` 刷新 PG 端点 TLS 证据。
-3. 合并两套 A-01~A-12 实现（建议项，非阻塞）。
+1. 老板确认后提交本批改动。
+2. **L-01/L-02 待决三项**：receipt 状态域是否纳入 `not_found`；L-01 的
+   `AUTH_MODE=required` + Supabase 要求是否书面豁免（本部署为 token 姿态）；
+   TLS 严格性检测是否改为解析 `DATABASE_URL` 的 `sslmode`。三项定完才能取得
+   live 证据，在此之前 L-01/L-02 不得标通过。
+3. **路由契约已抽成单一真源**：`server/chat-route-contract.js`，由
+   `server/stage3-cleanup.test.js` C-2/C-3（在 `npm test` 内，因此已纳入回归）、
+   A-12、P-09 三处共同引用，消除「三份手抄字面量」这一漂移源。
+   **两套 A-01~A-12 矩阵保持独立**——它们覆盖不同层（fixture 纯构造 vs 真 HTTP /
+   真 PG + worker），合并只会丢覆盖。
 4. 上游同步：见 `docs/upstream-sync-assessment-2026-09-12.md`（上游领先 17 提交，
-   建议 promotion 收尾后再 fast-forward `main`）。
+   建议 promotion 收尾后在 `main` 上 fast-forward）。
 

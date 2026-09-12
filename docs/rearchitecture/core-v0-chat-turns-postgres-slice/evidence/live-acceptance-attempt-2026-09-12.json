@@ -1,0 +1,60 @@
+{
+  "evidence": "live PG acceptance re-run attempt (R-003 / promotion gate) — did NOT pass",
+  "date": "2026-09-12",
+  "verdict": "failed",
+  "why": "Boss approved re-running the live PostgreSQL acceptance to refresh the PG-endpoint TLS evidence. It was executed twice against the production DATABASE_URL (5433) with an isolated schema, and it did not pass. Both failures are recorded here rather than smoothed over.",
+  "command": "CORE_V0_LIVE_ACCEPTANCE=true CORE_V0_LIVE_ENV=isolated node --env-file=.env scripts/core-v0-postgres-live-acceptance.js",
+  "productionSafety": {
+    "target": "production DATABASE_URL (cochpia @127.0.0.1:5433, sslmode=verify-full)",
+    "mechanism": "run creates a uniquely-named schema core_v0_live_<pid>_<ts>_<rand>, works only inside it, then DROPs it in cleanup",
+    "verifiedAfterwards": [
+      "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'core_v0_live%' -> empty (no leftover schema)",
+      "public table count unchanged at 44 (production tables untouched)"
+    ]
+  },
+  "run1": {
+    "code": "42704",
+    "schemaCreated": true,
+    "workersStarted": 0,
+    "rootCause": "postgres log: ERROR: operator class \"gin_trgm_ops\" does not exist for access method \"gin\"",
+    "explanation": "server/memory-module-schema.sql ran `CREATE EXTENSION IF NOT EXISTS pg_trgm` while search_path held only the isolated schema. pg_trgm already exists in public, so the statement is a no-op, and the unqualified gin_trgm_ops in the index clause is then unresolvable.",
+    "fixed": true,
+    "fix": "server/memory-module-schema.sql now uses `CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public` and `USING gin (search_text public.gin_trgm_ops)`.",
+    "rejectedFixAndWhy": "Widening search_path to `<schema>, public` also makes the error go away, but public holds 44 production tables including the core_v0_* and memory_* reconciliation copies. CREATE TABLE IF NOT EXISTS would then resolve to those existing tables and the 'isolated' run would silently read and write production rows, and would report a pass. The hazard is documented in the schema file so nobody re-introduces it."
+  },
+  "run2": {
+    "code": "REPAIR_METADATA_INVALID",
+    "note": "Progress past run 1, so the schema fix worked. Fails later, in the repair/reconcile stage.",
+    "diagnosis": "Semantic mismatch between two in-repo components: scripts/core-v0-postgres-live-acceptance.js:667 returns `{ status: 'not_found' }` from receiptLookup when the turn admission row is absent, while server/core-v0-postgres.js:686-690 validateReceiptStatus accepts only unknown | pending | completed | failed and throws REPAIR_METADATA_INVALID otherwise.",
+    "status": "NOT FIXED — open decision",
+    "options": [
+      "The live harness maps an absent receipt to `unknown` (the receipt status domain stays as-is), or",
+      "The receipt status domain gains `not_found` as an authoritative answer (the harness is right and the recorder is too narrow)."
+    ]
+  },
+  "configMismatchesExposed": [
+    {
+      "item": "L-01 is structurally unreachable in the chosen posture",
+      "detail": "live-acceptance.js:698 requires authConfigPass = authRequired && storagePostgres && supabaseConfigured, i.e. AUTH_MODE=required plus SUPABASE_URL. This deployment deliberately uses AUTH_MODE=token (single-user personal instance), so L-01 can only ever report pending with AUTH_STORAGE_CONFIGURATION_REQUIRED.",
+      "options": ["Record a written waiver that the token posture covers the intent of L-01, or", "Deploy Supabase and AUTH_MODE=required."]
+    },
+    {
+      "item": "The strict-TLS detector cannot see URL-form TLS configuration",
+      "detail": "server/db-ssl.js reads only DATABASE_SSL and DATABASE_CA; it does not parse sslmode from DATABASE_URL. This deployment configures TLS as sslmode=verify-full&sslrootcert=... in the URL (the live connection really is strictly verified), yet the run reports strictTlsConfigured=false / sslConfiguration=configured_incomplete_or_non_strict, which would also block L-01 with STRICT_TLS_CONFIGURATION_REQUIRED.",
+      "options": ["Add DATABASE_SSL=true and DATABASE_CA=<repo>/.certs/prod-pg-ca.pem to .env, or", "Teach the detector to honour sslmode/sslrootcert in DATABASE_URL."]
+    }
+  ],
+  "configSnapshotFromRun": {
+    "optedIn": true,
+    "isolatedEnvironment": true,
+    "databaseConfigured": true,
+    "databaseUrlValid": true,
+    "authRequired": false,
+    "storagePostgres": true,
+    "supabaseConfigured": false,
+    "strictTlsConfigured": false,
+    "sslError": null,
+    "sslConfiguration": "configured_incomplete_or_non_strict"
+  },
+  "whatThisMeansForTheGate": "The promotion gate items that were re-verified green on 2026-09-12 (fixture A-01~A-12, runtime P-01/P-02 + A-01~A-12, PG matrix P-01~P-09 and the rollback rehearsal P-10) are unaffected. The live L-01/L-02 pair remains unproven: L-02 is blocked by an open semantic decision, L-01 by posture. promotion-prep.md records this under '未重跑项' / 'rejection of a false pass'."
+}
