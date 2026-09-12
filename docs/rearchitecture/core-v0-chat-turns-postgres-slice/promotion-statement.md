@@ -67,3 +67,21 @@ R-020 阶段 2a 的 `readScope` 收窄只作用于 `relationship` / `life`；`us
 > **R-004 闸门满足：A-01~A-12 全过；R-003 live PostgreSQL L-02 passed；
 > Auth/TLS/context-spoofing 证据齐备；原子 writer cutover 与回滚计划已执行。
 > 其中 L-01 为书面豁免（单用户 token 姿态），记忆隔离限于 relationship / life 域。**
+
+## 7. 追加：限定 B 的变更（2026-09-12 同日，批准后）
+
+§3 的限定 B 在本文档获批后**当天即被部分解除**，特此追加，避免本文件过期：
+
+- **已闭合**：写入侧来源溯源（契约 `core-v0-cleanup-slice/08-l2-contracts-2b-provenance.md`）。
+  新写入的 raw event 由服务端打 `source_agent_id`（不可由请求体伪造），收窄读中按来源
+  过滤——agent B 不再能检索到用户只跟 agent A 说过的内容。实测：`scripts/probe-agent-scope-leak.mjs`
+  由 `leak: true` 转为 `leak: false`；回归 `server/agent-provenance.test.js`（P-0~P-5）。
+- **仍然存在的窗口**：**2026-09-12 之前**写入的记忆没有标记，按 C-16 兼容规则
+  仍对全部 agent 可见。**未做回填。** 因此"记忆已完整按 agent 隔离"的表述**仍然不成立**。
+
+修正后的规范表述（替代 §6 末段）：
+
+> ……其中 L-01 为书面豁免（单用户 token 姿态）；记忆隔离：`relationship` / `life` 域按
+> 拥有者隔离，**新数据**另按来源隔离（2b），**2026-09-12 之前的历史数据未按来源隔离**。
+
+本条为**收紧**变更（可见性只会减少），不需要重新批准；若日后要放宽，则必须重新批准。
