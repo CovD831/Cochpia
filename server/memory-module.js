@@ -363,6 +363,17 @@ function hasGrant(state, context, assertion, permission) {
     && (!grant.expiresAt || new Date(grant.expiresAt).getTime() > Date.now()));
 }
 
+// The agents that actually produced the material behind an assertion, read from
+// the raw events its current version was derived from. Empty for anything
+// written before provenance tagging existed (2026-09-12).
+function sourceAgentIdsForAssertion(state, assertion) {
+  const version = currentVersion(state, assertion);
+  if (!version) return [];
+  return (state.assertionVersionSources || [])
+    .filter(source => source.versionId === version.id && source.sourceType === 'raw_event')
+    .map(source => state.rawEvents?.find(event => event.id === source.sourceId)?.metadata?.source_agent_id || null);
+}
+
 function canSee(state, context, assertion, purpose, { allowGovernance = false } = {}) {
   if (!assertion || assertion.tenantId !== context.tenantId || assertion.userId !== context.subjectUserId) return false;
   if (!MEMORY_STATUSES.includes(assertion.status)) return false;
@@ -381,6 +392,21 @@ function canSee(state, context, assertion, purpose, { allowGovernance = false } 
   // the per-agent view can be enforced for that actor type.
   if (context.readScope && (assertion.scopeType === 'relationship' || assertion.scopeType === 'life')
     && assertion.relationshipAgentId !== context.readScope.agentId) return false;
+  // Provenance (2026-09-12): C-7 narrows by OWNER, which cannot help on shared
+  // scopes -- an assertion that merely landed on 'user' can still be something
+  // the user told another agent in private. Reproduced by
+  // scripts/probe-agent-scope-leak.mjs: agent B retrieved agent A's confided
+  // material verbatim. So in a narrowed read, an assertion whose tagged origin
+  // points at a different agent is hidden.
+  //
+  // Untagged origins never block. The pre-existing history carries no tag, and
+  // hiding it would silently erase the user's own memories. This matches the
+  // upstream rule (92225a6): an assertion is hidden only when every *tagged*
+  // source that disagrees with the reader is present.
+  if (context.readScope) {
+    const sources = sourceAgentIdsForAssertion(state, assertion);
+    if (sources.some(agentId => agentId && agentId !== context.readScope.agentId)) return false;
+  }
   return hasGrant(state, context, assertion, purposePermission(purpose));
 }
 
@@ -880,7 +906,13 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const eventRole = input.eventRole ?? input.event_role ?? 'user';
     const storageDirective = input.storageDirective ?? input.storage_directive ?? 'default';
     const sessionId = input.sessionId ?? input.session_id ?? context.sessionId ?? null;
-    const metadata = sanitizeMetadata(input.metadata);
+    // Provenance (2026-09-12): scope records WHERE a memory may be used, origin
+    // records WHO produced the material. They are different axes, and neither
+    // substitutes for the other -- see the C-7 note further down. The tag is
+    // written server-side from the resolved callerAgentId and is deliberately
+    // absent from the allow-list above, so a request body cannot forge it.
+    const metadata = { ...sanitizeMetadata(input.metadata) };
+    if (context.callerAgentId) metadata.source_agent_id = context.callerAgentId;
     const isStreamFinal = input.isStreamFinal ?? input.is_stream_final ?? true;
     assertEnum(contentType, allowedContentTypes, 'INVALID_CONTENT_TYPE', 'content_type');
     assertEnum(eventRole, allowedRoles, 'INVALID_EVENT_ROLE', 'event_role');
