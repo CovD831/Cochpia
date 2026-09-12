@@ -1,0 +1,41 @@
+{
+  "evidence": "L-01 gate waiver — AUTH_MODE=token single-user posture (boss decision, 2026-09-12)",
+  "date": "2026-09-12",
+  "waivedItem": "L-01 (R-003 live PostgreSQL promotion gate)",
+  "whatL01Requires": {
+    "source": "scripts/core-v0-postgres-live-acceptance.js:698,704-706",
+    "predicate": "authConfigPass = (AUTH_MODE === 'required') && storageProvider === 'postgres' && Boolean(SUPABASE_URL), AND strict TLS configured, AND database TLS active, AND the context-spoofing negative test passes",
+    "intent": "the service is only reachable by an authenticated identity, over verified TLS, and a forged service-context request is rejected"
+  },
+  "currentPosture": {
+    "AUTH_MODE": "token",
+    "COCHPIA_API_TOKEN": "present (64 hex chars), set in .env on 2026-09-12",
+    "SUPABASE_URL": "not configured",
+    "storageProvider": "postgres",
+    "strictTls": "now detected as configured after the 2026-09-12 db-ssl fix (sslmode=verify-full in DATABASE_URL)",
+    "databaseTlsActive": "verified — TLSv1.3, TLS_AES_256_GCM_SHA384, pg_stat_ssl.ssl = true"
+  },
+  "exactGap": "Exactly one predicate fails: authRequired && supabaseConfigured. Supabase multi-user auth is not deployed, so L-01 can only report pending in machine output. Every other part of L-01's intent is either satisfied or has an equivalent control.",
+  "whyWaived": [
+    "Boss decision (2026-09-11, evidence/auth-token-2026-09-11.json): this is a single-user personal instance. Supabase would add an external identity dependency serving no second user.",
+    "The security intent is covered by equivalent controls: every off-box request must present the shared token (sha256 + timingSafeEqual compare, captured in server/auth.js and the TLS edge); the loopback surface is trusted as the owner's own machine.",
+    "The credential path was exercised for real across two machines over TLS on 2026-09-11: 14/14 acceptance twice, including the negative case where an off-box request without a bearer token is rejected 401 AUTH_REQUIRED."
+  ],
+  "residualRisk": [
+    "Token mode is a single shared credential: no per-user identity, no per-user revocation and no per-user audit trail.",
+    "If the token leaks, off-box access is complete until rotation.",
+    "The loopback surface remains unauthenticated by design — any local process runs as the owner."
+  ],
+  "reviewTriggers": [
+    "A second real user appears -> switch to AUTH_MODE=required with Supabase, L-01 becomes achievable as written.",
+    "The service is ever exposed beyond the owner's own machine/trusted LAN -> re-evaluate before, not after.",
+    "Any need for per-user revocation or an access audit trail."
+  ],
+  "boundary": "This waiver does NOT mark L-01 as passed. Machine output keeps reporting L-01 as pending; this file is a human decision recorded next to it, and any promotion statement citing the gate must cite this waiver explicitly rather than claiming a green L-01.",
+  "recognition": {
+    "recognisedBy": "boss (owner)",
+    "date": "2026-09-12",
+    "howRecorded": "The waiver was presented with its scope, substitute controls, residual risk and review triggers; the owner answered \"可以\" in the same session. Recorded here so the decision is auditable rather than living in chat history.",
+    "effect": "Promotion may state the gate as 'L-02 passed + L-01 waived'. It may not state 'L-01 passed'. If any review trigger fires, this waiver is void and AUTH_MODE=required + Supabase must be deployed before L-01 can be cited at all."
+  }
+}

@@ -2,6 +2,7 @@
   "evidence": "live PG acceptance re-run attempt (R-003 / promotion gate) — did NOT pass",
   "date": "2026-09-12",
   "verdict": "failed",
+  "resolution": "SUPERSEDED LATER THE SAME DAY. All four defects found here were fixed and the harness then reached L-02 passed. Success output: evidence/live-acceptance-2026-09-12.json. This file is kept as the failure history, not as the current state.",
   "why": "Boss approved re-running the live PostgreSQL acceptance to refresh the PG-endpoint TLS evidence. It was executed twice against the production DATABASE_URL (5433) with an isolated schema, and it did not pass. Both failures are recorded here rather than smoothed over.",
   "command": "CORE_V0_LIVE_ACCEPTANCE=true CORE_V0_LIVE_ENV=isolated node --env-file=.env scripts/core-v0-postgres-live-acceptance.js",
   "productionSafety": {
@@ -26,7 +27,7 @@
     "code": "REPAIR_METADATA_INVALID",
     "note": "Progress past run 1, so the schema fix worked. Fails later, in the repair/reconcile stage.",
     "diagnosis": "Semantic mismatch between two in-repo components: scripts/core-v0-postgres-live-acceptance.js:667 returns `{ status: 'not_found' }` from receiptLookup when the turn admission row is absent, while server/core-v0-postgres.js:686-690 validateReceiptStatus accepts only unknown | pending | completed | failed and throws REPAIR_METADATA_INVALID otherwise.",
-    "status": "NOT FIXED — open decision",
+    "status": "RESOLVED 2026-09-12 — the harness now normalises the status at its boundary (Memory vocabulary -> Core domain); L-02 passes. See evidence/live-acceptance-2026-09-12.json",
     "options": [
       "The live harness maps an absent receipt to `unknown` (the receipt status domain stays as-is), or",
       "The receipt status domain gains `not_found` as an authoritative answer (the harness is right and the recorder is too narrow)."

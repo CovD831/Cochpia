@@ -1,0 +1,127 @@
+{
+  "package": "R-003-postgres-memoryport",
+  "fixture": "live-postgres-acceptance",
+  "mode": "live-postgresql-isolated-schema",
+  "status": "pending",
+  "config": {
+    "optedIn": true,
+    "isolatedEnvironment": true,
+    "databaseConfigured": true,
+    "databaseUrlValid": true,
+    "authRequired": false,
+    "storagePostgres": true,
+    "supabaseConfigured": false,
+    "strictTlsConfigured": true,
+    "sslError": null,
+    "sslConfiguration": "strict",
+    "databaseTlsActive": true,
+    "contextSpoofingPassed": true
+  },
+  "results": [
+    {
+      "id": "L-01",
+      "status": "pending",
+      "detail": "AUTH_STORAGE_CONFIGURATION_REQUIRED"
+    },
+    {
+      "id": "L-02",
+      "status": "passed",
+      "detail": "real PostgreSQL schema, two-process CAS, replay, gate and repair checks passed"
+    }
+  ],
+  "evidence": {
+    "schemaName": "core_v0_live_47119_1789190257990_ecf1d6c8",
+    "schemaCreated": true,
+    "schemaEvidence": {
+      "passed": true,
+      "columns": {
+        "passed": true,
+        "tableCount": 9,
+        "missing": []
+      },
+      "constraints": {
+        "passed": true,
+        "constraintCount": 34,
+        "indexCount": 22,
+        "missing": []
+      },
+      "memory": {
+        "passed": true,
+        "tableCount": 4,
+        "missing": []
+      }
+    },
+    "migrationRerun": true,
+    "workers": [
+      "worker-a",
+      "worker-b"
+    ],
+    "workerSchemaPass": true,
+    "workerInit": [
+      {
+        "worker": "worker-a",
+        "schemaInfo": {
+          "currentSchema": "core_v0_live_47119_1789190257990_ecf1d6c8",
+          "searchPath": [
+            "core_v0_live_47119_1789190257990_ecf1d6c8"
+          ]
+        }
+      },
+      {
+        "worker": "worker-b",
+        "schemaInfo": {
+          "currentSchema": "core_v0_live_47119_1789190257990_ecf1d6c8",
+          "searchPath": [
+            "core_v0_live_47119_1789190257990_ecf1d6c8"
+          ]
+        }
+      }
+    ],
+    "cas": {
+      "winnerCount": 1,
+      "loserCount": 1,
+      "loserError": "CORE_STORAGE_CONFLICT",
+      "persistedTurnCount": 1,
+      "winnerTurnId": "turn:live-worker-a",
+      "replayTurnId": "turn:live-worker-a",
+      "replayPass": true,
+      "changedReplayPass": true,
+      "memoryWritePass": true,
+      "memoryWriteError": null,
+      "memoryWriteResult": {
+        "status": "completed",
+        "rawEventIdPresent": true
+      },
+      "memoryEventId": "2cab23c1-6def-4772-b577-a3bd16863fc9"
+    },
+    "gate": {
+      "closeStatus": "timed_out",
+      "postCloseAdmission": "CORE_ADMISSION_CLOSED",
+      "drainedStatus": "drained",
+      "closeEpoch": 1,
+      "activeLeasesAfterDrill": 0,
+      "repairAttemptId": "repair:core-v0-live-gate-47119-4511b9e1:turn:live-worker-a:drain_timeout:1:1",
+      "repairStatus": "completed",
+      "externalReceiptStatus": "completed",
+      "externalReceiptId": "2cab23c1-6def-4772-b577-a3bd16863fc9",
+      "coreCommitId": "assistant:assistant:live-worker-a",
+      "repairPass": true,
+      "rollbackPolicy": "deferred_to_deployment"
+    },
+    "databaseTls": {
+      "available": true,
+      "active": true,
+      "version": "TLSv1.3",
+      "cipher": "TLS_AES_256_GCM_SHA384"
+    },
+    "contextSpoofing": {
+      "passed": true,
+      "directPass": true,
+      "httpPass": true
+    }
+  },
+  "limitations": [
+    "The schema was created with a generated core_v0_live_ prefix and dropped after the run.",
+    "The live harness proves the Core persistence/lifecycle slice; it does not switch application traffic or promote the legacy route."
+  ]
+}

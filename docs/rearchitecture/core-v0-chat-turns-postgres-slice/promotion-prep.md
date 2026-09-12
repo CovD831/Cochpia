@@ -101,7 +101,12 @@ promotion-prep 自己在 09-11 就警告过「闸门脚本不在任何常规回�
 **根因不是代码坏，是断言停在旧契约上**。为什么会漏：**A-01~A-12 存在两套实现**——
 `core-v0-runtime-acceptance.js`（实跑版，stage 3 时已更新，LAN/TLS 证据出自它）与
 `core-v0-chat-turns-acceptance.js`（fixture 版，A-12 未同步）。两份矩阵必然漂移。
-**建议：合并为单一真源**，否则下次还会烂。
+
+**已处理（2026-09-12）**：漂移源不是「两套矩阵」，而是**路由字面量被手抄了三份**。
+已抽成单一真源 `server/chat-route-contract.js`，由 `server/stage3-cleanup.test.js`
+C-2/C-3（在 `npm test` 内，因此该契约已纳入常规回归）、A-12、P-09 共同引用。
+**两套矩阵保持独立**——它们覆盖不同层（fixture 纯构造 vs 真 HTTP / 真 PG + worker fork），
+合并只会丢覆盖。
 
 ### 3. 收口后实测结果
 
@@ -110,7 +115,8 @@ promotion-prep 自己在 09-11 就警告过「闸门脚本不在任何常规回�
 | `npm test` | 392 tests / **387 pass / 0 fail** / 5 skipped |
 | `npm run acceptance:core-v0-chat-turns` | **A-01~A-12 12/12 passed** |
 | `npm run acceptance:core-v0` | **P-01/P-02 + A-01~A-12 = 14/14 passed** |
-| `node scripts/core-v0-postgres-acceptance.js` | **P-01~P-09 passed**（L-01/L-02 pending：需 live 端点姿态） |
+| `node scripts/core-v0-postgres-acceptance.js` | **P-01~P-09 passed**（该脚本内 L-01/L-02 pending：它们需 live 端点姿态，见下一行） |
+| `acceptance:core-v0-postgres-live`（真实生产库，隔离 schema，跑完 DROP） | **L-02 passed**；L-01 pending 且**已书面豁免**。详见 §4.1 与 `evidence/live-acceptance-2026-09-12.json` |
 | `npm run acceptance:core-v0-postgres`（含回滚演练） | **passed**（P-10 passed；`activeLeasesAfterRehearsal=0`、`postCloseAdmission=CORE_ADMISSION_CLOSED`） |
 
 ### 4. 未重跑项（明确列出，不冒充已覆盖）
@@ -120,56 +126,56 @@ promotion-prep 自己在 09-11 就警告过「闸门脚本不在任何常规回�
 | 双机 TLS 验收（`tls-lan`） | 需要第二台机器接同一热点 |
 | UI 聊天端到端 | 上游 henryai 网关 deepseek-v4-flash 无健康账号（`400 model_unavailable`），非本仓问题 |
 
-### 4.1 live 验收已重跑：**未通过**，两处失败均已定位（2026-09-12）
+### 4.1 live 验收已重跑并达成 **L-02 passed**（2026-09-12）
 
-老板点头后执行了两次（生产 `DATABASE_URL` @5433，隔离 schema，跑完自动 DROP；
-事后核实：无残留 `core_v0_live_*` schema，`public` 表数仍为 44，生产数据未被触碰）。
-完整记录见 `evidence/live-acceptance-attempt-2026-09-12.json`。
+老板点头后在真实生产 `DATABASE_URL`（5433，隔离 schema，跑完自动 DROP）上迭代了 4 次。
+每次事后都核实生产库：**无残留 `core_v0_live_*` schema，`public` 表数始终为 44，生产数据未被触碰**。
+失败史见 `evidence/live-acceptance-attempt-2026-09-12.json`，
+最终机器输出见 `evidence/live-acceptance-2026-09-12.json`。
 
-1. **第一次 `42704`**——PG 日志：`operator class "gin_trgm_ops" does not exist for
-   access method "gin"`。root cause：`server/memory-module-schema.sql` 的
-   `CREATE EXTENSION IF NOT EXISTS pg_trgm` 在扩展**已存在于 `public`** 时被跳过，
-   而 `gin_trgm_ops` 未加 schema 限定，隔离 schema 里解析不到。**已修复**（扩展目标与
-   operator class 均加 `public.` 限定）。文件内同时注明**禁止**改用放宽 `search_path`
-   的绕法：`public` 有 44 张生产表（含 `core_v0_*`、`memory_*`），放宽后
-   `CREATE TABLE IF NOT EXISTS` 会解析到生产表，「隔离」运行将静默读写生产数据且报通过。
-2. **第二次 `REPAIR_METADATA_INVALID`**（说明第 1 处修复生效，前进到 repair 阶段）。
-   已定位为语义不一致：`scripts/core-v0-postgres-live-acceptance.js:667` 的
-   `receiptLookup` 查不到时返回 `status: 'not_found'`，而
-   `server/core-v0-postgres.js:686-690` 的 `validateReceiptStatus` 只接受
-   `unknown|pending|completed|failed`。**未修**——「receipt 状态域是否包含
-   `not_found`」属语义决策，留老板拍板。
+**修复链：四处缺陷，全部由「在隔离 schema 里执行」暴露**
 
-**同两次运行暴露的两处配置不一致（未修）**：
+1. `42704 operator class "gin_trgm_ops" does not exist` —— `CREATE EXTENSION IF NOT EXISTS pg_trgm`
+   在扩展已存在于 `public` 时是 no-op，未限定的 opclass 随即无法解析。
+   修：扩展目标与 operator class 均加 `public.` 限定。**同时明确拒绝**放宽 `search_path` 的绕法：
+   `public` 有 44 张生产表（含 `core_v0_*`、`memory_*`），放宽后 `CREATE TABLE IF NOT EXISTS`
+   会解析到生产表，「隔离」运行将静默读写生产数据且报通过。
+2. `REPAIR_METADATA_INVALID` —— harness 把 Memory 侧的状态词表（含 `not_found`）原样透传给
+   Core 修复记录器，而 `external_receipt_status` 的域是 `unknown|pending|completed|failed`。
+   修：在 harness 边界做归一化（域外一律映射为 `unknown`），并加 `CORE_V0_LIVE_DEBUG` 诊断开关。
+3. `42704 constraint "memory_assertions_current_version_fk" does not exist` ——
+   **`pg_constraint` 是库级目录、不按 schema 隔离**：schema 文件的 27 处幂等守卫
+   `SELECT 1 FROM pg_constraint WHERE conname = ...` 在隔离 schema 下会因 `public` 已存在同名约束
+   而**跳过建约束**，随后的 `SET CONSTRAINTS ... DEFERRED` 失败。
+   修：27 处守卫全部改为按 `current_schema()` 判定（正常执行语义不变，隔离执行时正确建约束）。
+4. `strictTlsConfigured=false` —— `server/db-ssl.js` 只读 `DATABASE_SSL`/`DATABASE_CA`，
+   **不解析** `DATABASE_URL` 的 `sslmode`。修：补 URL 回退且**只承认 `verify-full`**，
+   并把 URL 的 `sslrootcert` 读入 `ca`（否则显式只传 `rejectUnauthorized` 会丢掉自签 CA，
+   反而连不上）。改后实测真连接：`TLSv1.3 / TLS_AES_256_GCM_SHA384`，`pg_stat_ssl.ssl=true`。
 
-- **L-01 在当前姿态下结构上不可达**：`live-acceptance.js:698` 要求
-  `authRequired && storagePostgres && supabaseConfigured`（即 `AUTH_MODE=required`
-  + `SUPABASE_URL`）。本部署**刻意**选 `AUTH_MODE=token` 单用户姿态 → L-01 恒为
-  `pending`（`AUTH_STORAGE_CONFIGURATION_REQUIRED`）。需要么给 L-01 写书面豁免
-  （说明 token 姿态已覆盖其意图），要么部署 Supabase。
-- **TLS 严格性检测看不见 URL 形式的配置**：`server/db-ssl.js` 只读 `DATABASE_SSL`
-  / `DATABASE_CA`，**不解析** `DATABASE_URL` 的 `sslmode`。本部署用
-  `sslmode=verify-full&sslrootcert=...`（实际连接确实严格校验），但检测器报
-  `sslConfiguration: configured_incomplete_or_non_strict` → 即便 AUTH 条件满足，
-  L-01 仍会卡在 `STRICT_TLS_CONFIGURATION_REQUIRED`。修法二选一：`.env` 补
-  `DATABASE_SSL=true` + `DATABASE_CA=<repo>/.certs/prod-pg-ca.pem`，或让检测器解析 URL。
+**最终结果**
 
-**对闸门结论的影响**：09-12 已重跑转绿的四组矩阵（fixture A-01~A-12、runtime
-14/14、PG P-01~P-09、回滚演练 P-10）不受影响；**L-01/L-02 这一对仍未取得有效证据**，
-原因是上述开放决策与姿态差异，**不以「pending」冒充通过**。
+| 用例 | 状态 | 说明 |
+|---|---|---|
+| **L-02** | **passed** | 真 PG schema（core 9 表 / 34 约束 / 22 索引 + memory 4 表）、双进程 CAS、重放、闸门与 repair 全通过；`memoryWritePass=true`、`repairPass=true`、`externalReceiptStatus=completed` |
+| L-01 | pending | 唯一未满足谓词是 `AUTH_STORAGE_CONFIGURATION_REQUIRED`（需 `AUTH_MODE=required` + `SUPABASE_URL`）。**已书面豁免**，见下 |
+
+`strictTlsConfigured: true`（`sslConfiguration: strict`）、`databaseTlsActive: true`、
+`contextSpoofingPassed: true`。
+
+**L-01 豁免**：`evidence/live-gate-l01-waiver-2026-09-12.json`。本部署是老板裁决的单用户
+`AUTH_MODE=token` 姿态，L-01 的 `required`+Supabase 谓词没有对象可服务；其安全意图由等价控制覆盖
+（跨机请求必须携带共享口令，sha256 + timingSafeEqual 比对；双机 TLS+Bearer 14/14 实测）。
+豁免**不把 L-01 标为通过**——机器输出仍是 `pending`，任何引用闸门的表述都必须显式引用该豁免。
+复核触发条件：出现第二个真实用户 / 服务暴露超出本机可信范围 / 需要按用户吊销与审计。
 
 ### 5. 剩余动作
 
-1. 老板确认后提交本批改动。
-2. **L-01/L-02 待决三项**：receipt 状态域是否纳入 `not_found`；L-01 的
-   `AUTH_MODE=required` + Supabase 要求是否书面豁免（本部署为 token 姿态）；
-   TLS 严格性检测是否改为解析 `DATABASE_URL` 的 `sslmode`。三项定完才能取得
-   live 证据，在此之前 L-01/L-02 不得标通过。
-3. **路由契约已抽成单一真源**：`server/chat-route-contract.js`，由
-   `server/stage3-cleanup.test.js` C-2/C-3（在 `npm test` 内，因此已纳入回归）、
-   A-12、P-09 三处共同引用，消除「三份手抄字面量」这一漂移源。
-   **两套 A-01~A-12 矩阵保持独立**——它们覆盖不同层（fixture 纯构造 vs 真 HTTP /
-   真 PG + worker），合并只会丢覆盖。
-4. 上游同步：见 `docs/upstream-sync-assessment-2026-09-12.md`（上游领先 17 提交，
+1. 本批改动提交：schema 幂等守卫按 `current_schema()` 判定 / harness receipt 状态归一化 /
+   `db-ssl` URL 回退 / 路由契约单一真源 / 证据与本文档。
+2. **L-01 豁免需老板正式认可**。认可后闸门陈述以「**L-02 passed + L-01 豁免**」形式成文，
+   不得表述为「L-01 通过」。
+3. 上游同步：见 `docs/upstream-sync-assessment-2026-09-12.md`（上游领先 17 提交，
    建议 promotion 收尾后在 `main` 上 fast-forward）。
+4. 双机 TLS 验收与 UI 端到端仍按 §4 所列原因未重跑。
 
