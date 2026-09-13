@@ -259,12 +259,20 @@ const coreV0ServiceForRequest = async req => {
   if (process.env.NODE_ENV === 'production') {
     throw new CoreV0Error('CORE_V0_PRODUCTION_STORAGE_REQUIRED', 'PostgreSQL storage is required for Core v0 in production', { status: 503, retryable: false });
   }
+  // JSON (local) storage is the development-only shape of Core v0: it has no
+  // session table to carry a per-session modelProvider, so it cannot mirror the
+  // postgres branch (which reads session?.modelProvider || MODEL_PROVIDER).
+  // The provider therefore defaults to 'mock' and stays mock unless explicitly
+  // overridden — a local dev session must never silently hit a real model.
+  // Override with CORE_V0_JSON_MODEL_PROVIDER when you deliberately want a real
+  // provider against local JSON storage (e.g. debugging against a live gateway).
+  const jsonModelProvider = process.env.CORE_V0_JSON_MODEL_PROVIDER || 'mock';
   return {
     service: createCoreV0LocalAdapter({
       state: requestState,
       context,
       memoryModule: memoryRuntime.moduleForRequest(req),
-      modelProvider: 'mock'
+      modelProvider: jsonModelProvider
     }).service,
     drainExtraction: null
   };
