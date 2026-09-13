@@ -3,7 +3,7 @@ const DEFAULT_SYSTEM_PROMPT = '你是 Cochpia，一个重视共同经历、记�
 export const MODEL_PRESETS = {
   mock: { label: '本地 Mock', protocol: 'mock', suggestedModels: ['mock'], useCases: '本地调试，不产生云端费用' },
   openai: { label: 'OpenAI', protocol: 'openai-compatible', baseURL: 'https://api.openai.com/v1/chat/completions', suggestedModels: ['gpt-5'], useCases: '通用主模型、复杂推理、工具调用' },
-  deepseek: { label: 'DeepSeek', protocol: 'openai-compatible', baseURL: 'https://api.deepseek.com/chat/completions', suggestedModels: ['deepseek-v4-flash', 'deepseek-v4-pro'], useCases: '中文推理、低成本 Agent、记忆整理' },
+  deepseek: { label: 'DeepSeek', protocol: 'openai-compatible', baseURL: 'https://api.deepseek.com/chat/completions', suggestedModels: ['Z-deepseek-v4.1-flash', 'deepseek-v4-pro'], useCases: '中文推理、低成本 Agent、记忆整理' },
   qwen: { label: '通义千问', protocol: 'openai-compatible', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', suggestedModels: ['qwen-plus', 'qwen-max'], useCases: '中文对话、多模态、代码和企业应用' },
   glm: { label: '智谱 GLM', protocol: 'openai-compatible', baseURL: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', suggestedModels: ['glm-5'], useCases: '中文陪伴、知识库、Agent 工作流' },
   kimi: { label: 'Kimi', protocol: 'openai-compatible', baseURL: 'https://api.moonshot.ai/v1/chat/completions', suggestedModels: ['kimi-k2.6'], useCases: '长上下文、文档理解、深度研究' },
