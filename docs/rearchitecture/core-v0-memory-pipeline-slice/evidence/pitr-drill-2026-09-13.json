@@ -1,0 +1,244 @@
+{
+  "generatedAt": "2026-09-13T14:23:00.606Z",
+  "verdict": "PASS",
+  "environment": {
+    "pgVersion": "PostgreSQL 17.11 (Homebrew)",
+    "pgBin": "/opt/homebrew/opt/postgresql@17/bin",
+    "os": "darwin",
+    "primary": {
+      "port": 5499,
+      "dataDir": "/tmp/pitr-drill-2026-09-13T14-21-05-878Z/data",
+      "socketDir": "/tmp",
+      "db": "memdb",
+      "superuser": "driller",
+      "tenant": "t_drill"
+    },
+    "backupDir": "/tmp/pitr-drill-2026-09-13T14-21-05-878Z/backup",
+    "restore": {
+      "port": 5498,
+      "dataDir": "/tmp/pitr-drill-2026-09-13T14-21-05-878Z/restore",
+      "db": "memdb",
+      "superuser": "driller"
+    },
+    "ts": "2026-09-13T14-21-05-878Z",
+    "productionUntouched": "port 5433 / /Users/abab/Documents/ChatGPT/cochpia/pg-data NOT used; no .env credentials read; node pg module avoided (FS broker)"
+  },
+  "steps": [
+    {
+      "name": "initdb_primary",
+      "command": "initdb -D /tmp/pitr-drill-2026-09-13T14-21-05-878Z/data -U driller -A trust --encoding=UTF8 --locale=C",
+      "ok": true,
+      "durationMs": 386
+    },
+    {
+      "name": "start_primary",
+      "command": "pg_ctl -D /tmp/pitr-drill-2026-09-13T14-21-05-878Z/data -o \"-p 5499 -k /tmp -c listen_addresses='127.0.0.1' -c wal_level=replica -c max_wal_senders=10\" -l /tmp/pitr-drill-2026-09-13T14-21-05-878Z/logs/primary.log start",
+      "ok": true,
+      "durationMs": 123
+    },
+    {
+      "name": "createdb",
+      "command": "createdb -h 127.0.0.1 -p 5499 -U driller memdb",
+      "ok": true,
+      "durationMs": 43
+    },
+    {
+      "name": "apply_schema",
+      "command": "psql -f /Users/abab/Documents/ChatGPT/cochpia/wt/l6-pitr-drill/server/memory-module-schema.sql",
+      "ok": true,
+      "durationMs": 61
+    },
+    {
+      "name": "apply_cache_ddl",
+      "command": "inline memory_cache DDL",
+      "ok": true,
+      "durationMs": 15
+    },
+    {
+      "name": "seed_subjects",
+      "command": "inline SQL (2 subjects, user+relationship domains)",
+      "ok": true,
+      "durationMs": 21
+    },
+    {
+      "name": "pg_basebackup",
+      "command": "pg_basebackup -h 127.0.0.1 -p 5499 -U driller -D /tmp/pitr-drill-2026-09-13T14-21-05-878Z/backup -Fp -Xs",
+      "ok": true,
+      "durationMs": 112838
+    },
+    {
+      "name": "delete_and_capture_ledger",
+      "command": "inline SQL: insert tombstones + replay deletes on PRIMARY",
+      "ok": true,
+      "durationMs": 23
+    },
+    {
+      "name": "capture_ledger",
+      "command": "SELECT memory_tombstones for user_del",
+      "ok": true,
+      "durationMs": 14
+    },
+    {
+      "name": "restore_start",
+      "command": "cp -R /tmp/pitr-drill-2026-09-13T14-21-05-878Z/backup /tmp/pitr-drill-2026-09-13T14-21-05-878Z/restore && pg_ctl -D /tmp/pitr-drill-2026-09-13T14-21-05-878Z/restore -o \"-p 5498 -k /tmp -c listen_addresses='127.0.0.1'\" start",
+      "ok": true,
+      "durationMs": 122
+    },
+    {
+      "name": "restore_resurrection_check",
+      "command": "count deleted-subject rows on RESTORE before replay (expect >0 = resurrected)",
+      "ok": true,
+      "durationMs": 0,
+      "assertion": {
+        "name": "deleted_subject_resurrected_pre_replay",
+        "pass": true,
+        "detail": "total=21"
+      },
+      "counts": {
+        "raw_events": 3,
+        "memory_assertions": 3,
+        "assertion_versions": 3,
+        "episodes": 1,
+        "index_documents": 2,
+        "profile_snapshots": 1,
+        "profile_snapshot_items": 2,
+        "memory_outbox_events": 2,
+        "memory_cache": 3,
+        "memory_sessions": 1
+      }
+    },
+    {
+      "name": "replay_ledger",
+      "command": "re-insert captured tombstones into RESTORE + apply equivalent deletes per tombstone",
+      "ok": true,
+      "durationMs": 21
+    },
+    {
+      "name": "final_assertions",
+      "command": "count deleted vs control subject across all tables on RESTORE",
+      "ok": true,
+      "durationMs": 0,
+      "assertion": {
+        "name": "pitr_no_resurrection",
+        "pass": true,
+        "detail": "retrieveDeleted=0:true derivedNotResurrected:true controlSurvives:true"
+      },
+      "deletedCounts": {
+        "raw_events": 0,
+        "memory_assertions": 0,
+        "assertion_versions": 0,
+        "episodes": 0,
+        "index_documents": 0,
+        "profile_snapshots": 0,
+        "profile_snapshot_items": 0,
+        "memory_outbox_events": 0,
+        "memory_cache": 0,
+        "memory_sessions": 0
+      },
+      "controlCounts": {
+        "raw_events": 3,
+        "memory_assertions": 3,
+        "assertion_versions": 3,
+        "episodes": 1,
+        "index_documents": 2,
+        "profile_snapshots": 1,
+        "profile_snapshot_items": 2,
+        "memory_outbox_events": 2,
+        "memory_cache": 3,
+        "memory_sessions": 1
+      }
+    }
+  ],
+  "assertions": {
+    "retrieveDeletedSubjectPerTable": {
+      "raw_events": 0,
+      "memory_assertions": 0,
+      "assertion_versions": 0,
+      "episodes": 0,
+      "index_documents": 0,
+      "profile_snapshots": 0,
+      "profile_snapshot_items": 0,
+      "memory_outbox_events": 0,
+      "memory_cache": 0,
+      "memory_sessions": 0
+    },
+    "derivedNotResurrected": {
+      "index_documents": 0,
+      "profile_snapshots": 0,
+      "profile_snapshot_items": 0,
+      "memory_outbox_events": 0,
+      "memory_cache": 0,
+      "pass": true
+    },
+    "controlSurvives": {
+      "raw_events": 3,
+      "memory_assertions": 3,
+      "assertion_versions": 3,
+      "episodes": 1,
+      "index_documents": 2,
+      "profile_snapshots": 1,
+      "profile_snapshot_items": 2,
+      "memory_outbox_events": 2,
+      "memory_cache": 3,
+      "memory_sessions": 1,
+      "pass": true
+    },
+    "retrieveDeletedSubjectZero": {
+      "total": 0,
+      "pass": true
+    }
+  },
+  "timings": {
+    "backupMs": 112838,
+    "deletionMs": 23,
+    "restoreMs": 477,
+    "replayMs": 21,
+    "totalMs": 114727
+  },
+  "ledger": [
+    {
+      "id": "tomb_asr_878Z_11",
+      "tenant_id": "t_drill",
+      "user_id": "user_del",
+      "target_type": "memory",
+      "target_id": "asr_878Z_11",
+      "action": "delete",
+      "redaction_epoch": "1"
+    },
+    {
+      "id": "tomb_asr_878Z_7",
+      "tenant_id": "t_drill",
+      "user_id": "user_del",
+      "target_type": "memory",
+      "target_id": "asr_878Z_7",
+      "action": "delete",
+      "redaction_epoch": "1"
+    },
+    {
+      "id": "tomb_asr_878Z_9",
+      "tenant_id": "t_drill",
+      "user_id": "user_del",
+      "target_type": "memory",
+      "target_id": "asr_878Z_9",
+      "action": "delete",
+      "redaction_epoch": "1"
+    },
+    {
+      "id": "tomb_sess_878Z_1",
+      "tenant_id": "t_drill",
+      "user_id": "user_del",
+      "target_type": "session",
+      "target_id": "sess_878Z_1",
+      "action": "delete",
+      "redaction_epoch": "1"
+    }
+  ],
+  "notes": [
+    "captured 4 tombstone entries for deleted subject",
+    "pre-replay deleted-subject row total on restore = 21 (resurrection confirmed)",
+    "final: retrieveDeletedTotal=0 controlTotal=21",
+    "stopped primary cluster",
+    "stopped restore cluster"
+  ],
+  "schemaSource": "server/memory-module-schema.sql (+ drill-introduced memory_cache table)"
+}
