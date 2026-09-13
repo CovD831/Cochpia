@@ -38,10 +38,26 @@ binary, not a defect in the export or in this check. The original diagnosis
 above ("download-event plumbing") was therefore wrong -- the environment was
 never in a state where the question could be asked. Nothing in this file was
 changed to make it pass.
+
+UPDATE 2026-09-13 (2): 9/9 → 10/10。新增 P10 负例：用 playwright `page.route` 拦截
+`/api/personality` 返回 500，断言 (a) 其余面板（会话行，来自未被拦截的 /api/sessions）仍渲染出数据，
+(b) 失败面板出现可见的 `.panel-error` 提示（人格错误在首页 Pulse 区默认可见；早期版本误拦截
+`/api/models`，其错误在 home 页 model-dock 是 is-page-hidden，checkVisibility 误判不可见，已改正）。
+这是对 AR-212（单接口 400 曾整页静默空白）的反面验收——前端 `client/src/main.jsx` 的 refresh()
+已从 `Promise.all` 改为 `Promise.allSettled`，逐接口隔离，失败面板就地报错而非拖垮整页。
+
+UPDATE 2026-09-13 (3): 同一轮跑 10 个 check 时 P7/P9 偶发 TimeoutError、P10 不稳。根因是
+早期实现共用「一个 server + 一个进程里逐个 launch 的 browser」，跑过约 8 个 check 后
+server 端累积的 SSE 连接等状态拖慢后续 check 的页面响应。已改为：每个 check 跑在独立
+子进程里，各自起一个私有 server + 私有 browser，跑完即销毁（本文件顶部的设计哲学
+"every check gets its own fresh page" 的彻底版）。隔离后稳定 10/10。数据目录仍每次 mkdtemp 隔离，
+不碰生产数据。
 """
 
+import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -123,6 +139,93 @@ def check(name):
         CHECKS.append((name, fn))
         return fn
     return wrap
+
+
+_RESULT_RE = re.compile(r"E2E_RESULT\|([^|]+)\|(\d+)\|(.*)")
+
+
+def _server_env():
+    """Env for one isolated server instance (own data dir, own port)."""
+    env = dict(os.environ)
+    env.update({
+        "CORE_V0_ENABLED": "true",
+        "MODEL_PROVIDER": "mock",
+        "MODEL_NAME": "mock",
+        "PORT": str(PORT),
+        "NODE_ENV": "development",
+        "AUTH_MODE": "off",
+        "STORAGE_PROVIDER": "json",
+        "MOCK_REPLY_TEXT": "探针回复",
+        "MOCK_STREAM_DELAY_MS": "120",
+    })
+    # With STORAGE_PROVIDER=json the store writes <repo>/server/data/state.json
+    # by default. That file is the pre-cutover rollback/reconciliation copy, so an
+    # unguarded run silently overwrites it with test data. Default to a throwaway
+    # directory; an explicit COCHPIA_DATA_DIR in the caller's environment still wins.
+    if not env.get("COCHPIA_DATA_DIR"):
+        run_data_dir = Path(tempfile.mkdtemp(prefix="cochpia-e2e-check-"))
+        env["COCHPIA_DATA_DIR"] = str(run_data_dir)
+    return env
+
+
+def _run_check_isolated(name):
+    """Run one check against a private server + browser, then tear both down.
+
+    Each check therefore owns its own server process and browser, so no check can
+    inherit another's server state (e.g. accumulated SSE connections that degrade
+    later checks) or browser-level state. This is what makes the suite stable end
+    to end -- the earlier in-process and per-browser variants both let late checks
+    fail on shared, exhausted state (P7/P9 timed out, P10's page never settled).
+    """
+    env = _server_env()
+    log_path = REPO / "artifacts" / f"e2e-check-{name}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file = log_path.open("w")
+    server = subprocess.Popen(
+        ["node", "server/index.js"], cwd=REPO, env=env,
+        stdout=log_file, stderr=subprocess.STDOUT,
+    )
+    rc = 1
+    try:
+        if not wait_for_port():
+            log_file.flush()
+            print(f"SERVER FAILED TO START for {name}, log follows:", flush=True)
+            print(log_path.read_text(encoding="utf8")[:3000], flush=True)
+            rc = 1
+        else:
+            # A private session needs a bound agent (stage 2a).
+            agent = http_json("/api/agents", "POST", {"name": "面板验收", "persona": "温和", "avatar": "✦"})
+            # Seed one session bound to that agent so panel-isolation checks (P10) have
+            # a non-failed panel that renders real data to assert against. Mirrors the
+            # client's newSession() payload: { agentId }.
+            if isinstance(agent, dict) and agent.get("id"):
+                try:
+                    http_json("/api/sessions", "POST", {"agentId": agent["id"]})
+                except Exception as exc:
+                    print(f"  note: session seed skipped: {exc}", flush=True)
+            fn = dict(CHECKS).get(name)
+            if fn is None:
+                print(f"E2E_RESULT|{name}|0|unknown check", flush=True)
+                rc = 1
+            else:
+                from playwright.sync_api import sync_playwright
+                with sync_playwright() as pw:
+                    browser = pw.chromium.launch()
+                    try:
+                        ok, detail = fn(browser)
+                    except Exception as exc:  # a check that cannot run is a failed check, named
+                        ok, detail = False, f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
+                    finally:
+                        browser.close()
+                print(f"E2E_RESULT|{name}|{int(ok)}|{detail}", flush=True)
+                rc = 0 if ok else 1
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except Exception:
+            server.kill()
+    return rc
 
 
 # ---------------------------------------------------------------- navigation
@@ -291,67 +394,65 @@ def check_settings_panel(browser):
         context.close()
 
 
-def main():
-    env = dict(os.environ)
-    env.update({
-        "CORE_V0_ENABLED": "true",
-        "MODEL_PROVIDER": "mock",
-        "MODEL_NAME": "mock",
-        "PORT": str(PORT),
-        "NODE_ENV": "development",
-        "AUTH_MODE": "off",
-        "STORAGE_PROVIDER": "json",
-        "MOCK_REPLY_TEXT": "探针回复",
-        "MOCK_STREAM_DELAY_MS": "120",
-    })
-    # With STORAGE_PROVIDER=json the store writes <repo>/server/data/state.json
-    # by default (server/store.js:9-10). That file is the pre-cutover rollback
-    # and reconciliation copy, so an unguarded run silently overwrites it with
-    # test data. Default to a throwaway directory; an explicit COCHPIA_DATA_DIR
-    # in the caller's environment still wins.
-    if not env.get("COCHPIA_DATA_DIR"):
-        run_data_dir = Path(tempfile.mkdtemp(prefix="cochpia-e2e-panels-"))
-        env["COCHPIA_DATA_DIR"] = str(run_data_dir)
-        print(f"isolated COCHPIA_DATA_DIR={run_data_dir}", flush=True)
-    log_path = REPO / "artifacts" / "e2e-panels-server.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("w")
-    server = subprocess.Popen(
-        ["node", "server/index.js"], cwd=REPO, env=env,
-        stdout=log_file, stderr=subprocess.STDOUT,
-    )
+# AR-212 反面验收：单接口失败，其余面板仍渲染、失败面板可见报错。
+# 在首个请求发出前用 page.route 拦截其中一个 /api 接口并让其 500，断言 (a) 其它
+# 面板仍渲染出数据（会话行），(b) 失败面板出现可见的 .panel-error 提示。其余 7 个
+# 接口不被吞掉——这正是 AR-212 的修复语义。
+#
+# 注意拦截目标的选择：必须选「错误提示在落地页（Sanctum）默认可见」的接口。
+# /api/personality 失败 → panelErrors.personality 渲染在首页 Pulse 区（默认可见）；
+# 而 /api/models 失败 → 错误在 model-dock，该区域在 home 页是 is-page-hidden
+# （display:none），checkVisibility 会误判为不可见。故此处拦截 /api/personality。
+@check("P10 单接口失败其余面板仍渲染且失败面板可见报错（AR-212 反面）")
+def check_panel_isolation(browser):
+    context = browser.new_context(accept_downloads=True)
+    page = context.new_page()
+    # 拦截 /api/personality（人格面板，失败提示在首页 Pulse 区可见），返回 500。
+    page.route("**/api/personality", lambda route: route.fulfill(
+        status=500, content_type="application/json",
+        body='{"error":"injected failure"}'))
     try:
-        if not wait_for_port():
-            log_file.flush()
-            print("SERVER FAILED TO START, log follows:", flush=True)
-            print(log_path.read_text(encoding="utf8")[:3000], flush=True)
-            return 1
-        print(f"server up on {BASE}", flush=True)
-        # A private session needs a bound agent (stage 2a).
-        http_json("/api/agents", "POST", {"name": "面板验收", "persona": "温和", "avatar": "✦"})
-
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as pw:
-            # A fresh browser per check, not just a fresh page. Probing showed the
-            # export download stops firing once seven contexts have been opened and
-            # closed in the same browser -- browser-level state, invisible to the
-            # page, which is why the earlier page-level isolation was not enough.
-            for name, fn in CHECKS:
-                browser = pw.chromium.launch()
-                try:
-                    ok, detail = fn(browser)
-                except Exception as exc:  # a check that cannot run is a failed check, named
-                    ok, detail = False, f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
-                finally:
-                    browser.close()
-                record(name, ok, detail)
+        page.goto(BASE, wait_until="load")
+        page.click(".aube-splash", timeout=15000)
+        page.wait_for_selector(".aube-nav", timeout=15000)
+        time.sleep(1.4)
+        # (a) 其它面板仍渲染出数据：/api/sessions 未被拦截，会话行应存在。
+        other_ok = page.locator(".aube-session-row").count() > 0
+        # (b) 失败面板出现可见错误提示（Pulse 区的 .panel-error）。
+        error_loc = page.locator(".panel-error")
+        error_ok = error_loc.count() > 0 and error_loc.first.evaluate(
+            "e => e.checkVisibility({visibilityProperty:true})")
+        detail = f"others_render={'✓' if other_ok else '✗'}; error_hint={'✓' if error_ok else '✗'}"
+        return other_ok and error_ok, detail
     finally:
-        server.terminate()
-        try:
-            server.wait(timeout=5)
-        except Exception:
-            server.kill()
+        context.close()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check", default=None, help="run a single check by name in an isolated server+browser and exit")
+    args = parser.parse_args()
+    if args.check:
+        return _run_check_isolated(args.check)
+
+    # Parent orchestrator. Every check runs in its own subprocess where
+    # _run_check_isolated starts a private server + browser and tears both down.
+    # No shared server, no shared browser -> no cross-check state exhaustion
+    # (the late-check P7/P9 timeouts and P10 instability came from a single shared
+    # server/browser being worn down across all checks).
+    for name, _fn in CHECKS:
+        cp = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "e2e-panels.py"), "--check", name],
+            cwd=REPO, env=dict(os.environ), capture_output=True, text=True,
+        )
+        m = _RESULT_RE.search(cp.stdout or "")
+        if m:
+            record(m.group(1), m.group(2) == "1", m.group(3))
+        else:
+            record(name, False, f"no-result-exit={cp.returncode}")
+        for line in (cp.stdout or "").splitlines():
+            if line.startswith("[PASS]") or line.startswith("[FAIL]"):
+                print(line, flush=True)
 
     failed = [r for r in results if not r[1]]
     print("\n--- SUMMARY ---", flush=True)

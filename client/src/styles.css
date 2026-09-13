@@ -60,6 +60,8 @@
 .select-model { border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-body); background:transparent; padding:7px 9px; font-size:10px; }
 .test-success { color:var(--state-success) !important; }
 .test-error { color:var(--state-danger) !important; }
+/* 面板级加载失败提示：AR-212 韧性，沿用现有 danger 色，不引入新依赖。 */
+.panel-error { margin:8px 0; padding:8px 10px; border:1px solid var(--state-danger); border-radius:8px; color:var(--state-danger); font-size:12px; line-height:1.5; background:color-mix(in srgb, var(--state-danger) 8%, transparent); }
 body.modal-open { overflow:hidden; }
 .model-dock-info small { color:var(--action-primary); font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .auth-shell { min-height:100vh; display:grid; place-items:center; padding:24px; background:var(--surface-canvas); }
