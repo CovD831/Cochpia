@@ -1,0 +1,143 @@
+{
+  "id": "benchmark-250k-20260914",
+  "verificationStatus": "EXECUTED",
+  "verdict": "PARTIAL",
+  "verdictReason": "250k 规模全指标真实测得（PASS 部分）；Alpha Gate 行要求的 1M 全规模仍物理不可行（磁盘 ~12GB free，1M 需 ~12–14GB），以 250k 实测 + 线性外推替代（PARTIAL 部分）",
+  "date": "2026-09-14",
+  "lane": "wave-2 补测（lane/bench-250k，基线 36f1066）",
+  "scale": {
+    "documents": 250000,
+    "documentCountLiteral": 250000,
+    "requests": 100,
+    "concurrency": 20,
+    "tenantCount": 8,
+    "userCount": 32,
+    "degradedFrom": "1M（gate 目标规模）",
+    "degradationNote": "磁盘 Data 卷仅 ~14Gi 可用（本次结束时 12.0GB）；1M 需 ~12–14GB 集群空间，无安全余量，故不做"
+  },
+  "environment": {
+    "postgres": "17.11 (Homebrew, aarch64-apple-darwin25.6.0)",
+    "pgvector": "0.8.6",
+    "cluster": "/tmp/bench250k-1789353345（一次性 initdb --locale=C，端口 5494，仅 Unix socket，已在报告后 pg_ctl stop -m fast 并整目录删除）",
+    "clusterParams": {
+      "port": 5494,
+      "wal_level": "minimal（配 max_wal_senders=0，规避上一波 wal_level/minimal+senders 冲突坑）",
+      "max_wal_size": "6GB",
+      "checkpoint_timeout": "30min",
+      "synchronous_commit": "off（seed 事务内 SET LOCAL + 全局）",
+      "shared_buffers": "1GB",
+      "maintenance_work_mem": "1GB",
+      "autovacuum": "off"
+    },
+    "dbUser": "bench250k（本集群内 superuser，因 migration SQL 内含 CREATE EXTENSION；非生产用户）",
+    "productionTouched": false,
+    "envFileTouched": false,
+    "note": "DATABASE_URL 由命令行显式注入指向 5494；脚本 import dotenv/config 不覆盖已存在的环境变量，故 .env 未被读取生效"
+  },
+  "steps": [
+    { "step": "initdb（LC_ALL=C）+ CREATE EXTENSION vector + repo memory schema（memory-module-schema.sql + buildPgvectorMigrationSql(2)）", "status": "PASS" },
+    { "step": "npm run benchmark:memory-postgres（MEMORY_BENCHMARK_DOCUMENTS=250000，20 并发，100 请求，REBUILD_HNSW=true）", "status": "PASS", "wallClockSec": 51, "note": "脚本自带按 tenant 前缀清理，跑完已清" },
+    { "step": "分阶段计时重放（脚本同款 SQL，独立 run 前缀，用于拿到脚本不输出的 phase 级耗时）", "status": "PASS", "timingsSec": {
+      "insert_memory_assertions_250k": 4.394,
+      "insert_assertion_versions_250k": 4.075,
+      "activate_update_250k": 4.21,
+      "insert_index_documents_250k": 36.499,
+      "commit": 4.567,
+      "create_hnsw_index_250k": 4.25,
+      "create_gin_tsv_index_250k": 0.424,
+      "create_gin_trgm_index_250k": 0.592,
+      "analyze_all": 0.335,
+      "seedPlusIndexTotalSec": 59.35
+    } },
+    { "step": "EXPLAIN 证据（自然 planner + forced 对照）", "status": "PASS", "detail": "见 explainFindings" },
+    { "step": "清理：pg_ctl stop -m fast → rm -rf /tmp/bench250k-1789353345 → 删 socket → df 确认", "status": "PASS", "detail": "见 cleanup" }
+  ],
+  "benchmark": {
+    "event": "memory_module_postgres_benchmark",
+    "mode": "postgres_native_hybrid",
+    "documentCount": 250000,
+    "requestCount": 100,
+    "concurrency": 20,
+    "p50Ms": 170.366,
+    "p95Ms": 311.916,
+    "p99Ms": 327.75,
+    "failures": [],
+    "degradationRate": 0,
+    "resultSizes": { "min": 50, "max": 50 },
+    "retrievalModes": { "postgres_hybrid_rrf": 100 },
+    "hnswRebuiltAfterSeed": true,
+    "sampleNote": "请求设为 100（仍 20 并发）以获得更稳的 p95/p99；gate 定义只约束 20-concurrent"
+  },
+  "explainFindings": {
+    "naturalPlannerChoseHnswOnStandardPath": false,
+    "standardPath": {
+      "filter": "tenant_id + user_id + index_status（+policy_epoch 等）",
+      "candidateRowsActual": 7813,
+      "plan": "Bitmap Index Scan on index_documents_filter_idx (tenant,user,status) → join assertions/versions → top-N heapsort",
+      "vectorQueryExecMs": 73.756,
+      "lexicalQueryExecMs": 17.473,
+      "note": "与上一波『HNSW 只在强制 plan 下见过』一致：标准 tenant+user 路径下 planner 更信 btree 过滤索引"
+    },
+    "naturalPlannerChoseHnswOnRelaxedPath": true,
+    "relaxedPath": {
+      "filter": "tenant_id only（31250 候选行）",
+      "plan": "Index Scan using index_documents_embedding_hnsw_idx（HNSW 有序扫描，LIMIT 50 提前终止）",
+      "execMs": 0.173,
+      "note": "候选面放大到 tenant-only 时，自然 planner 真实选择了 HNSW（无需强制）——这是本机首次自然 planner 选 HNSW 的 EXPLAIN 证据"
+    },
+    "forcedControl": {
+      "method": "SET enable_bitmapscan=off, enable_seqscan=off（标注为 forced，非自然选择）",
+      "result": "HNSW 节点可用，0.173ms/50 行；btree filter-idx 路径同数据 10.776ms",
+      "implication": "HNSW 本身工作正常且快一个数量级以上，但标准检索路径的 (tenant,user) btree 前缀 + top-N sort 在 3% 选择率下被 planner 判优"
+    },
+    "benchmarkArtifactNote": "seed 用 g%8 分 tenant、g%32 分 user，故 user-0（g%32==0）全落在 tenant-0，真实 per-user 候选 7813 而非脚本报的 filteredCandidateEstimate≈977——读数时以此为准"
+  },
+  "extrapolation1M": {
+    "method": "分段线性外推：存储按 250k 实测 du ×4；seed/索引耗时按各 phase ×4（HNSW 2 维构建近线性）；查询延迟按 per-user 候选数 ×4（注意 modulo aliasing 使候选真实为 7813×4≈31250）",
+    "disk": {
+      "measured250k": { "clusterDirGB": 2.8, "baseGB": 0.944, "pgWalGB": 1.8 },
+      "estimated1M": { "baseGB": 3.8, "pgWalDuringSeedGB": 7.2, "totalGB": 11, "withSafetyMarginGB": "12–14" },
+      "verdict": "与上一波 12–16GB 估计一致；当前容器 free 仅 12.0GB → 1M 仍不可行，与降级决策自洽"
+    },
+    "time": {
+      "seedPlusIndex1MEstimatedMin": "3.5–4.5 分钟（250k 实测 59.4s ×4）",
+      "hnswBuild1MEstimatedSec": "约 17（250k 实测 4.25s ×4；2 维低维下近线性）",
+      "queryLatency1MEstimated": "标准路径 per-user 候选 ×4 → p95 约 0.6–1.5s；不确定性高（1M 表 3.8GB 超出 1GB shared_buffers，缓存压力可能超线性）",
+      "uncertainty": "线性外推未计入：HNSW 构建内存峰值、checkpoint/WAL 追平、缓存未命中率上升；1M p95 可能劣于线性估计"
+    }
+  },
+  "alphaGateRow": {
+    "row": "1M-doc/20-concurrent p50/p95/p99 真实 PostgreSQL benchmark",
+    "status": "推进为 PARTIAL：250k 规模真实数字 + 明示推法的外推；1M 全规模待磁盘 ≥16GB free 后补测",
+    "hnswRowNote": "自然 planner 在 tenant-only 放松路径选 HNSW（新证据）；标准 tenant+user 路径仍选 btree+sort"
+  },
+  "cleanup": {
+    "clusterDirDeleted": true,
+    "pgCtlStop": "stop -m fast，done，无残留进程",
+    "socketRemoved": "/tmp/.s.PGSQL.5494* 已删",
+    "tmpListing": "无 bench250k 残留",
+    "diskAvail": {
+      "beforeRunGi": 14,
+      "withClusterDataGi": 11,
+      "afterCleanupGi": 11,
+      "containerFreeBytesAfterCleanup": 11964067840,
+      "honestNote": "会话期间有并行会话同时在写盘（swebench-* 目录 mtime 同日活跃），14→11Gi 差值无法完全归因；本集群实测 2.8GB（du 证实）已随整目录删除返还，且删除前后 df 无进一步变化可佐证并行写入占用"
+    }
+  },
+  "pitfalls": [
+    "initdb 成功但 pg_ctl start 报『postmaster became multithreaded during startup』——启动进程也必须带 LC_ALL=C LANG=C（initdb 时不带 locale 参数也会中招）",
+    "migration SQL（buildPgvectorMigrationSql）内含 CREATE EXTENSION，非 superuser 报 42501——一次性集群直接把 benchmark 用户升 superuser（上一波 lab 同做法）",
+    "schema.sql 与 migration 都用 CREATE INDEX IF NOT EXISTS 在空表上建了 HNSW/GIN——脚本 REBUILD_HNSW=true 的 DROP 再建路径才能测出真实索引构建耗时；直接跑会得到 0.1ms 的假数字",
+    "seed 的 g%tenant 与 g%user 取模混叠使 per-user 候选是 filteredCandidateEstimate 的 8 倍（7813 vs 977）"
+  ],
+  "blockers": [
+    "1M 全规模：需集群 ~12–14GB，当前容器 free 12.0GB 且有并行会话在写盘——物理不可行，未尝试（与上一波两次失败教训一致）"
+  ],
+  "adversarialReviewClarifications": {
+    "date": "2026-09-14",
+    "reviewer": "独立盲审（不知情子代理，prompt 不含作者推理）",
+    "commitTitleCorrection": "原提交标题『自然 planner 选 HNSW 首证』有歧义：HNSW 自然选择证据仅存在于 tenant-only 放松路径（31250 候选，0.173ms vs 强制 btree 10.8ms）；标准 tenant+user 检索路径（7813 候选）自然 planner 仍选 btree+topN。标准路径的 HNSW 收益依赖租户内候选规模",
+    "alphaGateImplication": "1M 全量复跑时按真实租户分布复测标准路径 planner 选择；不得引用本证据声称标准路径 HNSW 收益",
+    "workerFlagDependency": "独立服务 worker 的索引事件以 featureFlags（hybridRetrieval||vectorRetrieval）为门（worker 与被删原版逐字节一致=原始设计）：flag 全关则 worker 空转、index_documents 恒空。生产 .env 已开 MEMORY_HYBRID_RETRIEVAL=true；部署独立服务时必须显式确认该 flag（service-boot-smoke 闸门已显式设置）"
+  }
+}
