@@ -37,6 +37,9 @@ import { sanitizeWorkspacePreferences } from './workspace-preferences.js';
 import { CoreV0Error, coreV0ErrorResponse } from './core-v0.js';
 import { createCoreV0LocalAdapter, createCoreV0ProductionAdapter, createCoreV0ProductionMessageView } from './core-v0-production.js';
 import { createMemoryServiceBoundary } from './memory-service-boundary.js';
+import { buildIdentityRelationshipContext, resolveCorrelationId, createRequestAgentResolver } from './runtime/identity-relationship-context.js';
+import { createInteractionFinalizer, createCommitCoordinator, createProjectionDispatcher } from './runtime/interaction-finalizer.js';
+import { createCompanionOrchestrator } from './runtime/companion-orchestrator.js';
 
 const app = express();
 const observability = createObservability({ rateLimitMax: Number(process.env.API_RATE_LIMIT_MAX || 120) });
@@ -92,17 +95,8 @@ const state = new Proxy(baseState, {
 // runtime turns that into MEMORY_AGENT_CONTEXT_REQUIRED. The previous
 // constant 'cochpia' fallback let every agent share one memory identity,
 // which defeated relationship-scope isolation.
-const resolveAgentIdForRequest = req => {
-  try {
-    const requestState = requestContext.getStore()?.state;
-    const sessionId = req?.body?.sessionId ?? req?.body?.session_id ?? req?.query?.sessionId ?? null;
-    if (!requestState || !sessionId) return null;
-    const session = (requestState.sessions || []).find(item => item.id === sessionId);
-    return session?.agentId ? String(session.agentId).trim() : null;
-  } catch {
-    return null;
-  }
-};
+// The derivation now lives in IdentityRelationshipContext; index.js only wires it.
+const resolveAgentIdForRequest = createRequestAgentResolver(() => requestContext.getStore()?.state);
 const memoryRuntime = createMemoryModuleRuntime({
   getState: () => requestContext.getStore()?.state || baseState,
   persistState: () => saveState(state),
@@ -209,12 +203,19 @@ const currentUserId = () => requestContext.getStore()?.user?.id || 'local-user';
 const chatMemoryForRequest = req => memoryRuntime.chatForRequest(req);
 const compatibilityMemoryForRequest = req => memoryRuntime.compatibilityForRequest(req);
 const coreV0Enabled = () => /^(1|true|yes)$/i.test(String(process.env.CORE_V0_ENABLED || 'false'));
-const coreV0ContextForRequest = req => ({
-  ...memoryRuntime.contextFromRequest(req, { chat: true }),
+// Identity derivation now lives in IdentityRelationshipContext; this is a thin
+// wiring shim that mirrors the previous field shape exactly so the message-view
+// and delete routes (which also build a Core v0 context) are unchanged.
+const coreV0ContextForRequest = req => buildIdentityRelationshipContext({
+  rawContext: memoryRuntime.contextFromRequest(req, { chat: true }),
   requestId: req.requestId || null,
   traceId: req.traceId || null,
-  producer: 'companion-core',
-  correlationId: req.get('x-correlation-id') || req.traceId || req.requestId || randomUUID()
+  correlationId: resolveCorrelationId({
+    correlationHeader: req.get('x-correlation-id'),
+    traceId: req.traceId,
+    requestId: req.requestId,
+    generate: randomUUID
+  })
 });
 // Core v0 construction must never fall back to the process-wide state: the
 // middleware scopes state per authenticated user, and a missing store means
@@ -243,46 +244,22 @@ const coreV0MessageViewForRequest = req => createCoreV0ProductionMessageView({
   context: coreV0ContextForRequest(req),
   baseState: requireRequestState()
 });
-const coreV0ServiceForRequest = async req => {
-  const context = coreV0ContextForRequest(req);
-  const requestState = requireRequestState();
-  if (storageProvider === 'postgres') {
-    const session = requestState.sessions?.find(item => item.id === req.body?.sessionId);
-    const adapter = await createCoreV0ProductionAdapter({
-      context,
-      baseState: requestState,
-      modelProvider: session?.modelProvider || process.env.MODEL_PROVIDER || 'mock',
-      modelName: session?.modelName || ''
-    });
-    return { service: adapter.service, drainExtraction: adapter.drainExtraction };
-  }
-  if (process.env.NODE_ENV === 'production') {
-    throw new CoreV0Error('CORE_V0_PRODUCTION_STORAGE_REQUIRED', 'PostgreSQL storage is required for Core v0 in production', { status: 503, retryable: false });
-  }
-  // JSON (local) storage is the development-only shape of Core v0: it has no
-  // session table to carry a per-session modelProvider, so it cannot mirror the
-  // postgres branch (which reads session?.modelProvider || MODEL_PROVIDER).
-  // The provider therefore defaults to 'mock' and stays mock unless explicitly
-  // overridden — a local dev session must never silently hit a real model.
-  // Override with CORE_V0_JSON_MODEL_PROVIDER when you deliberately want a real
-  // provider against local JSON storage (e.g. debugging against a live gateway).
-  const jsonModelProvider = process.env.CORE_V0_JSON_MODEL_PROVIDER || 'mock';
-  return {
-    service: createCoreV0LocalAdapter({
-      state: requestState,
-      context,
-      memoryModule: memoryRuntime.moduleForRequest(req),
-      modelProvider: jsonModelProvider
-    }).service,
-    drainExtraction: null
-  };
-};
-const coreV0DrainExtraction = async drain => {
-  // The drain never fails the turn: any error surfaces as a skipped drain and
-  // is retried by the next turn.
-  if (!drain) return;
-  try { await drain(); } catch { /* retried by the next drain */ }
-};
+// CompanionOrchestrator is the composition root for a chat turn: it builds the
+// identity context, constructs the request-scoped adapter, and defers finalize to
+// the InteractionFinalizer. The route only ever calls companionOrchestrator.runTurn
+// (or companionOrchestrator.forRequest for the streaming transport).
+const interactionFinalizer = createInteractionFinalizer({
+  commitCoordinator: createCommitCoordinator(),
+  projectionDispatcher: createProjectionDispatcher()
+});
+const companionOrchestrator = createCompanionOrchestrator({
+  getRequestState: requireRequestState,
+  memoryRuntime,
+  identityContext: buildIdentityRelationshipContext,
+  finalizer: interactionFinalizer,
+  observability,
+  resolveCorrelationId
+});
 const finishRun = run => {
   if (run.finished) return;
   run.finished = true;
@@ -297,8 +274,8 @@ const finishRun = run => {
 const turnStream = createTurnStreamHandler({
   wantsStream: req => /\btext\/event-stream\b/i.test(String(req.get('accept') || '')),
   isEnabled: coreV0Enabled,
-  serviceForRequest: coreV0ServiceForRequest,
-  drainExtraction: coreV0DrainExtraction,
+  serviceForRequest: req => companionOrchestrator.forRequest(req),
+  drainExtraction: drain => companionOrchestrator.dispatch({ drain }),
   onDegrade: reason => observability.recordMemoryDegrade(reason),
   respondError: respondCoreV0Error
 });
@@ -313,15 +290,9 @@ app.post('/api/chat/turns', async (req, res) => {
   }
   if (turnStream.wantsStream(req)) return turnStream.start(req, res);
   try {
-    const { service, drainExtraction } = await coreV0ServiceForRequest(req);
-    const result = await service.handleTurn({ body: req.body || {}, headerIdempotencyKey: req.get('Idempotency-Key') });
-    // R-020 stage 1.2: a degraded retrieval is counted so it is visible even
-    // when the turn itself commits successfully.
-    if (result?.memoryStatus === 'degraded') observability.recordMemoryDegrade(result.memoryDegradedReason);
-    // R-007b: the drain fires after the response is written and never blocks
-    // it. A stated fact enters the retrieval corpus at most one turn later
-    // (eventual consistency); crashes are covered by the durable outbox.
-    setImmediate(() => { coreV0DrainExtraction(drainExtraction); });
+    // The orchestrator builds the identity + adapter and defers finalize
+    // (commit coordinator + projection dispatcher) to the InteractionFinalizer.
+    const result = await companionOrchestrator.runTurn({ req });
     return res.status(result.status === 'pending' ? 202 : 200).json(result);
   } catch (error) {
     return respondCoreV0Error(res, error);

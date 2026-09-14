@@ -19,8 +19,10 @@
 // 'mock'` expression the json branch uses, so the three branches are pinned
 // end-to-end at the layer the branch actually depends on.
 //
-// (c) The production guard lives in index.js and cannot be executed here; it is
-// pinned structurally by reading server/index.js (no import, no pg).
+// (c) The production guard lives in the CompanionOrchestrator (server/runtime/
+// companion-orchestrator.js), the boundary that absorbed index.js's
+// coreV0ServiceForRequest, and cannot be executed here; it is pinned
+// structurally by reading index.js AND the orchestrator (no import, no pg).
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,6 +32,10 @@ import { dirname, join } from 'node:path';
 import { createModelProvider, resolveModelSelection } from './model-provider.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const readSource = rel => readFileSync(join(here, rel), 'utf8');
+// The json branch moved from index.js into CompanionOrchestrator during the Phase
+// 2 boundary extraction; scan both so the pin survives the move.
+const combinedSource = () => readSource('index.js') + '\n' + readSource('runtime/companion-orchestrator.js');
 const jsonBranchModelProvider = () => process.env.CORE_V0_JSON_MODEL_PROVIDER || 'mock';
 
 test('json branch defaults to the mock model provider when no env is set', async () => {
@@ -67,7 +73,7 @@ test('production guard covers the json branch (structural pin)', () => {
   // shape: the production guard sits AFTER the postgres branch, so a json (non
   // postgres) request reaches it. This is the "钉住现状" characterization for the
   // guard, since executing it requires importing index.js (blocked by pg here).
-  const source = readFileSync(join(here, 'index.js'), 'utf8');
+  const source = combinedSource();
   const postgresIdx = source.indexOf("storageProvider === 'postgres'");
   const guardCodeIdx = source.indexOf('CORE_V0_PRODUCTION_STORAGE_REQUIRED');
   assert.ok(postgresIdx !== -1, 'postgres branch present');
