@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "purpose": "对高价值不变量做真实变异（改生产代码引入缺陷），验证目标测试变红；抓不住=覆盖空洞。",
+    "invariantSchema": {
+      "id": "不变量标识",
+      "description": "变异做了什么、模拟了什么缺陷",
+      "targetFile": "被变异的生产文件路径（相对仓库根）",
+      "mutation": { "find": "唯一匹配的原始串", "replaceWith": "替换后的串" },
+      "expectRed": ["应因该变异变红的目标测试文件（相对仓库根）"],
+      "mutationNote": "人类可读的变异描述，写入证据"
+    },
+    "runner": "scripts/mutation-check.mjs",
+    "caught": "变异下目标测试变红 = 该测试对此缺陷有判别力",
+    "notCaught": "变异下目标测试仍绿 = 覆盖空洞（诚实上报）",
+    "invalidMutation": "变异导致语法/加载崩溃而非行为判定失败，不算 caught"
+  },
+  "invariants": [
+    {
+      "id": "INV-provenance",
+      "description": "弱化 provenance 来源检查：让「任一已标记来源≠reader→隐藏」的判定恒不过滤（恒通过），模拟来源守卫被移除后跨 agent 私语可被任意 agent 读到。",
+      "targetFile": "server/memory-module.js",
+      "mutation": {
+        "find": "    if (sources.some(agentId => agentId && agentId !== context.readScope.agentId)) return false;",
+        "replaceWith": "    if (false && sources.some(agentId => agentId && agentId !== context.readScope.agentId)) return false;"
+      },
+      "expectRed": ["server/agent-provenance.test.js"],
+      "mutationNote": "canSee() 的 provenance 过滤行改为条件 `false && ...`，来源不匹配不再隐藏断言。"
+    },
+    {
+      "id": "INV-readscope",
+      "description": "把 readScope 守卫条件变异为恒 false，模拟 readScope 丢失时 provenance 过滤整体被跳过（fail-open 被扩大），跨 agent 泄漏。",
+      "targetFile": "server/memory-module.js",
+      "mutation": {
+        "find": "  if (context.readScope) {",
+        "replaceWith": "  if (false) {"
+      },
+      "expectRed": ["server/agent-scope-readscope-injection.test.js"],
+      "mutationNote": "canSee() 第 406 行 `if (context.readScope) {` 改为 `if (false) {`，整段 provenance 过滤不再执行。"
+    },
+    {
+      "id": "INV-retired-route",
+      "description": "在路由注册区注入一行退役路由 `app.post('/api/chat/stream', ...)` 注册，模拟旧 companion 流路由被错误复活。",
+      "targetFile": "server/index.js",
+      "mutation": {
+        "find": "app.delete('/api/chat/turns/:runId', (req, res) => turnStream.cancel(req, res));",
+        "replaceWith": "app.delete('/api/chat/turns/:runId', (req, res) => turnStream.cancel(req, res));\napp.post('/api/chat/stream', (req, res) => res.status(200).end());"
+      },
+      "expectRed": ["server/stage3-cleanup.test.js"],
+      "mutationNote": "在 app.delete('/api/chat/turns/:runId'...) 之后插入一行退役路由 `app.post('/api/chat/stream', (req,res)=>res.status(200).end());`，被 routeSurfaceViolations 的 RETIRED_COMPANION_ROUTES 捕获。"
+    }
+  ]
+}

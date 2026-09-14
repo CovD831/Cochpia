@@ -1,0 +1,106 @@
+{
+  "generatedAt": "2026-09-14T00:47:11.671Z",
+  "runner": "scripts/mutation-check.mjs",
+  "invariantsFile": "scripts/mutation-invariants.json",
+  "score": "3/3",
+  "caught": 3,
+  "total": 3,
+  "coverageHoles": [],
+  "invalidMutations": [],
+  "verdict": "3/3 caught；全部目标测试对该类缺陷均有判别力，无覆盖空洞",
+  "entries": [
+    {
+      "id": "INV-provenance",
+      "targetFile": "server/memory-module.js",
+      "mutationDescription": "canSee() 的 provenance 过滤行改为条件 `false && ...`，来源不匹配不再隐藏断言。",
+      "expectRed": [
+        "server/agent-provenance.test.js"
+      ],
+      "status": "caught",
+      "caught": true,
+      "failedTests": 1,
+      "testsRan": 5,
+      "durationMs": 761,
+      "note": "",
+      "failureExcerpt": [
+        "✖ failing tests:",
+        "test at server/agent-provenance.test.js:88:1",
+        "✖ P-1/P-2: a narrowed read hides another agent's origin and keeps your own (2.182333ms)",
+        "  AssertionError [ERR_ASSERTION]: agent B must not retrieve material confided to agent A",
+        "  true !== false",
+        "      at TestContext.<anonymous> (file:///Users/abab/Documents/ChatGPT/cochpia/wt/mutation-lab/server/agent-provenance.test.js:90:10)",
+        "      at async Test.run (node:internal/test_runner/test:1054:7)",
+        "      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {",
+        "    generatedMessage: false,",
+        "    code: 'ERR_ASSERTION',",
+        "    actual: true,",
+        "    expected: false,",
+        "    operator: 'strictEqual',",
+        "    diff: 'simple'",
+        "  }"
+      ]
+    },
+    {
+      "id": "INV-readscope",
+      "targetFile": "server/memory-module.js",
+      "mutationDescription": "canSee() 第 406 行 `if (context.readScope) {` 改为 `if (false) {`，整段 provenance 过滤不再执行。",
+      "expectRed": [
+        "server/agent-scope-readscope-injection.test.js"
+      ],
+      "status": "caught",
+      "caught": true,
+      "failedTests": 3,
+      "testsRan": 7,
+      "durationMs": 5667,
+      "note": "",
+      "failureExcerpt": [
+        "  }",
+        "test at server/agent-scope-readscope-injection.test.js:320:1",
+        "✖ V-3c: postgres port path (core-v0-postgres.js:646) -- agent B cannot retrieve agent A's private assertion (0.952709ms)",
+        "  AssertionError [ERR_ASSERTION]: agent B must not retrieve agent A's material (postgres port path)",
+        "  true !== false",
+        "      at TestContext.<anonymous> (file:///Users/abab/Documents/ChatGPT/cochpia/wt/mutation-lab/server/agent-scope-readscope-injection.test.js:333:10)",
+        "      at async Test.run (node:internal/test_runner/test:1054:7)",
+        "      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {",
+        "    generatedMessage: false,",
+        "    code: 'ERR_ASSERTION',",
+        "    actual: true,",
+        "    expected: false,",
+        "    operator: 'strictEqual',",
+        "    diff: 'simple'",
+        "  }"
+      ]
+    },
+    {
+      "id": "INV-retired-route",
+      "targetFile": "server/index.js",
+      "mutationDescription": "在 app.delete('/api/chat/turns/:runId'...) 之后插入一行退役路由 `app.post('/api/chat/stream', (req,res)=>res.status(200).end());`，被 routeSurfaceViolations 的 RETIRED_COMPANION_ROUTES 捕获。",
+      "expectRed": [
+        "server/stage3-cleanup.test.js"
+      ],
+      "status": "caught",
+      "caught": true,
+      "failedTests": 1,
+      "testsRan": 15,
+      "durationMs": 853,
+      "note": "",
+      "failureExcerpt": [
+        "  + actual - expected",
+        "  + [",
+        "  +   \"app.post('/api/chat/stream'\"",
+        "  + ]",
+        "  - []",
+        "      at TestContext.<anonymous> (file:///Users/abab/Documents/ChatGPT/cochpia/wt/mutation-lab/server/stage3-cleanup.test.js:77:10)",
+        "      at async Test.run (node:internal/test_runner/test:1054:7)",
+        "      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {",
+        "    generatedMessage: false,",
+        "    code: 'ERR_ASSERTION',",
+        "    actual: [ \"app.post('/api/chat/stream'\" ],",
+        "    expected: [],",
+        "    operator: 'deepStrictEqual',",
+        "    diff: 'simple'",
+        "  }"
+      ]
+    }
+  ]
+}
