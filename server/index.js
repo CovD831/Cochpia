@@ -511,7 +511,8 @@ app.patch('/api/sessions/:id', async (req, res) => {
 app.delete('/api/sessions/:id', async (req, res) => {
   const index = state.sessions.findIndex(session => session.id === req.params.id);
   if (index === -1) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
-  state.sessions.splice(index, 1); delete state.messages[req.params.id]; await saveState(state); res.status(204).end();
+  // 删除传播：messages 键 + coreV0 会话域记录一并清理，不留孤儿键。
+  propagateSessionDeletion(state, req.params.id); await saveState(state); res.status(204).end();
 });
 app.get('/api/agents', (_, res) => res.json(agents.list()));
 app.post('/api/agents', async (req, res) => { try { res.status(201).json(await agents.create(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_AGENT', error.message); } });

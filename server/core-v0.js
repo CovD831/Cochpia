@@ -157,8 +157,12 @@ function restoreStateSnapshot(state, sessionId, snapshot) {
   core.turnAdmissions = restoreScopedRecords(core.turnAdmissions, sessionId, snapshot.turnAdmissions);
   core.memorySessionBindings = restoreScopedRecords(core.memorySessionBindings, sessionId, snapshot.memorySessionBindings);
   core.assistantCommits = restoreScopedRecords(core.assistantCommits, sessionId, snapshot.assistantCommits);
+  // 回滚只应还原回滚前已存在的键。快照为空且键已不存在时写回空数组，会在
+  // 会话被并发删除后复活出一个空数组孤儿键（2026-09-13 生产缺陷）。
   state.messages ||= {};
-  state.messages[sessionId] = snapshot.messages;
+  if (snapshot.messages.length > 0 || Object.hasOwn(state.messages, sessionId)) {
+    state.messages[sessionId] = snapshot.messages;
+  }
 }
 
 export function createCoreV0Store({ state, persist = async () => {} } = {}) {
