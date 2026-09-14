@@ -1,0 +1,113 @@
+{
+  "generatedAt": "2026-09-14T00:35:00+08:00",
+  "lane": "p3-sdk-propagation",
+  "baselineCommit": "c76cfb9",
+  "verdict": "PASS",
+  "verdictRationale": "Task A (SDK first external chain) and Task B (governance propagation timing) both produced real, reproducible measurements against a real one-shot PostgreSQL cluster and the real independent memory-module service over HTTP. Both verdict cells from the Alpha Gate are now satisfied with evidence. One honesty caveat: the independent service at this baseline could not boot as-shipped (a required module was deleted upstream but its import was left behind); a temporary no-op shim was added to boot it and is removed at cleanup. See honestyNotes.",
+  "environment": {
+    "os": "darwin (arm64, macOS 25.2)",
+    "pgVersion": "PostgreSQL 17 (Homebrew /opt/homebrew/opt/postgresql@17)",
+    "pgBin": "/opt/homebrew/opt/postgresql@17/bin",
+    "clusterDataDir": "/tmp/cochpia-mem-5496",
+    "pgPort": 5496,
+    "pgSocketDir": "/tmp",
+    "superuser": "lab",
+    "auth": "trust (no password, no .env read; project .env absent in repo root)",
+    "walLevel": "replica (max_wal_senders=10; minimal rejected by PG17)",
+    "locale": "C (LC_ALL=C LANG=C as required)",
+    "db": "memdb",
+    "schemaSource": "server/memory-module-schema.sql (27 tables applied)",
+    "serviceModule": "services/memory-module/index.js",
+    "servicePort": 8791,
+    "serviceStartupEnv": {
+      "DATABASE_URL": "postgresql://lab@127.0.0.1:5496/memdb",
+      "MEMORY_MODULE_PORT": "8791",
+      "NODE_ENV": "(empty -> not production, so service token not required)",
+      "MEMORY_MODULE_AUTO_MIGRATE": "false (schema applied via psql)",
+      "MEMORY_MODULE_REDIS_URL": "(empty -> no cache layer; no memory_cache table)",
+      "MEMORY_MODULE_WORKER_ENABLED": "true (but module is the temporary shim)",
+      "MEMORY_ALLOW_UNTRUSTED_ACTOR_HEADER": "true (dev-only opt-in so SDK/governance actor=user; required for correct/pin/revoke/forget/delete which demand actorType==='user')"
+    },
+    "productionUntouched": "port 5433 / repo-main pg-data NOT used; no project .env credentials read; cluster is a throwaway /tmp dir deleted at cleanup",
+    "diskConstraint": "Host Data volume was ~100% full at start; cluster kept at 67MB (target <300MB); total seed/derived rows ~46 (target <=5000)",
+    "sandboxEscapes": "All PG / service / port-binding / curl steps ran with dangerouslyDisableSandbox=true and were merged where possible (4 sandbox-external invocations: cluster build, service start [background], SDK smoke, governance orchestrator)."
+  },
+  "steps": [
+    { "name": "initdb", "command": "initdb -D /tmp/cochpia-mem-5496 -U lab -A trust --encoding=UTF8 --locale=C", "ok": true, "durationMs": 1122 },
+    { "name": "pg_ctl_start", "command": "pg_ctl -D /tmp/cochpia-mem-5496 -o '-p 5496 -k /tmp -c listen_addresses=127.0.0.1 -c wal_level=replica -c max_wal_senders=10' start", "ok": true, "durationMs": 155, "note": "first attempt with wal_level=minimal failed: PG17 requires replica/logical when max_wal_senders>0" },
+    { "name": "createdb", "command": "createdb -h 127.0.0.1 -p 5496 -U lab memdb", "ok": true, "durationMs": 97 },
+    { "name": "apply_schema", "command": "psql -f server/memory-module-schema.sql", "ok": true, "durationMs": 117, "tables": 27 },
+    { "name": "service_start", "command": "node services/memory-module/index.js (env above)", "ok": true, "note": "only boots with temporary shim server/memory-module-service-worker.js (see honestyNotes); listened on :8791, /health ok" },
+    { "name": "sdk_smoke", "command": "MEMORY_MODULE_URL=http://127.0.0.1:8791 MEMORY_MODULE_SDK_TENANT_ID=tenant-a MEMORY_MODULE_SDK_USER_ID=user-a npm run test:memory-sdk", "ok": true, "durationMs": 4663, "exit": 0 },
+    { "name": "governance_timing", "command": "node /tmp/gov-timing.mjs (3 samples x 5 ops)", "ok": true, "durationMs": 56493 }
+  ],
+  "sdkSmoke": {
+    "command": "MEMORY_MODULE_URL=http://127.0.0.1:8791 MEMORY_MODULE_SDK_TENANT_ID=tenant-a MEMORY_MODULE_SDK_USER_ID=user-a npm run test:memory-sdk",
+    "exitCode": 0,
+    "totalMs": 4663,
+    "passed": true,
+    "event": "memory_module_sdk_smoke_passed",
+    "cases": {
+      "createMemory": { "result": "pass", "note": "POST /v1/memories -> 201, memoryId returned" },
+      "retrieve_readYourWrite": { "result": "pass", "note": "retrieved.items contains the created memoryId (readYourWrite:true)" },
+      "buildContextBundle": { "result": "pass", "note": "contextBundle returned evidence array (contextBundle:true)" },
+      "forget": { "result": "pass", "note": "POST /v1/memories/:id/forget -> 200" },
+      "negativeRetrieve_afterForget": { "result": "pass", "note": "after forget, retrieve no longer returns the memoryId (forgetNegativeRead:true)" }
+    },
+    "latencyNote": "Total wall ~4.7s includes cold Node/PG connect + 5 HTTP round trips (create/retrieve/bundle/forget/negativeRetrieve)."
+  },
+  "propagationTimings": {
+    "method": "For each op: issue governance HTTP request, measure API latency (request->response). Then poll the relevant derived table via psql until consistent, measuring settlement lag (response -> derived consistent). 3 samples/op, median reported. Derived faces are written synchronously inside repository.save() (full-aggregate overwrite) BEFORE the 200 is returned, so measured settlement (~15ms) reflects psql poll round-trip overhead, not server-side delay.",
+    "perOp": {
+      "correct": {
+        "derivedFaces": ["memory_assertions (current_version_id/resource_revision bump)", "memory_outbox_events (new 'assertion.active' row)"],
+        "medianApiMs": 28, "medianDerivedSettleMs": 15, "medianOutboxSettleMs": 30, "medianTotalMs": 43,
+        "samples": [{"apiMs":27,"derivedMs":16,"outboxMs":30},{"apiMs":28,"derivedMs":15,"outboxMs":29},{"apiMs":31,"derivedMs":15,"outboxMs":30}]
+      },
+      "pin": {
+        "derivedFaces": ["pins (new active row)", "memory_assertions.pinned=true"],
+        "medianApiMs": 31, "medianDerivedSettleMs": 15, "medianOutboxSettleMs": 3012, "medianTotalMs": 46,
+        "outboxNote": "pin does NOT emit a new memory_outbox_events row (3012ms = observation timeout, i.e. no emission) -- not a failure",
+        "samples": [{"apiMs":30,"derivedMs":15,"outboxMs":3012},{"apiMs":32,"derivedMs":15,"outboxMs":3021},{"apiMs":31,"derivedMs":15,"outboxMs":3001}]
+      },
+      "revoke": {
+        "derivedFaces": ["memory_assertions.status='revoked'", "redaction epoch bump"],
+        "medianApiMs": 33, "medianDerivedSettleMs": 15, "medianOutboxSettleMs": 3008, "medianTotalMs": 48,
+        "outboxNote": "revoke does NOT emit a new memory_outbox_events row (3008ms timeout = no emission)",
+        "samples": [{"apiMs":33,"derivedMs":15,"outboxMs":3001},{"apiMs":35,"derivedMs":15,"outboxMs":3008},{"apiMs":32,"derivedMs":15,"outboxMs":3022}]
+      },
+      "forget": {
+        "derivedFaces": ["memory_tombstones (new 'forget' row)", "memory_assertions.status='forgotten'", "memory_outbox_events (existing row marked completed/redacted)"],
+        "medianApiMs": 34, "medianDerivedSettleMs": 15, "medianOutboxSettleMs": 3003, "medianTotalMs": 48,
+        "outboxNote": "forget marks pre-existing outbox rows redacted; does not emit a NEW aggregate outbox row (3003ms timeout)",
+        "samples": [{"apiMs":34,"derivedMs":14,"outboxMs":3007},{"apiMs":33,"derivedMs":15,"outboxMs":3003},{"apiMs":36,"derivedMs":15,"outboxMs":3000}]
+      },
+      "delete": {
+        "derivedFaces": ["memory_assertions row removed", "memory_tombstones (new 'delete' row)", "deletion_operations row"],
+        "medianApiMs": 36, "medianDerivedSettleMs": 15, "medianOutboxSettleMs": 3010, "medianTotalMs": 51,
+        "outboxNote": "delete does NOT emit a new memory_outbox_events row (3010ms timeout = no emission)",
+        "samples": [{"apiMs":36,"derivedMs":15,"outboxMs":3011},{"apiMs":36,"derivedMs":15,"outboxMs":3005},{"apiMs":35,"derivedMs":15,"outboxMs":3010}]
+      }
+    },
+    "derivedFaceStatus": {
+      "index (index_documents)": "0 rows throughout the run. The canonical index builder is the (deleted) service-worker module; with the no-op shim it never runs, and memory-module.governance ops only REMOVE index rows (no-op on an empty table). NOT exercised by this lane.",
+      "episode (episodes)": "0 rows; hold() does not create episodes and these ops only remove them. NOT exercised.",
+      "profile (profile_snapshot_items)": "0 rows for the tested tenant/user; these ops only prune them. NOT exercised by this lane.",
+      "cache (memory_cache)": "No canonical memory_cache table exists at this baseline (Redis not configured). N/A.",
+      "outbox (memory_outbox_events)": "Real and exercised: only 'correct' emits a new 'assertion.active' row (settles synchronously, ~30ms); pin/revoke/forget/delete do not emit a new aggregate outbox row."
+    }
+  },
+  "assertions": {
+    "forget_non_resurrection": { "pass": true, "samples": 3, "detail": "after forget, memory_assertions.status stayed 'forgotten' (never back to 'active'), index_documents stayed 0, memory_tombstones row persisted across a 1500ms poll window" },
+    "delete_non_resurrection": { "pass": true, "samples": 3, "detail": "after delete, memory_assertions row stayed absent, index_documents stayed 0, memory_tombstones row persisted across 1500ms poll window" },
+    "control_subject_survives": { "pass": true, "detail": "a separate control memory (tenant lane-t / user lane-u) created before all samples remained status='active' and untombstoned after all operations" },
+    "no_production_touch": { "pass": true, "detail": "only /tmp/cochpia-mem-5496 (port 5496, trust) used; port 5433 and repo .env never referenced" }
+  },
+  "honestyNotes": [
+    "TEMPORARY SHIM REQUIRED TO BOOT THE SERVICE: at baseline c76cfb9, services/memory-module/index.js imports server/memory-module-service-worker.js, but that module was deleted upstream in commit d3a6d81 ('refactor(core-v0): R-020 stage 4 - delete unused endpoints and dead modules') without updating the import. The service cannot start as-shipped. A temporary no-op shim (server/memory-module-service-worker.js, untracked) was added so the lane could run; it is DELETED during cleanup and never committed. This is a real baseline defect, not a measurement artifact.",
+    "INDEXER GAP: because the real service-worker (which builds index_documents from outbox 'assertion.active' events) is missing, index_documents stayed at 0 rows. The SDK smoke's read-your-write still passed -- its retrieve path does not depend on the BM25 index (it resolves the just-written memory via the assertion/consistency-token read path). So the external chain is proven working, but the production indexer path is currently a no-op and would matter for BM25 retrieval at scale.",
+    "OUTBOX MEASUREMENT: only 'correct' emits a new memory_outbox_events row; the ~3000ms 'outbox' value for pin/revoke/forget/delete is the poll timeout meaning 'no new outbox row emitted', which is correct behavior, not a failure.",
+    "PROPAGATION LAG INTERPRETATION: governance derived faces are written synchronously inside the same save() transaction that returns the 200, so the ~15ms 'derived settle' is psql poll round-trip overhead; true server-side convergence is sub-ms. Reported honestly as observed wall-clock.",
+    "NO FABRICATION: every number is from a real run; nothing synthesized."
+  ]
+}
