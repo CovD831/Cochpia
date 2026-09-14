@@ -83,6 +83,15 @@
       "files": ["scripts/e2e-panels.py"]
     },
     {
+      "id": "service-boot-smoke",
+      "tier": 3,
+      "kind": "node",
+      "command": "scripts/service-boot-smoke.mjs",
+      "needs": ["pg-binaries", "ports"],
+      "desc": "独立服务无垫片启动冒烟：一次性集群 + SDK smoke + 索引器活性（盲审 F3 处置，替代一次性手工跑批）",
+      "files": ["scripts/service-boot-smoke.mjs", "server/memory-module-service-worker.js"]
+    },
+    {
       "id": "live-acceptance",
       "tier": 3,
       "kind": "npm",
