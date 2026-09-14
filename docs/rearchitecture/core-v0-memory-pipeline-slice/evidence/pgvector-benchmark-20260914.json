@@ -1,0 +1,82 @@
+{
+  "id": "pgvector-benchmark-20260914",
+  "verificationStatus": "EXECUTED",
+  "verdict": "PARTIAL",
+  "recordedBy": "coordinator（舵）代为落盘——lane 代理实测后因磁盘满无法写文件，本 JSON 是其运行记录的忠实转写，未实测的项一律 NOT_EXECUTED",
+  "date": "2026-09-14",
+  "lane": "wave-2 L10（lane/p3-pg-lab）",
+  "environment": {
+    "postgres": "17.11 homebrew",
+    "pgvector": "0.8.6（本机已有 vector.dylib，无需安装）",
+    "cluster": "/tmp/pgvector-lab-20260914（一次性 initdb，端口 5497，超级用户 lab）",
+    "schemaSource": "repo memory-module-schema.sql",
+    "productionTouched": false
+  },
+  "steps": [
+    {
+      "step": "initdb + CREATE EXTENSION vector",
+      "status": "PASS",
+      "note": "一次性集群（仅该集群装扩展，未触 5433）"
+    },
+    {
+      "step": "memory schema 建表",
+      "status": "PASS"
+    },
+    {
+      "step": "smoke 验收",
+      "status": "PASS",
+      "assertions": {
+        "schemaIdempotent": true,
+        "subjectIsolation": true,
+        "tenantIsolation": true,
+        "workerFencing": true,
+        "concurrencyGuard": true
+      }
+    },
+    {
+      "step": "pgvector/HNSW 验收（native vector + RRF hybrid）",
+      "status": "PASS",
+      "assertions": {
+        "pgvector": true,
+        "hybridNative": true,
+        "hnswObserved": true,
+        "retrievalMode": "postgres_hybrid_rrf"
+      },
+      "explain": "EXPLAIN plan 含 index_documents_embedding_hnsw_idx 的 Index Scan"
+    },
+    {
+      "step": "1M 文档 / 20 并发基准",
+      "status": "FAILED",
+      "verificationStatus": "NOT_EXECUTED",
+      "attempts": [
+        {
+          "attempt": 1,
+          "error": "Query read timeout（默认 30s statement_timeout 不够）",
+          "seedStep": "assertions"
+        },
+        {
+          "attempt": 2,
+          "error": "53100 No space left on device",
+          "seedStep": "versions",
+          "note": "根卷 100% 满（1M 规模约需 12–16GB，写爆 /tmp 至 6.8GB）"
+        }
+      ],
+      "p50p95p99": null,
+      "degradationRate": null
+    }
+  ],
+  "blockers": [
+    "宿主机 Data 卷 100% 满（192GB/228GB，avail 1.3Gi）——非本实验室残留（实验产物 7.5GB 已全部删除，APFS 卷记账/系统快照扣住未返还）",
+    "1M 全规模需 ~12–16GB，磁盘恢复前物理不可行；降级规模（250k/100k）同样需要 ~3–4GB"
+  ],
+  "residualNotes": [
+    "1M 自然 planner 选择的 EXPLAIN 证据未采（seed 被磁盘阻塞）——当前 HNSW 证据为强制 plan",
+    "HNSW 验收通过的是 vector/hybrid 检索路径可用性，非性能数字；性能数字待磁盘恢复后补测",
+    "环境坑已记录：wal_level=minimal 与 max_wal_senders>0 冲突（改 replica 或 max_wal_senders=0）；1M 单行 INSERT 需调大 DATABASE_QUERY_TIMEOUT_MS"
+  ],
+  "alphaGateRow": {
+    "row": "1M-doc/20-concurrent p50/p95/p99 真实 PostgreSQL benchmark",
+    "status": "仍未达成（PARTIAL）",
+    "hnswRowNote": "pgvector/HNSW 可用性验收 PASS——『real pgvector/HNSW/vector-hybrid 性能仍未验收』行获得部分证据（可用性），性能数字仍缺"
+  }
+}
