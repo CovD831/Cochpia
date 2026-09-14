@@ -1,0 +1,96 @@
+{
+  "comment": "闸门注册表——防腐单一真源（2026-09-14 立）。历史教训：闸门脚本不在 npm test 里，已腐烂 4 次（阶段 2a/3/4 + A-12/P-09），腐烂形态固定为「断言停在旧契约上」。本注册表 + server/gate-antirot.test.js 哨兵构成防腐：① 新闸门必须登记（否则哨兵不认识它）；② 闸门脚本禁止重新键入退役路由字面量，必须 import server/chat-route-contract.js。tier: 1=fast 无 PG；2=local-full 需本机 PG 5433 / 端口；3=special 需构建产物 / 显式批准。运行：node scripts/run-gates.mjs --tier=2。",
+  "contract": "server/chat-route-contract.js",
+  "runner": "scripts/run-gates.mjs",
+  "gates": [
+    {
+      "id": "npm-test",
+      "tier": 1,
+      "kind": "npm",
+      "command": "test",
+      "needs": [],
+      "desc": "全量单测（含 gate-antirot 哨兵自身）",
+      "files": []
+    },
+    {
+      "id": "check-routes",
+      "tier": 1,
+      "kind": "npm",
+      "command": "check:routes",
+      "needs": [],
+      "desc": "express 实际路由表 vs chat-route-contract 契约",
+      "files": ["scripts/route-table-check.mjs"]
+    },
+    {
+      "id": "a-chat-turns-fixture",
+      "tier": 1,
+      "kind": "npm",
+      "command": "acceptance:core-v0-chat-turns",
+      "needs": [],
+      "desc": "A-01~A-12 fixture 版（两套 A 系列之一，勿与实跑版合并）",
+      "files": ["scripts/core-v0-chat-turns-acceptance.js"]
+    },
+    {
+      "id": "a-core-v0-runtime",
+      "tier": 2,
+      "kind": "npm",
+      "command": "acceptance:core-v0",
+      "needs": ["ports"],
+      "desc": "A-01~A-12 实跑版（LAN/TLS 证据出自它；两套 A 系列之二）",
+      "files": [
+        "scripts/core-v0-foundation-acceptance.js",
+        "scripts/core-v0-runtime-acceptance.js",
+        "scripts/core-v0-acceptance-host.mjs"
+      ]
+    },
+    {
+      "id": "pg-acceptance",
+      "tier": 2,
+      "kind": "npm",
+      "command": "acceptance:core-v0-postgres",
+      "needs": ["pg-5433"],
+      "desc": "P-01~P-09 + 回滚演练 P-10（L-01/L-02 需 live 端点姿态才翻绿，其余隔离态可跑）",
+      "files": [
+        "scripts/core-v0-postgres-acceptance.js",
+        "scripts/core-v0-postgres-rollback-rehearsal.js"
+      ]
+    },
+    {
+      "id": "leak-probe",
+      "tier": 2,
+      "kind": "node",
+      "command": "scripts/probe-agent-scope-leak.mjs",
+      "needs": ["pg-5433"],
+      "desc": "跨 agent 泄漏探针（exit 1 = leak；真实 drain 路径）",
+      "files": ["scripts/probe-agent-scope-leak.mjs"]
+    },
+    {
+      "id": "e2e-acceptance",
+      "tier": 3,
+      "kind": "npm",
+      "command": "test:e2e",
+      "needs": ["dist", "playwright-env-python"],
+      "desc": "e2e 验收 8/8（需先 npm run build；python 用 envs/default）",
+      "files": ["scripts/e2e-acceptance.py"]
+    },
+    {
+      "id": "e2e-panels",
+      "tier": 3,
+      "kind": "npm",
+      "command": "test:e2e:panels",
+      "needs": ["dist", "playwright-env-python"],
+      "desc": "e2e 面板 10/10（含 AR-212 负例 P10）",
+      "files": ["scripts/e2e-panels.py"]
+    },
+    {
+      "id": "live-acceptance",
+      "tier": 3,
+      "kind": "npm",
+      "command": "acceptance:core-v0-postgres-live",
+      "needs": ["pg-5433", "boss-approval"],
+      "requiresFlag": "with-live",
+      "desc": "live L-01/L-02：用生产 DATABASE_URL 建删隔离 schema——动生产库，必须老板点头且沙箱外跑",
+      "files": ["scripts/core-v0-postgres-live-acceptance.js"]
+    }
+  ]
+}
