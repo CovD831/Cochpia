@@ -180,7 +180,7 @@ async function seed() {
           'assertion', $8::text || 'assertion-' || g::text, $8::text || 'version-' || g::text,
           $1::text || 'user-' || (g % $3::int)::text, 'user',
           'benchmark topic-' || (g % 37)::text || ' red tea tenant-' || (g % $2::int)::text,
-          'S0', true, true, 0, $5,
+          'S0', true, true, 0, $5, 0,
           CASE WHEN g % 2 = 0 THEN $6::jsonb ELSE $7::jsonb END,
           'benchmark-v1', 'bm25-v1', 'active',
           ARRAY['benchmark-source-' || g::text], now()

@@ -1,0 +1,60 @@
+{
+  "runId": "benchmark-1m-openpilot-air-20260914",
+  "date": "2026-09-14",
+  "verdict": "PASS",
+  "executedOn": "remote host openpilot-air (abaabadeMacBook-Air.local, Apple Silicon MacBook Air, macOS up 5 days), 125Gi free disk; orchestrated over SSH from the primary machine because the primary Data volume could not fit 1M corpus (~11GB est.)",
+  "alphaGateRow": {
+    "row": "1M-doc / 20-concurrent p50/p95/p99 real PostgreSQL benchmark",
+    "statusBefore": "无数字（250k PARTIAL + 外推）",
+    "statusAfter": "PASS — 真实 1M 规模实测，非外推"
+  },
+  "scale": {
+    "documentCount": 1000000,
+    "requestCount": 100,
+    "concurrency": 20,
+    "tenantCount": 8,
+    "userCount": 32,
+    "mode": "postgres_native_hybrid",
+    "modesBreakdown": { "postgres_hybrid_rrf": 100 },
+    "hnswRebuiltAfterSeed": true,
+    "filteredCandidateEstimate": 3907
+  },
+  "latency": {
+    "p50Ms": 7260.4,
+    "p95Ms": 12729.4,
+    "p99Ms": 13181.0,
+    "failures": 0,
+    "minResultCount": 50,
+    "maxResultCount": 50
+  },
+  "timings": {
+    "totalWallClock": "8m28s (20:44:03 → 20:52:31)",
+    "seedPlusIndexAndBenchmark": "single script run; initdb 1s"
+  },
+  "comparisonWith250k": {
+    "note": "诚实记录：1M 的 p50 7260ms 相对 250k 的 p50 170ms 呈超线性恶化（4.3x 规模 → 42.7x 延迟），远劣于 250k 证据里的外推（p95 0.6–1.5s）。外推方法（分段线性）已失效。",
+    "attributionUpdate": "2026-09-15 归因实验（attribution-20260914.json）已分离：同机（Air）250k→1M = ×25.4（规模^2.33，真实规模效应）；机器因子仅 ×1.7；1M hybrid 7277ms 中 lexical 单路 1792ms + vector/RRF 合并 ≈5485ms；auto_explain 证伪『HNSW 溢出』假设（2 维基准向量，计划无 Function Scan）。主因=RRF 多路 SQL 的 join/sort 结构成本。本文件的原始 hypotheses[0]（内存溢出主导）不成立，保留原文作历史。",
+    "followUp": "P1 修法排序更新：检索 SQL『先收缩后合并』（两路 CTE 各自 topN 再 RRF）优先于 tenant 分区"
+  },
+  "environment": {
+    "postgres": "17.11 (Homebrew, relocated to ~/cochpia-bench/homebrew)",
+    "pgvector": "0.8.6",
+    "node": "22.22.2 (managed runtime, copied)",
+    "relocation": "brew 树整体 rsync + install_name_tool 批量改写 /opt/homebrew 引用 → ~/cochpia-bench/homebrew（3 轮：固定 Cellar 引用、修双斜杠、Cellar→opt 布局归一），ad-hoc 重签；pgvector keg 补传以愈合 extension control 符号链接",
+    "antiSleep": "caffeinate -dims 包裹全流程",
+    "cluster": "initdb 一次性集群（端口 5494，trust，LC_ALL=C）；基准结束后 pg_ctl stop，数据目录已删除（老板要求：不留残留）"
+  },
+  "steps": [
+    { "step": "dyld 重定位修复（3 轮 install_name_tool + codesign）", "result": "完成；initdb/createdb/CREATE EXTENSION 全周期探针 PASS" },
+    { "step": "initdb + createdb + CREATE EXTENSION vector", "result": "20:44:02 → 20:44:03" },
+    { "step": "1M seed + HNSW 重建 + 100 请求/20 并发基准", "result": "exit=0，failures=[]，modes 全部 postgres_hybrid_rrf" },
+    { "step": "结果拉回主执行机", "result": "backups/bench1m-raw-20260914.json" },
+    { "step": "远端清理（数据目录/日志）", "result": "完成，REMOTE-CLEANED" }
+  ],
+  "rawOutputCopy": "backups/bench1m-raw-20260914.json（与远端 bench1m-output.json 一致）",
+  "knownGaps": [
+    "EXPLAIN 计划未在 1M 规模下采集（runner 未含该步骤）",
+    "未在同一台机器上做 250k/1M 跨规模对照，超线性恶化的归因是假设清单而非结论",
+    "基准脚本 cleanup 走 tenant 前缀 DELETE；库级对象未 drop（集群已整删，无残留）"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "runId": "prefetch-1m-retest-20260915",
+  "date": "2026-09-15",
+  "verdict": "PASS",
+  "purpose": "L17 检索 SQL「先收缩后合并」修复后，1M 规模 hybrid RRF 复测——验证归因→修法→效果全链闭环",
+  "change": "server/memory-module-postgres-retrieval.js：lexical/vector 两路 CTE 各自 ORDER BY rank LIMIT N（narrowLimit 参数化，默认 2×limit，夹紧 [limit,1000]）后再 RRF 合并；断言生命周期过滤留在 join 层",
+  "beforeAfter": {
+    "before": { "source": "benchmark-1m-openpilot-air-20260914.json + attribution-20260914.json（同机同参数）", "p50Ms": 7277.4, "p95Ms": 12729.4, "p99Ms": 13181.0, "note": "归因轮 1M hybrid 两次实测 p50 7260/7277，可复现" },
+    "after": { "p50Ms": 1848.0, "p95Ms": 3207.9, "p99Ms": 3209.7, "failures": 0, "modes": { "postgres_hybrid_rrf": 100 } }
+  },
+  "delta": { "p50": "-74.6%（7277→1848ms，3.9×）", "p95": "-74.8%", "p99": "-75.7%" },
+  "attributionClosure": "归因轮：lexical 单路 1792ms、hybrid 7277ms、差值 5485ms = RRF 合并结构成本。预收缩后 hybrid 1848ms ≈ lexical 1792 + 56ms——合并结构成本 5485ms → 56ms（~98% 消除），与归因预测定量吻合",
+  "remaining": "1848ms = 1M 规模 lexical 本底（GIN + rank），本口径下无需再压（支持规模目标 ≤250k，p95<500ms 已达标）",
+  "equivalence": "等价性 A/B（20k 合成集，L17 lane 内）：健康分布 N=100/200 均 100% 序列一致；60% stale 极端分布 N=100 重合 66–88%（尾部缺失、无乱序），N=200 恢复 100%——narrowLimit 可配上调，集成评审时结合生产分布决策",
+  "environment": "openpilot-air 重定位 PG 17.11 + pgvector 0.8.6，1,000,000 docs / 100 req / 20 并发，全程 8m41s（23:31:25→23:40:06），跑完集群删除（REMOTE-CLEAN）",
+  "rawOutputCopy": "backups/prefetch-1m-retest-20260915.json"
+}
