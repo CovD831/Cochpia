@@ -165,6 +165,12 @@ def _server_env():
     if not env.get("COCHPIA_DATA_DIR"):
         run_data_dir = Path(tempfile.mkdtemp(prefix="cochpia-e2e-check-"))
         env["COCHPIA_DATA_DIR"] = str(run_data_dir)
+    # Some host shells inject NODE_OPTIONS (e.g. editor/agent runtime `--require`
+    # shims). Inheriting it here deadlocks module load in the server child: the
+    # process produces no log output and never binds the port, so every check
+    # reports "SERVER FAILED TO START". The server must start from a clean node
+    # environment -- clear it unless the caller explicitly set one for this run.
+    env.pop("NODE_OPTIONS", None)
     return env
 
 
@@ -399,16 +405,24 @@ def check_settings_panel(browser):
 # 面板仍渲染出数据（会话行），(b) 失败面板出现可见的 .panel-error 提示。其余 7 个
 # 接口不被吞掉——这正是 AR-212 的修复语义。
 #
-# 注意拦截目标的选择：必须选「错误提示在落地页（Sanctum）默认可见」的接口。
-# /api/personality 失败 → panelErrors.personality 渲染在首页 Pulse 区（默认可见）；
-# 而 /api/models 失败 → 错误在 model-dock，该区域在 home 页是 is-page-hidden
-# （display:none），checkVisibility 会误判为不可见。故此处拦截 /api/personality。
+# 注意拦截目标的选择：必须选「其 PanelError 真的被渲染、且默认视图可见」的接口。
+# 历史教训（本 check 三次误报，全部是断言侧问题，非产品缺陷）：
+# ① 拦 /api/personality，注释称「错误提示在首页 Pulse 区默认可见」——但 main.jsx 里
+#    panelErrors.personality 被赋值后**没有任何渲染点**，故 (b) 必为 ✗。
+# ② 改拦 /api/memory/overview 后仍 ✗——承载 PanelError 的 inspector 是 FloatingWindow，
+#    默认关闭（WindowManager.jsx:173 未开窗时 return null），节点不在 DOM 里。
+# ③ 打开 inspector 后仍 ✗——**page.route 拦不到 fetch**：实测同一 URL 用
+#    context.route 命中、page.route 零命中（本 check 的请求正是这种情形），所以 500
+#    从未注入，panelErrors 一直为空。改用 context.route 后当场复现出
+#    「共享记忆加载失败：injected」且可见。
+# 现方案：context.route 注入 500 + 切 Arcana + 打开 inspector + 断言错误可见。
 @check("P10 单接口失败其余面板仍渲染且失败面板可见报错（AR-212 反面）")
 def check_panel_isolation(browser):
     context = browser.new_context(accept_downloads=True)
     page = context.new_page()
-    # 拦截 /api/personality（人格面板，失败提示在首页 Pulse 区可见），返回 500。
-    page.route("**/api/personality", lambda route: route.fulfill(
+    # 拦截 /api/memory/overview（共享记忆面板），返回 500。
+    # 必须用 context.route：page.route 对本页的 fetch 实测不生效（见上方教训③）。
+    context.route("**/api/memory/overview", lambda route: route.fulfill(
         status=500, content_type="application/json",
         body='{"error":"injected failure"}'))
     try:
@@ -418,7 +432,10 @@ def check_panel_isolation(browser):
         time.sleep(1.4)
         # (a) 其它面板仍渲染出数据：/api/sessions 未被拦截，会话行应存在。
         other_ok = page.locator(".aube-session-row").count() > 0
-        # (b) 失败面板出现可见错误提示（Pulse 区的 .panel-error）。
+        # (b) 打开 inspector（承载 panelErrors.memory），失败提示应可见。
+        open_page(page, "Arcana")
+        page.locator("button:has-text('查看共同状态'):visible").first.click(timeout=10000)
+        time.sleep(1.0)
         error_loc = page.locator(".panel-error")
         error_ok = error_loc.count() > 0 and error_loc.first.evaluate(
             "e => e.checkVisibility({visibilityProperty:true})")

@@ -98,6 +98,13 @@ def main():
         run_data_dir = Path(tempfile.mkdtemp(prefix="cochpia-e2e-acceptance-"))
         env["COCHPIA_DATA_DIR"] = str(run_data_dir)
         print(f"isolated COCHPIA_DATA_DIR={run_data_dir}", flush=True)
+    # Some host shells inject NODE_OPTIONS (e.g. editor/agent runtime `--require`
+    # shims). Inheriting it here deadlocks module load in the server child -- the
+    # process emits no log output and never binds the port, and the suite then
+    # stalls waiting for a server that can never come up. Start the server from a
+    # clean node environment; a caller that really needs NODE_OPTIONS can set it
+    # again after this point.
+    env.pop("NODE_OPTIONS", None)
     log_path = REPO / "artifacts" / "e2e-server.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("w")

@@ -54,11 +54,17 @@ for (const gate of selected) {
   }
 
   const started = Date.now();
+  // NODE_OPTIONS 必须清掉：宿主 shell（编辑器 / agent 运行时）会注入 `--require` shim，
+  // 该 shim 的 brokered-fs 策略会拒绝 pg 等模块的加载，使多个测试文件假失败
+  // （实测：带 shim 345 tests/5 fail，清掉后 468 tests/0 fail，同一棵树）。
+  // 闸门是「判定产品行为」的工具，不能被宿主 shell 的注入污染。
+  const childEnv = { ...process.env };
+  delete childEnv.NODE_OPTIONS;
   const res = spawnSync(command, {
     cwd: ROOT,
     shell: true,
     stdio: 'inherit',
-    env: process.env,
+    env: childEnv,
   });
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
   const ok = res.status === 0;
