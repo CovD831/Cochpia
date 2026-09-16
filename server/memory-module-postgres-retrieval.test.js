@@ -43,6 +43,58 @@ test('PostgreSQL vector candidate query hard-filters an Agent grant and uses pgv
   assert.match(query.sql, /d\.embedding_vector IS NOT NULL/);
 });
 
+test('lexical candidate query narrows index_documents before joining payload tables', () => {
+  const query = buildPostgresIndexCandidateQuery({
+    tenantId: 'tenant-a',
+    subjectUserId: 'user-a',
+    purpose: 'answer_user_query',
+    query: '红茶',
+    now: '2026-08-22T00:00:00.000Z',
+    limit: 12
+  });
+  assert.match(query.sql, /WITH narrowed AS/);
+  const cte = query.sql.slice(query.sql.indexOf('WITH narrowed AS'), query.sql.indexOf('FROM narrowed'));
+  assert.match(cte, /ORDER BY candidate_score DESC, d\.id ASC\s+LIMIT \$\d+/s);
+  assert.match(cte, /to_tsvector\('simple', d\.search_text\)/);
+  assert.match(cte, /redaction\.privacy_epoch/);
+  // lifecycle filters stay outside the narrowing CTE
+  assert.doesNotMatch(cte, /a\.status = 'active'/);
+  assert.doesNotMatch(cte, /v\.version_status = 'current'/);
+  assert.match(query.sql, /FROM narrowed\s+JOIN index_documents d ON d\.tenant_id = \$1 AND d\.id = narrowed\.id/s);
+  // final limit stays the last bound parameter; prefetch depth precedes it
+  assert.equal(query.params.at(-1), 12);
+  assert.equal(query.params.at(-2), 24);
+  assert.equal(query.limit, 12);
+});
+
+test('prefetch limit is parameterizable and clamped to the 2x default when below the final limit', () => {
+  const base = { tenantId: 'tenant-a', subjectUserId: 'user-a', purpose: 'answer_user_query', query: '红茶' };
+  const custom = buildPostgresIndexCandidateQuery({ ...base, limit: 50, narrowLimit: 200 });
+  assert.equal(custom.params.at(-2), 200);
+  const clamped = buildPostgresIndexCandidateQuery({ ...base, limit: 50, narrowLimit: 20 });
+  assert.equal(clamped.params.at(-2), 100);
+  const capped = buildPostgresIndexCandidateQuery({ ...base, limit: 50, narrowLimit: 100_000 });
+  assert.equal(capped.params.at(-2), 1000);
+});
+
+test('vector candidate query narrows by distance inside the CTE and reorders identically outside', () => {
+  const query = buildPostgresIndexCandidateQuery({
+    tenantId: 'tenant-a',
+    subjectUserId: 'user-a',
+    purpose: 'answer_user_query',
+    query: 'preference',
+    queryVector: [1, 0],
+    mode: 'vector',
+    limit: 10
+  });
+  const cte = query.sql.slice(query.sql.indexOf('WITH narrowed AS'), query.sql.indexOf('FROM narrowed'));
+  assert.match(cte, /d\.embedding_vector IS NOT NULL/);
+  assert.match(cte, /ORDER BY d\.embedding_vector <=> \$\d+::vector ASC, d\.id ASC\s+LIMIT \$\d+/s);
+  assert.match(query.sql, /ORDER BY d\.embedding_vector <=> \$\d+::vector ASC, d\.id ASC\s+LIMIT \$\d+\s*$/s);
+  assert.equal(query.params.at(-1), 10);
+  assert.equal(query.params.at(-2), 20);
+});
+
 test('native candidate rows preserve assertion and version evidence', () => {
   const item = mapPostgresIndexCandidate({
     document_id: 'doc-a',

@@ -23,17 +23,22 @@ export function createMemoryModuleNativeRetriever({
   hybridRetrieval = false,
   vectorRetrieval = false,
   policyVersion = 'memory-policy-v1',
-  limit = 50
+  limit = 50,
+  narrowLimit = null
 } = {}) {
   if (!repository || typeof repository.searchIndexDocuments !== 'function') throw new TypeError('A repository with searchIndexDocuments is required');
   const wantsVector = hybridRetrieval === true || vectorRetrieval === true;
+  // Shrink-then-merge prefetch depth forwarded to both channels' SQL; the
+  // repository defaults it to 2x the final limit when not provided.
+  const prefetchLimit = Number.isInteger(narrowLimit) && narrowLimit > 0 ? narrowLimit : limit * 2;
   return async (context, input = {}) => {
     const lexical = await repository.searchIndexDocuments(context, {
       query: input.query,
       purpose: input.purpose,
       mode: 'lexical',
       policyVersion,
-      limit
+      limit,
+      narrowLimit: prefetchLimit
     });
     if (!wantsVector) return { items: lexical, retrievalMode: 'postgres_lexical' };
     if (!pgvectorEnabled) return { items: lexical, retrievalMode: fallbackMode('PGVECTOR_NOT_ENABLED') };
@@ -60,7 +65,8 @@ export function createMemoryModuleNativeRetriever({
         purpose: input.purpose,
         mode: 'vector',
         policyVersion,
-        limit
+        limit,
+        narrowLimit: prefetchLimit
       });
     } catch (error) {
       if (input.requireNativeRetrieval === true) throw error;

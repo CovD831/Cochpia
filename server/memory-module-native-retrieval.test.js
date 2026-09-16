@@ -46,6 +46,30 @@ test('native hybrid retriever generates the query vector server-side and fuses n
   assert.deepEqual(result.items.map(item => item.id).sort(), ['lexical-a', 'vector-a']);
 });
 
+test('native retriever forwards the prefetch narrowing limit to both channels', async () => {
+  const customRepository = fakeRepository();
+  const custom = createMemoryModuleNativeRetriever({
+    repository: customRepository,
+    pgvectorEnabled: true,
+    hybridRetrieval: true,
+    narrowLimit: 120,
+    embeddingGateway: { embed: async () => [1, 0] }
+  });
+  await custom(context, { query: 'tea', purpose: 'answer_user_query' });
+  assert.deepEqual(customRepository.calls.map(call => call.narrowLimit), [120, 120]);
+
+  const defaultRepository = fakeRepository();
+  const fallback = createMemoryModuleNativeRetriever({
+    repository: defaultRepository,
+    pgvectorEnabled: true,
+    hybridRetrieval: true,
+    embeddingGateway: { embed: async () => [1, 0] }
+  });
+  await fallback(context, { query: 'tea', purpose: 'answer_user_query' });
+  // default prefetch depth = 2x the final limit (50)
+  assert.deepEqual(defaultRepository.calls.map(call => call.narrowLimit), [100, 100]);
+});
+
 test('native vector retriever falls back to lexical when pgvector is disabled or embedding fails', async () => {
   const disabledRepository = fakeRepository();
   const disabled = createMemoryModuleNativeRetriever({

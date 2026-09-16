@@ -11,6 +11,17 @@ function boundedLimit(value) {
   return Math.max(1, Math.min(100, Number.isInteger(Number(value)) ? Number(value) : 50));
 }
 
+// Shrink-then-merge prefetch depth: each channel narrows index_documents to
+// the top-N rows by rank BEFORE joining assertion/version payload tables, so
+// the multi-table join/sort only ever sees N rows instead of the full
+// candidate set. Defaults to 2x the final limit; callers may override.
+function resolveNarrowLimit(value, limit) {
+  const fallback = limit * 2;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < limit) return fallback;
+  return Math.min(1000, Math.floor(parsed));
+}
+
 function addParameter(params, value) {
   params.push(value);
   return `$${params.length}`;
@@ -28,7 +39,8 @@ export function buildPostgresIndexCandidateQuery({
   mode = 'lexical',
   policyVersion = 'memory-policy-v1',
   now = new Date(),
-  limit = 50
+  limit = 50,
+  narrowLimit = null
 } = {}) {
   if (!tenantId || !subjectUserId) throw new TypeError('tenantId and subjectUserId are required');
   if (!Object.hasOwn(PURPOSE_PERMISSIONS, purpose)) throw new TypeError('Unsupported retrieval purpose');
@@ -37,20 +49,27 @@ export function buildPostgresIndexCandidateQuery({
   if (!normalizedQuery) throw new TypeError('query is required');
 
   const params = [tenantId, subjectUserId];
-  const conditions = [
+  // Document-level conditions: evaluable on index_documents alone (plus the
+  // per-subject redaction epoch and agent scope grants, which do not touch
+  // the payload tables). These live inside the narrowing CTE.
+  const docConditions = [
     'd.tenant_id = $1',
     'd.user_id = $2',
     "d.index_status = 'active'",
+    'd.redaction_epoch = COALESCE(redaction.privacy_epoch, 0)',
+    'd.policy_epoch = $4'
+  ];
+  // Join-level conditions: assertion/version lifecycle state. They stay
+  // OUTSIDE the narrowing CTE — a narrowed document whose assertion went
+  // stale is dropped after the join, which is the only behavioural drift
+  // surface versus the legacy join-then-limit shape (quantified by
+  // scripts/prefetch-equivalence-check.mjs).
+  const joinConditions = [
     "a.status = 'active'",
     "v.version_status = 'current'",
-    'd.source_id = a.id',
-    'd.source_version = v.id',
-    'v.assertion_id = a.id',
     '(a.expires_at IS NULL OR a.expires_at > $3::timestamptz)',
     '(v.valid_from IS NULL OR v.valid_from <= $3::timestamptz)',
-    '(v.valid_to IS NULL OR v.valid_to > $3::timestamptz)',
-    "d.redaction_epoch = COALESCE(redaction.privacy_epoch, 0)",
-    `d.policy_epoch = $4`
+    '(v.valid_to IS NULL OR v.valid_to > $3::timestamptz)'
   ];
   params.push(new Date(now).toISOString(), policyVersion);
 
@@ -59,7 +78,7 @@ export function buildPostgresIndexCandidateQuery({
     const agentParam = addParameter(params, callerAgentId);
     const permissionParam = addParameter(params, PURPOSE_PERMISSIONS[purpose]);
     const sessionParam = sessionId ? addParameter(params, sessionId) : 'NULL';
-    conditions.push(`(
+    docConditions.push(`(
       (d.scope_type = 'relationship' AND d.relationship_agent_id = ${agentParam})
       OR (d.scope_type = 'session' AND d.relationship_agent_id = ${agentParam} AND d.session_id = ${sessionParam})
       OR (d.scope_type = 'user' AND EXISTS (
@@ -75,7 +94,7 @@ export function buildPostgresIndexCandidateQuery({
       ))
     )`);
   }
-  if (purpose === 'proactive_mention') conditions.push("a.mention_policy = 'mentionable'");
+  if (purpose === 'proactive_mention') joinConditions.push("a.mention_policy = 'mentionable'");
 
   let scoreExpression;
   let orderBy;
@@ -83,20 +102,30 @@ export function buildPostgresIndexCandidateQuery({
     if (!Array.isArray(queryVector)) throw new TypeError('queryVector is required for vector retrieval');
     const vectorParam = addParameter(params, toPgvectorLiteral(queryVector));
     scoreExpression = `1 - (d.embedding_vector <=> ${vectorParam}::vector)`;
-    conditions.push('d.embedding_vector IS NOT NULL');
+    docConditions.push('d.embedding_vector IS NOT NULL');
     orderBy = `d.embedding_vector <=> ${vectorParam}::vector ASC, d.id ASC`;
   } else {
     const queryParam = addParameter(params, normalizedQuery);
     scoreExpression = `ts_rank_cd(to_tsvector('simple', d.search_text), websearch_to_tsquery('simple', ${queryParam}))
       + CASE WHEN d.search_text ILIKE '%' || ${queryParam} || '%' THEN 0.1 ELSE 0 END`;
-    conditions.push(`(
+    docConditions.push(`(
       to_tsvector('simple', d.search_text) @@ websearch_to_tsquery('simple', ${queryParam})
       OR d.search_text ILIKE '%' || ${queryParam} || '%'
     )`);
     orderBy = `candidate_score DESC, d.id ASC`;
   }
-  const limitParam = addParameter(params, boundedLimit(limit));
+  const effectiveLimit = boundedLimit(limit);
+  const narrowLimitParam = addParameter(params, resolveNarrowLimit(narrowLimit, effectiveLimit));
+  const limitParam = addParameter(params, effectiveLimit);
   const sql = `
+    WITH narrowed AS (
+      SELECT d.id, ${scoreExpression} AS candidate_score
+      FROM index_documents d
+      LEFT JOIN redaction_epochs redaction ON redaction.tenant_id = d.tenant_id AND redaction.user_id = d.user_id
+      WHERE ${docConditions.join('\n        AND ')}
+      ORDER BY ${orderBy}
+      LIMIT ${narrowLimitParam}
+    )
     SELECT
       d.id AS document_id,
       d.tenant_id,
@@ -146,16 +175,16 @@ export function buildPostgresIndexCandidateQuery({
       v.promotion_reason,
       v.promotion_policy_version,
       v.created_at AS version_created_at,
-      ${scoreExpression} AS candidate_score
-    FROM index_documents d
+      narrowed.candidate_score
+    FROM narrowed
+    JOIN index_documents d ON d.tenant_id = $1 AND d.id = narrowed.id
     JOIN memory_assertions a ON a.tenant_id = d.tenant_id AND a.user_id = d.user_id AND a.id = d.source_id
     JOIN assertion_versions v ON v.tenant_id = d.tenant_id AND v.assertion_id = a.id AND v.id = d.source_version
-    LEFT JOIN redaction_epochs redaction ON redaction.tenant_id = d.tenant_id AND redaction.user_id = d.user_id
-    WHERE ${conditions.join('\n      AND ')}
+    WHERE ${joinConditions.join('\n      AND ')}
     ORDER BY ${orderBy}
     LIMIT ${limitParam}
   `;
-  return { sql, params, mode, limit: boundedLimit(limit) };
+  return { sql, params, mode, limit: effectiveLimit };
 }
 
 export function mapPostgresIndexCandidate(row) {
