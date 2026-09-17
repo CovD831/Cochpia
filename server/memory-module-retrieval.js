@@ -1,5 +1,50 @@
 const cjkPattern = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
 
+// 词干归一化开关（lane B 提出，2026-09-17；默认值经老板裁决改为「关」）。
+//
+// **为什么默认关**：词干化的检索收益经双口径三态对照后**判定为不显著**
+//   —— 多跳效应在 342 口径（n=74）与全样本口径（n=282）分别为 p=1.0000 / p=0.2272，
+//   均无法与噪声区分（详见 team-runs/20260917-1646-p0-defects-route-stem/ADJUDICATION.md）。
+//   故**不合入默认行为**；机制代码入库是为了保留已验证的实现与它的词法测试，
+//   并让「重开此议题」有一个现成的、可开开关的实验入口。
+//
+// 本函数只回答「当前是否启用」这一个问题，不承载判据。启用方式：
+//   MEMORY_TOKENIZER_STEM=1（或 true/on/yes）——其余任何值（含不设）都是关。
+// 刻意每次调用读 env 而不是模块加载时缓存：允许同进程内对照，且切换无需改代码。
+export const STEMMING_ENV_VAR = 'MEMORY_TOKENIZER_STEM';
+
+export function stemmingEnabled() {
+  const raw = process.env[STEMMING_ENV_VAR];
+  if (raw === undefined || raw === null || String(raw).trim() === '') return false;
+  return ['1', 'true', 'on', 'yes'].includes(String(raw).trim().toLowerCase());
+}
+
+// 保守后缀词干化——只处理最有把握的复数/进行/过去形态，**不做完整 Porter**。
+//   诊断（recall-experiments-20260917.json）：tokenizer 无词干归一化，导致
+//   查询 "research" 与标注轮 "Researching" 在 token 层面永不相等 → 多跳漏召回。
+//   规则与评测侧已验证过的实现（scripts/exp-stemming-recall.mjs:stemToken）逐条一致。
+// 保护：长度 < 4 直接返回；只处理纯 a-z（CJK / 数字 / 含下划线的标识符不动）。
+export function stemToken(token) {
+  if (!token || token.length < 4) return token;
+  if (/[^a-z]/.test(token)) return token;
+  let t = token;
+  if (t.endsWith('ies') && t.length > 4) return t.slice(0, -3) + 'y';
+  if (t.endsWith('sses')) return t.slice(0, -2);
+  if (t.endsWith('ing') && t.length > 5) t = t.slice(0, -3);
+  else if (t.endsWith('ed') && t.length > 4) t = t.slice(0, -2);
+  // P0 (2026-09-17): -es 只在「必须靠 -es 才是复数」的词尾上砍 2 ——
+  // 依据：houses→house（不是 hous）、notes→note（不是 not）。
+  // 旧规则对一切以 es 结尾的长词一律砍 2，产出 hous/not/tim/dat/statu/analysi/cas：
+  // 既让同一词族裂开（house/houses 归不到一起），又造成虚假归并（notes→not 撞真词 not）。
+  // 条件化后其余 -es 词走下面的 -s 规则只砍 1。
+  // 词尾集合必须是 ss/x/z/ch/sh（不是 s）—— 单写 `ses` 会把 houses→hous、cases→cas，
+  // 与「houses→house」的目标自相矛盾；`-ses` 里 se+s 与 s+es 本来就不可判别，
+  // 按语料频次取「-se 结尾名词」这一支（house/case），代价是 buses→buse（见 honest_notes）。
+  else if (t.endsWith('es') && t.length > 4 && /(?:ss|x|z|ch|sh)es$/.test(t)) t = t.slice(0, -2);
+  else if (t.endsWith('s') && !t.endsWith('ss') && t.length > 3) t = t.slice(0, -1);
+  return t;
+}
+
 export function tokenize(value) {
   const normalized = String(value || '').toLowerCase().replace(/[-/]/g, '_');
   const tokens = normalized.match(/[a-z0-9_]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/gu) || [];
@@ -11,7 +56,9 @@ export function tokenize(value) {
       for (let index = 0; index < chars.length - 1; index += 1) result.push(chars.slice(index, index + 2).join(''));
     } else result.push(token);
   }
-  return result;
+  // 词干化在切分/二元组展开**之后**做：CJK 二元组与含下划线的标识符会被
+  // stemToken 的保护条件原样放行，所以顺序不影响它们，只影响纯英文单词。
+  return stemmingEnabled() ? result.map(stemToken) : result;
 }
 
 export function bm25Search(documents, query, { k1 = 1.2, b = 0.75, limit = 50, floorRatio = 0 } = {}) {
