@@ -352,6 +352,16 @@ function hasGrant(state, context, assertion, permission) {
   if (context.actorType === 'user' && context.actorId === context.subjectUserId) return true;
   if (context.actorType !== 'agent' || !context.callerAgentId) return false;
   if (assertion.scopeType === 'relationship') return assertion.relationshipAgentId === context.callerAgentId;
+  // life scope belongs to its owning agent the same way relationship does: the
+  // owner is assertion.relationshipAgentId (scopeOf() already rejects a life
+  // memory without one). Omitting this branch made a life memory readable by the
+  // user but NOT by the agent that wrote it -- the agent fell through to the
+  // scopeGrants branch, which asks for a user-issued grant, and grantUserScope()
+  // only lets a user actor issue one. See AR-202 (05-adversarial-review.md),
+  // which states the life visibility rule as relationshipAgentId ===
+  // context.callerAgentId, and the defect note
+  // 13-defect-note-life-scope-owner-agent-cannot-read.md.
+  if (assertion.scopeType === 'life') return assertion.relationshipAgentId === context.callerAgentId;
   if (assertion.scopeType === 'session') return assertion.relationshipAgentId === context.callerAgentId && assertion.sessionId === context.sessionId;
   return state.scopeGrants.some(grant => grant.tenantId === context.tenantId
     && grant.subjectUserId === context.subjectUserId
@@ -1235,7 +1245,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     });
   };
 
-  const finalizeRetrieve = (context, input, rankedItems, retrievalMode) => {
+  const finalizeRetrieve = (context, input, rankedItems, retrievalMode, outputLimit = 50) => {
     const purpose = input.purpose || 'answer_user_query';
     if (purpose === 'proactive_mention' && !proactiveMentionEnabled) return proactiveMentionDisabledResult(context, input);
     rankedItems = filterProactiveMentionItems(context, input, rankedItems);
@@ -1287,8 +1297,12 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     // second truncation here would fight it. R-008 planned a token meter
     // before that mechanism was found; the plan document records the
     // retraction.
-    const result = { answerability: remainingConflicts.length ? 'conflict' : items.length ? 'known' : 'not_found', consistency: 'fresh', serviceMode: 'normal', queryRoute: input.queryRoute || 'unknown', retrievalMode, policyResult: blocks.length && !items.length ? 'filtered' : 'allowed', items, blocks, uncertainties, consistencyToken: tokenFor(state, context) };
-    if (activeAccess && items.length) {
+    // 调用方 limit 生效点（2026-09-17）：只截最终 items，不动中间排序，
+    // 也不与 contextBundle 的 token 预算打架（后者走 list() 独立拉取，
+    // 不经过这里——见上方 R-008 注释）。
+    const limitedItems = outputLimit > 0 ? items.slice(0, outputLimit) : items;
+    const result = { answerability: remainingConflicts.length ? 'conflict' : limitedItems.length ? 'known' : 'not_found', consistency: 'fresh', serviceMode: 'normal', queryRoute: input.queryRoute || 'unknown', retrievalMode, policyResult: blocks.length && !limitedItems.length ? 'filtered' : 'allowed', items: limitedItems, blocks, uncertainties, consistencyToken: tokenFor(state, context) };
+    if (activeAccess && limitedItems.length) {
       activeAccess.status = 'consumed';
       activeAccess.consumedAt = nowIso();
       Object.defineProperty(result, '__persist', { value: true, enumerable: false });
@@ -1296,16 +1310,29 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return result;
   };
 
+  // 调用方可控的返回条数（2026-09-17 修复）：retrieve / retrieveAsync 共用同一解析。
+  //   此前一律硬编码 limit:50，调用方传 limit 完全不生效（传 10/20/50 都返回 50 条），
+  //   上游无法据此控制 token 预算。
+  //   现在：输出条数由 input.limit 决定，默认 50（保持既有行为不变）；
+  //   候选池取 max(limit, 50) —— 池子不小于输出，保证排序质量不因调小 limit 而下降。
+  const resolveRetrievalLimits = input => {
+    const outputLimit = Math.max(1, Math.min(1000, Number(input?.limit) || 50));
+    return { outputLimit, retrievalOptions: { limit: Math.max(outputLimit, 50) } };
+  };
+
   const retrieve = (rawContext, input = {}) => {
     const { context, purpose, query, queryRoute } = retrieveInputs(rawContext, input);
     if (purpose === 'proactive_mention' && !proactiveMentionEnabled) return proactiveMentionDisabledResult(context, { ...input, queryRoute });
-    const lexical = bm25Search(retrievalDocuments(context, purpose, queryRoute), query, { limit: 50 });
-    return finalizeRetrieve(context, { ...input, queryRoute }, lexical, 'bm25');
+    const { outputLimit, retrievalOptions } = resolveRetrievalLimits(input);
+    const lexical = bm25Search(retrievalDocuments(context, purpose, queryRoute), query, retrievalOptions);
+    return finalizeRetrieve(context, { ...input, queryRoute }, lexical, 'bm25', outputLimit);
   };
 
   const retrieveAsync = async (rawContext, input = {}) => {
     const { context, purpose, query, queryRoute } = retrieveInputs(rawContext, input);
     if (purpose === 'proactive_mention' && !proactiveMentionEnabled) return proactiveMentionDisabledResult(context, { ...input, queryRoute });
+    // 调用方可控的返回条数（见 resolveRetrievalLimits 注释）
+    const { outputLimit, retrievalOptions } = resolveRetrievalLimits(input);
     if (nativeRetriever) {
       try {
         const native = await nativeRetriever(context, { ...input, purpose, query, queryRoute });
@@ -1317,7 +1344,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
           let rankedItems = native.items;
           let retrievalMode = native.retrievalMode || 'postgres_native';
           if (hasConsistencyToken) {
-            const canonicalItems = bm25Search(retrievalDocuments(context, purpose, queryRoute), query, { limit: 50 });
+            const canonicalItems = bm25Search(retrievalDocuments(context, purpose, queryRoute), query, retrievalOptions);
             if (canonicalItems.length) {
               const merged = new Map(native.items.map(item => [item.id || item.memoryId, item]));
               for (const item of canonicalItems) {
@@ -1328,7 +1355,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
               retrievalMode = `${retrievalMode}_canonical_fallback`;
             }
           }
-          const result = finalizeRetrieve(context, { ...input, purpose, queryRoute }, rankedItems, retrievalMode);
+          const result = finalizeRetrieve(context, { ...input, purpose, queryRoute }, rankedItems, retrievalMode, outputLimit);
           if (result.blocks.length || result.__persist) await persist();
           return result;
         }
@@ -1341,14 +1368,14 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const vectorEnabled = featureFlags.vectorRetrieval === true;
     let result;
     const embed = typeof embeddingGateway === 'function' ? embeddingGateway : embeddingGateway?.embed;
-    if (!hybridEnabled && !vectorEnabled) result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(bm25Search(documents, query, { limit: 50 })), 'bm25');
+    if (!hybridEnabled && !vectorEnabled) result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(bm25Search(documents, query, retrievalOptions)), 'bm25', outputLimit);
     else if (hybridEnabled) {
-      const hybrid = await hybridSearch(documents, query, { embed, limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore, floorRatio: lexicalFloorRatio, suppressLexicalFallback });
-      result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(hybrid.items), hybrid.mode);
+      const hybrid = await hybridSearch(documents, query, { embed, ...retrievalOptions, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore, floorRatio: lexicalFloorRatio, suppressLexicalFallback });
+      result = finalizeRetrieve(context, { ...input, queryRoute }, applyDecayWeight(hybrid.items), hybrid.mode, outputLimit);
     } else {
-      const vector = await vectorSearch(documents, query, embed, { limit: 50, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore });
-      const lexical = bm25Search(documents, query, { limit: 50 });
-      result = finalizeRetrieve(context, { ...input, queryRoute }, vector.items.length ? vector.items : lexical, vector.items.length ? 'vector' : `bm25_${vector.mode}`);
+      const vector = await vectorSearch(documents, query, embed, { ...retrievalOptions, timeoutMs: embeddingTimeoutMs, minScore: vectorMinScore });
+      const lexical = bm25Search(documents, query, retrievalOptions);
+      result = finalizeRetrieve(context, { ...input, queryRoute }, vector.items.length ? vector.items : lexical, vector.items.length ? 'vector' : `bm25_${vector.mode}`, outputLimit);
     }
     if (result.blocks.length || result.__persist) await persist();
     return result;
