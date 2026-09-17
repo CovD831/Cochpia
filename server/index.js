@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getStorageStatus, loadState, loadUserState, saveState, storageProvider } from './store.js';
 import { createMemoryModuleRuntime } from './memory-module-runtime.js';
+import { createLifeTickScheduler } from './life-tick-scheduler.js';
 import { createGrowthEvidenceService } from './growth-evidence.js';
 import { createModelProvider, listModelProviders, resolveModelConfig, resolveModelSelection } from './model-provider.js';
 import { authenticateRequest, authMode, validateAuthStorage } from './auth.js';
@@ -1044,6 +1045,61 @@ app.use((_, res) => res.sendFile(path.join(clientDist, 'index.html')));
 
 export { app };
 
+// --- Companion Life Tick 调度器接线（R-021 / L18 V1）------------------------
+//
+// V1 口径（老板 2026-09-17）：不做固定定时器，做「标准作息窗口内的随机时刻」。
+// 调度器只负责「何时唤起 tick」，全部治理规则（每日预算 / ≥3h 间隔 / 窗口抖动 /
+// S0 / 模板白名单）都在 runLifeTick 里，两处不重复定义以免漂移。
+//
+// target 构造：为每个 agent 各起一个 tick —— 生活事件按 agent 归属（scope='life'
+// 的 relationshipAgentId 就是这个 agent），所以每个 agent 有自己的生活线与预算。
+// 注意用 subjectUserId='local-user'：本机的用户维度就是单一本地用户；多租户部署
+// 时这里要按租户展开（V1 不做，见计划 §0 的「明确不做」）。
+const lifeTickScheduler = createLifeTickScheduler({
+  getTarget: () => {
+    const list = agents.list() || [];
+    return list
+      .filter(agent => agent && agent.id)
+      .map(agent => ({
+        // 与 memoryRuntime 同源：同一 state 上同一 module 实例（instances WeakMap
+        // 按 state 缓存），避免产生第二个写者导致 outbox/sequence 分叉。
+        memory: memoryRuntime.moduleForRequest({ body: {}, query: {} }),
+        context: {
+          tenantId: 'default',
+          subjectUserId: 'local-user',
+          actorType: 'agent',
+          actorId: agent.id,
+          callerAgentId: agent.id,
+        },
+      }));
+  },
+  onResult: ({ target, result, at }) => {
+    console.log(JSON.stringify({
+      event: 'life_tick',
+      at,
+      agentId: target?.context?.callerAgentId || null,
+      status: result?.status,
+      template: result?.template || null,
+      generator: result?.generator || null,
+      proactiveSent: result?.proactive?.sent ?? null,
+      proactiveReason: result?.proactive?.reason || null,
+      code: result?.code || null,
+    }));
+  },
+  // V1.5：生活事件用模型生成（老板 2026-09-17 决策）。是否真用由 runLifeTick 按
+  // MEMORY_LIFE_TICK_MODEL_ENABLED 判定；模型不可用时 runLifeTick 自动回落规则模板。
+  model,
+  getPersonality: () => baseState?.personality || null,
+});
+
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
-  app.listen(port, () => console.log(`Cochpia server listening on http://localhost:${port}`));
+  app.listen(port, () => {
+    console.log(`Cochpia server listening on http://localhost:${port}`);
+    // 两个 flag 都开才真正起轮询：MEMORY_LIFE_TICK_ENABLED + MEMORY_LIFE_TICK_SCHEDULER_ENABLED
+    const started = lifeTickScheduler.start();
+    console.log(JSON.stringify({ event: 'life_tick_scheduler', started }));
+  });
+  const stop = () => { lifeTickScheduler.stop(); process.exit(0); };
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
 }
