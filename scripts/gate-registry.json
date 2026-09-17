@@ -19,7 +19,9 @@
       "command": "check:routes",
       "needs": [],
       "desc": "express 实际路由表 vs chat-route-contract 契约",
-      "files": ["scripts/route-table-check.mjs"]
+      "files": [
+        "scripts/route-table-check.mjs"
+      ]
     },
     {
       "id": "a-chat-turns-fixture",
@@ -28,14 +30,18 @@
       "command": "acceptance:core-v0-chat-turns",
       "needs": [],
       "desc": "A-01~A-12 fixture 版（两套 A 系列之一，勿与实跑版合并）",
-      "files": ["scripts/core-v0-chat-turns-acceptance.js"]
+      "files": [
+        "scripts/core-v0-chat-turns-acceptance.js"
+      ]
     },
     {
       "id": "a-core-v0-runtime",
       "tier": 2,
       "kind": "npm",
       "command": "acceptance:core-v0",
-      "needs": ["ports"],
+      "needs": [
+        "ports"
+      ],
       "desc": "A-01~A-12 实跑版（LAN/TLS 证据出自它；两套 A 系列之二）",
       "files": [
         "scripts/core-v0-foundation-acceptance.js",
@@ -48,7 +54,9 @@
       "tier": 2,
       "kind": "npm",
       "command": "acceptance:core-v0-postgres",
-      "needs": ["pg-5433"],
+      "needs": [
+        "pg-5433"
+      ],
       "desc": "P-01~P-09 + 回滚演练 P-10（L-01/L-02 需 live 端点姿态才翻绿，其余隔离态可跑）",
       "files": [
         "scripts/core-v0-postgres-acceptance.js",
@@ -60,46 +68,82 @@
       "tier": 2,
       "kind": "node",
       "command": "scripts/probe-agent-scope-leak.mjs",
-      "needs": ["pg-5433"],
+      "needs": [
+        "pg-5433"
+      ],
       "desc": "跨 agent 泄漏探针（exit 1 = leak；真实 drain 路径）",
-      "files": ["scripts/probe-agent-scope-leak.mjs"]
+      "files": [
+        "scripts/probe-agent-scope-leak.mjs"
+      ]
     },
     {
       "id": "e2e-acceptance",
       "tier": 3,
       "kind": "npm",
       "command": "test:e2e",
-      "needs": ["dist", "playwright-env-python"],
+      "needs": [
+        "dist",
+        "playwright-env-python"
+      ],
       "desc": "e2e 验收 8/8（需先 npm run build；python 用 envs/default）",
-      "files": ["scripts/e2e-acceptance.py"]
+      "files": [
+        "scripts/e2e-acceptance.py"
+      ]
     },
     {
       "id": "e2e-panels",
       "tier": 3,
       "kind": "npm",
       "command": "test:e2e:panels",
-      "needs": ["dist", "playwright-env-python"],
+      "needs": [
+        "dist",
+        "playwright-env-python"
+      ],
       "desc": "e2e 面板 10/10（含 AR-212 负例 P10）",
-      "files": ["scripts/e2e-panels.py"]
+      "files": [
+        "scripts/e2e-panels.py"
+      ]
     },
     {
       "id": "service-boot-smoke",
       "tier": 3,
       "kind": "node",
       "command": "scripts/service-boot-smoke.mjs",
-      "needs": ["pg-binaries", "ports"],
+      "needs": [
+        "pg-binaries",
+        "ports"
+      ],
       "desc": "独立服务无垫片启动冒烟：一次性集群 + SDK smoke + 索引器活性（盲审 F3 处置，替代一次性手工跑批）",
-      "files": ["scripts/service-boot-smoke.mjs", "server/memory-module-service-worker.js"]
+      "files": [
+        "scripts/service-boot-smoke.mjs",
+        "server/memory-module-service-worker.js"
+      ]
     },
     {
       "id": "live-acceptance",
       "tier": 3,
       "kind": "npm",
       "command": "acceptance:core-v0-postgres-live",
-      "needs": ["pg-5433", "boss-approval"],
+      "needs": [
+        "pg-5433",
+        "boss-approval"
+      ],
       "requiresFlag": "with-live",
       "desc": "live L-01/L-02：用生产 DATABASE_URL 建删隔离 schema——动生产库，必须老板点头且沙箱外跑",
-      "files": ["scripts/core-v0-postgres-live-acceptance.js"]
+      "files": [
+        "scripts/core-v0-postgres-live-acceptance.js"
+      ]
+    },
+    {
+      "id": "memory-quality",
+      "tier": 1,
+      "kind": "npm",
+      "command": "gate:memory-quality",
+      "needs": [],
+      "desc": "记忆检索质量闸——LoCoMo evidence 命中（数据集缺失时降级内置小集）",
+      "files": [
+        "scripts/memory-quality-gate.mjs"
+      ]
     }
   ]
 }

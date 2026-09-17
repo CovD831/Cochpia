@@ -39,3 +39,8 @@ __pycache__/
 # docs/rearchitecture/ already carry what the next session needs. Kept on
 # disk, not in history.
 .workbuddy/
+
+# LoCoMo 评测数据集（2.8MB，不该进仓库）与跑批产物。
+# 获取方式见 scripts/locomo-eval-evidence.mjs 头部（raw.githubusercontent 单文件）。
+# 缺失时质量闸自动降级到内置小集，不会因此变红。
+eval-data/
