@@ -21,6 +21,13 @@ import { readFile } from 'node:fs/promises';
 import { createMemoryModule, createMemoryModuleState } from '../server/memory-module.js';
 import { tokenize } from '../server/memory-module-retrieval.js';
 
+// 本脚本的语义是「tokenize 出裸词，再由本文件的 stemToken 做一次词干化」。
+// 产品 tokenizer 现已内置词干化（开关 MEMORY_TOKENIZER_STEM，**默认关**）——
+// 若将来有人把默认值改成「开」，本脚本的 tokenize 会先归一化一次，
+// 再 map(stemToken) 就是**双重词干化**（如 houses → hous → hou），结论会静默变味。
+// 这里显式钉住开关，保持本脚本「评测侧复刻」的原始语义不变。
+process.env.MEMORY_TOKENIZER_STEM = '0';
+
 const DATA = process.env.LOCOMO_PATH || 'eval-data/locomo10.json';
 const SAMPLE_LIMIT = Number(process.env.LOCOMO_SAMPLE_LIMIT || 3);
 const QA_LIMIT = Number(process.env.LOCOMO_QA_LIMIT || 120);
