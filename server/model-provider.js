@@ -334,5 +334,47 @@ export function createModelProvider(provider = process.env.MODEL_PROVIDER || 'mo
 
   const composeSystemPrompt = ({ recalled = [], runtimeContext = null } = {}) => composePrompts({ message: '', recalled, runtimeContext }).system;
 
-  return { ...config, generate, stream, generateWithTools, composeSystemPrompt };
+  // R-021 / L18 V1.5：生活事件生成专用的一问一答调用。
+  // 与 generate() 的差别只在参数意图：
+  //   1. **关闭思考模式**（thinking:{type:'disabled'}）——生活事件是一句话的轻任务，
+  //      思考 token 纯属浪费；实测本网关接受该参数且 completion_thinking_tokens=0。
+  //   2. temperature 由调用方给定（生活事件用 0.7，比记忆抽取的主对话低，
+  //      要稳定不要花哨）。
+  //   3. 非流式、短 max_tokens（一句话的上限）。
+  // 只用于 OpenAI 兼容协议；其他协议回落到通用的 generate()。
+  const lifeEventText = async ({ system, user, temperature = 0.7, maxTokens = 120, signal: externalSignal } = {}) => {
+    if (!config.ready) throw new Error(config.error);
+    if (config.protocol !== 'openai-compatible') {
+      return generate({ message: user || '', system, signal: externalSignal });
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(process.env.MODEL_TIMEOUT_MS || 30000));
+    const signal = externalSignal || controller.signal;
+    try {
+      const response = await fetch(config.apiURL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
+        body: JSON.stringify({
+          model: config.model,
+          stream: false,
+          temperature,
+          max_tokens: maxTokens,
+          thinking: { type: 'disabled' },
+          messages: [
+            ...(system ? [{ role: 'system', content: system }] : []),
+            { role: 'user', content: user || '' },
+          ],
+        }),
+        signal
+      });
+      const payload = await response.json();
+      if (!response.ok) throw modelRequestError(response, payload);
+      return payload?.choices?.[0]?.message?.content || '';
+    } catch (error) {
+      if (error.name === 'AbortError') { const timedOut = new Error('Model request timed out', { cause: error }); timedOut.code = 'MODEL_TIMEOUT'; throw timedOut; }
+      throw error;
+    } finally { clearTimeout(timeout); }
+  };
+
+  return { ...config, generate, stream, generateWithTools, composeSystemPrompt, lifeEventText };
 }
