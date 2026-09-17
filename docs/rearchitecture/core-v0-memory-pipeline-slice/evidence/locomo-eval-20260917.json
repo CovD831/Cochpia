@@ -1,0 +1,43 @@
+{
+  "event": "locomo_retrieval_eval",
+  "date": "2026-09-17",
+  "dataset": "snap-research/locomo (locomo10.json, 1170 stars)",
+  "scale": { "samples": 10, "turns": 5882, "qa_total": 1986, "scorable": 1977 },
+  "methodology": {
+    "metric": "evidence-hit @K (dia_id match against dataset evidence labels)",
+    "why_not_answer_substring": "LoCoMo answers are often reasoning products (Q: 'When did X go' A: '7 May 2023' while the source turn says 'yesterday'); substring matching scores 0 spuriously. v1 collector was discarded for this reason.",
+    "scope": "retrieval layer only -- no LLM generation, no judge. NOT comparable to Mem0/Zep reported end-to-end LLM-judge numbers.",
+    "k": 10
+  },
+  "results": {
+    "recallAtK": 0.6115,
+    "mrr": 0.4077,
+    "byCategory": {
+      "1_multi_hop": { "total": 282, "recallAtK": 0.4433, "mrr": 0.2239, "avgRankAmongHits": 3.39 },
+      "2_temporal": { "total": 321, "recallAtK": 0.6729, "mrr": 0.4538, "avgRankAmongHits": 2.42 },
+      "3_open_domain": { "total": 96, "recallAtK": 0.3333, "mrr": 0.1663, "avgRankAmongHits": 3.78 },
+      "4_single_hop": { "total": 841, "recallAtK": 0.654, "mrr": 0.4608, "avgRankAmongHits": 2.33 },
+      "5_adversarial": { "total": 446, "recallAtK": 0.6413, "mrr": 0.4342, "avgRankAmongHits": 2.43 }
+    },
+    "hitRankDistribution": { "rank1": 618, "rank2_3": 316, "rank4_10": 275 },
+    "hits": 1209,
+    "misses": 777
+  },
+  "findings": [
+    "底座检索能力及格：单跳 0.65 / 时间 0.67；命中时 51% 排第 1，说明排序机制本身有效。",
+    "短板 = 多跳推理 (0.443) 与开放域 (0.333)。",
+    "多跳失败机理（已定位具体样例）：「What did Caroline research?」标注轮为 'Researching adoption agencies...'，但检索前 5 全是含 What/Cool/Wow 的高频闲聊轮 —— BM25 词频被高频短轮主导，真正相关轮排不进 top-10。这是长对话检索的典型退化模式。",
+    "777 个未命中 case 是「根本没进前 10」，而非「排名靠后」——问题在召回而非排序。"
+  ],
+  "defect_found_concurrently": {
+    "id": "retrieve-limit-ignored",
+    "summary": "retrieveAsync/retrieve 的 input.limit 完全不生效（硬编码 50），调用方无法控制返回条数。",
+    "status": "FIXED 2026-09-17",
+    "fix": "resolveRetrievalLimits() 统一解析；候选池 max(limit,50) 保排序质量；finalizeRetrieve 出口按 outputLimit 截断。验证 3/10/20/50 精确生效、不传默认 50（向后兼容）。"
+  },
+  "reproduction": {
+    "collect": "LOCOMO_SAMPLE_LIMIT=10 LOCOMO_QA_LIMIT=0 LOCOMO_K=10 node scripts/locomo-eval-evidence.mjs",
+    "gate": "npm run gate:memory-quality",
+    "note": "eval-data/ 已 gitignore；数据集缺失时质量闸自动降级到内置小集，不会因此变红。"
+  }
+}

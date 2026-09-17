@@ -1,0 +1,48 @@
+{
+  "event": "recall_optimization_experiments",
+  "date": "2026-09-17",
+  "objective": "定位并尝试修复 LoCoMo 多跳短板（基线 Recall@10 0.443）",
+  "diagnosis_chain": [
+    "多跳失败样例：「What did Caroline research?」，标注轮内容为 'Researching adoption agencies...'",
+    "探针复现（3 文档对照）：BM25 把含 what/what 的闲聊轮排第 1、第 2，含 'Researching' 的标注轮**完全落榜**",
+    "根因确认：tokenizer（memory-module-retrieval.js:3）只做小写化+正则切分，**无词干归一化**。research 与 Researching 在 token 层面永不相等。",
+    "补充观察：777 个未命中 case 是「根本没进前 10」而非排名靠后 → 属召回问题，不是排序权重问题"
+  ],
+  "experiments": [
+    {
+      "id": "episodes-as-recall-unit",
+      "hypothesis": "用 episodes（30 分钟时间窗口分组的对话块）加大检索单元，可对抗单轮过短",
+      "method": "评测侧按 rebuildEpisodes 同规则分组，episode 作为额外检索文档",
+      "variants": {
+        "v1_promote_prefix": { "recallAtK": 0.225, "baseline": 0.55, "verdict": "REGRESSED" },
+        "v2_score_fusion": { "recallAtK": 0.1275, "baseline": 0.5884, "verdict": "REGRESSED" }
+      },
+      "root_cause_of_failure": "v1：一个 episode 平均含 ~22 轮，命中即整组前置 → 10 个名额被一组占满。v2：分数尺度不匹配（BM25 无界 vs 融合权重有界），融合实现压制了原始结果。",
+      "conclusion": "假设未获支持。episodes 的粒度太粗（整会话级别），不适合直接作为召回单元；如要用应做句子级/片段级切分，或仅作为**重排信号**而非召回来源。"
+    },
+    {
+      "id": "stemming",
+      "hypothesis": "词干归一化可修复 research/Researching 这类形态差异导致的漏召回",
+      "method": "同一条纯 BM25 路径上对照（避免混淆变量）；轻量后缀词干化（-ies/-ing/-ed/-es/-s），保守不做过并",
+      "results": {
+        "product_hybrid": { "recallAtK": 0.5936, "mrr": 0.3755, "multi_hop": 0.4795 },
+        "bm25_plain": { "recallAtK": 0.5497, "mrr": 0.341, "multi_hop": 0.3973 },
+        "bm25_stemmed": { "recallAtK": 0.5556, "mrr": 0.3656, "multi_hop": 0.4384 }
+      },
+      "delta_vs_plain_bm25": { "recallAtK": 0.0059, "mrr": 0.0246, "multi_hop": 0.0411 },
+      "reference_hybrid_gain_over_plain": { "recallAtK": 0.0439, "mrr": 0.0345 },
+      "conclusion": "**方向正确但收益有限**：词干化在纯 BM25 上带来 MRR +0.025、多跳 +0.041 的正向改善（多跳改善最明显，符合「形态差异主要伤多跳」的诊断）；但幅度小于产品 hybrid 相对纯 BM25 的增益（MRR +0.035），说明与 hybrid 的贡献有相当重叠。"
+    }
+  ],
+  "honest_notes": [
+    "本实验未修改任何产品代码，全部在评测侧实现。",
+    "第一版对照（stemmed 直接比 product_hybrid）得出「词干化变差」的错误结论——因为混淆了词干与 hybrid 两个变量。改为同路径对照后才得到有效结论。这类错误必须记下来：**A/B 必须单变量**。",
+    "episodes 的失败是有效情报：它证明了「加粗召回粒度」这条路在**会话级**粒度上走不通，与 stemming 的微正收益形成对比。"
+  ],
+  "next_candidates_not_tried": [
+    "查询侧改写/同义扩展（针对「问 A 但轮次没提 A」）",
+    "按轮次长度归一化的权重（降权极短闲聊轮）",
+    "句级/片段级 episode 切分（比会话级细，比单轮粗）",
+    "把 stemming 合入产品 tokenizer 并跑全量复测（成本低，收益已量化为正向）"
+  ]
+}
