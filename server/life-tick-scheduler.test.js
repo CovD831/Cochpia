@@ -247,3 +247,105 @@ test('V1-G1: 窗口内连续轮询仍受每日预算与间隔闸约束', async (
   assert.equal(state.assertions.length, 2, '生活事件受每日配额约束（每天 2 条）');
   s.stop();
 });
+
+// --- 可观测性（2026-09-30 补）-----------------------------------------------
+// 缺口：调度器在 outside_active_window / scheduler_disabled 时**提前返回且不写日志**
+// （onResult 只在 target 循环内调用）⇒「窗口外正常安静」与「调度器已死」在日志上
+// 不可区分。对一个需要长期无人值守运行的机制，坏了没人知道。以下钉住修复后的语义。
+
+test('V1-OB1: 窗口外判定会留下低频日志（此前完全静默）', () => {
+  const outside = new Date(2026, 8, 30, 23, 30); // 23:30 在 08:00–22:00 之外
+  const lines = [];
+  const orig = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    const s = createLifeTickScheduler({
+      getTarget: () => [],
+      env: SCHED_ON,
+      now: () => outside,
+    });
+  } finally {
+    console.log = orig;
+  }
+  // 构造本身不写日志；真正写日志的是 tickOnce，见下一条。
+  assert.equal(lines.length, 0, '构造不应产生日志');
+});
+
+test('V1-OB2: tickOnce 在窗口外写一条 idle 日志，且状态不变时不重复刷', async () => {
+  const outside = new Date(2026, 8, 30, 23, 30);
+  const lines = [];
+  const orig = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  let s;
+  try {
+    s = createLifeTickScheduler({ getTarget: () => [], env: SCHED_ON, now: () => outside });
+    for (let i = 0; i < 5; i += 1) await s.tickOnce();
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(lines.length, 1, '连续 5 次同状态判定只应写 1 条（避免每 10 分钟刷一条）');
+  const entry = JSON.parse(lines[0]);
+  assert.equal(entry.event, 'life_tick_scheduler_idle');
+  assert.equal(entry.reason, 'outside_active_window');
+  assert.equal(entry.hour, 23);
+  s.stop();
+});
+
+test('V1-OB3: scheduler flag 关闭时的判定也会留痕（区分「没开」与「坏了」）', async () => {
+  const lines = [];
+  const orig = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  let s;
+  try {
+    // flag 关：tickOnce 直接返回 scheduler_disabled
+    s = createLifeTickScheduler({ getTarget: () => [], env: {}, now: () => new Date(2026, 8, 30, 10, 0) });
+    await s.tickOnce();
+  } finally {
+    console.log = orig;
+  }
+  assert.equal(lines.length, 1, 'flag 关也必须留一条痕');
+  assert.equal(JSON.parse(lines[0]).reason, 'scheduler_disabled');
+  s.stop();
+});
+
+test('V1-OB4: status() 暴露可判定字段，窗口内已启动但从未跑过 → stalled', () => {
+  const inside = new Date(2026, 8, 30, 10, 0);
+  const s = createLifeTickScheduler({
+    getTarget: () => [],
+    env: SCHED_ON,
+    now: () => inside,
+    setTimer: () => ({ unref() {} }),
+    clearTimer: () => {},
+  });
+  const before = s.status();
+  assert.equal(before.enabled, true);
+  assert.equal(before.running, false, '未 start 前 running=false');
+  assert.equal(before.inWindow, true);
+  assert.equal(before.lastRanAt, null);
+  assert.equal(before.stalled, false, '未启动不算 stalled');
+
+  s.start();
+  const after = s.status();
+  assert.equal(after.running, true);
+  assert.equal(after.stalled, true, '窗口内 + 已启动 + 从未跑过 = 可检测的 stalled');
+  s.stop();
+  assert.equal(s.status().running, false, 'stop 后 running=false');
+});
+
+test('V1-OB5: 跑过一轮后 lastRanAt / lastTickCount 被记录（证明它真的活着）', async () => {
+  const inside = new Date(2026, 8, 30, 10, 0);
+  const { memory, state } = freshMemory();
+  const s = createLifeTickScheduler({
+    getTarget: () => [{ memory, context: agentCtx() }],
+    env: SCHED_ON,
+    now: () => inside,
+  });
+  assert.equal(s.status().lastRanAt, null);
+  const r = await s.tickOnce({ force: true });
+  assert.equal(r.status, 'ran');
+  const st = s.status();
+  assert.ok(st.lastRanAt, '跑过之后必须留下 lastRanAt');
+  assert.equal(st.lastTickCount, 1);
+  assert.equal(st.stalled, false, '跑过之后不再是 stalled');
+  s.stop();
+});

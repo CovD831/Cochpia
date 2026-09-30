@@ -91,12 +91,39 @@ export function createLifeTickScheduler({
   let timer = null;
   let stopped = false;
   let ticking = false; // 防重入：上一轮还在跑就不叠下一轮
+  // 可观测状态（2026-09-30 补）：调度器此前在窗口外/flag 关时**静默提前返回**，
+  // 于是「窗口外安静」与「调度器已死」在日志上完全不可区分。对一个需要长期
+  // 无人值守运行的机制，这是安全缺口 —— 坏了没人知道。这里记录最后几次判定的
+  // 结果与时间，供 /api/health 与低频日志消费。
+  let lastEvaluatedAt = null;   // 最近一次「醒来的判定」时刻（含被跳过的）
+  let lastStatus = null;        // 该次判定的 status（ran / outside_active_window / scheduler_disabled）
+  let lastRanAt = null;         // 最近一次真正跑过 target 的时刻
+  let lastTickCount = 0;        // 最近一次真正跑过的 target 数
+  const startedAt = new Date(now()).toISOString();
+
+  // 低频率地记录「醒来了但没跑」的判定：只在状态发生变化时写一条，避免
+  // 每 10 分钟一条把日志刷满（窗口外每天约 84 次判定）。
+  const noteEvaluation = (at, status) => {
+    lastEvaluatedAt = at.toISOString();
+    const changed = status !== lastStatus;
+    lastStatus = status;
+    return changed;
+  };
 
   // 跑一轮「判定 + 可能的 tick」。返回本轮的结果数组（供测试观察）。
   const tickOnce = async ({ force = false } = {}) => {
     const at = now();
-    if (!isSchedulerEnabled(env)) return { status: 'scheduler_disabled', results: [] };
-    if (!force && !inActiveWindow(at, defaults)) return { status: 'outside_active_window', hour: localHour(at), results: [] };
+    if (!isSchedulerEnabled(env)) {
+      // 状态变化时才记一条（否则每轮都刷）。这是「调度器没在跑」的唯一可见信号。
+      if (noteEvaluation(at, 'scheduler_disabled')) console.log(JSON.stringify({ event: 'life_tick_scheduler_idle', at: lastEvaluatedAt, reason: 'scheduler_disabled' }));
+      return { status: 'scheduler_disabled', results: [] };
+    }
+    if (!force && !inActiveWindow(at, defaults)) {
+      const hour = localHour(at);
+      if (noteEvaluation(at, 'outside_active_window')) console.log(JSON.stringify({ event: 'life_tick_scheduler_idle', at: lastEvaluatedAt, reason: 'outside_active_window', hour }));
+      return { status: 'outside_active_window', hour, results: [] };
+    }
+    noteEvaluation(at, 'ran');
 
     const targets = await getTarget();
     const results = [];
@@ -115,6 +142,8 @@ export function createLifeTickScheduler({
         onResult({ target, result: failure, at: at.toISOString() });
       }
     }
+    lastRanAt = at.toISOString();
+    lastTickCount = results.length;
     return { status: 'ran', hour: localHour(at), results };
   };
 
@@ -149,5 +178,26 @@ export function createLifeTickScheduler({
     // 手动跑一轮（测试 / 补跑用）
     tickOnce,
     inActiveWindow: date => inActiveWindow(date || now(), defaults),
+    // 可观测快照（2026-09-30 补）。用途：/api/health 暴露它，运维就能回答
+    // 「调度器还活着吗、为什么没动静」——此前这个问题在日志与接口上都无解。
+    // `stalled` 的判据刻意保守：只有「已启动且当前在窗口内，却从未跑过」才为真，
+    // 避免把「正常地处于窗口外」误报成故障。
+    status() {
+      const nowDate = now();
+      const running = Boolean(timer) && !stopped;
+      const inWindow = inActiveWindow(nowDate, defaults);
+      const enabled = isSchedulerEnabled(env);
+      return {
+        enabled,
+        running,
+        startedAt,
+        inWindow,
+        lastEvaluatedAt,
+        lastStatus,
+        lastRanAt,
+        lastTickCount,
+        stalled: enabled && running && inWindow && !lastRanAt,
+      };
+    },
   };
 }

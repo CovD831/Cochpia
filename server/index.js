@@ -18,6 +18,7 @@ import { createTurnStreamHandler } from './turn-stream.js';
 import { applyPersonalityChange } from './personality.js';
 import { queryCollection } from './collection-query.js';
 import { createAgentService } from './agent-service.js';
+import { propagateSessionDeletion } from './session-deletion.js';
 import { createObservability } from './observability.js';
 import { createMusicService } from './music-service.js';
 import { createNeteaseMusicAdapter } from './netease-music-adapter.js';
@@ -325,7 +326,10 @@ const attachStreamResponse = (run, res, afterId = '') => {
 app.get('/api/health', (_, res) => {
   const storage = getStorageStatus();
   const ok = storage.ready && model.ready;
-  res.status(ok ? 200 : 503).json({ ok, status: ok ? 'ready' : 'degraded', service: 'cochpia', storageProvider, storageReady: storage.ready, databaseLatencyMs: storage.lastLatencyMs, lastStorageError: storage.lastError, modelProvider: model.provider, modelName: model.model, modelReady: model.ready, modelProtocol: model.protocol });
+  // lifeTickScheduler：让运维能回答「调度器还活着吗、为什么没动静」。
+  // 此前它在窗口外静默提前返回、不写日志也不暴露状态 ⇒「正常安静」与「已死」
+  // 无法区分（2026-09-30 补）。
+  res.status(ok ? 200 : 503).json({ ok, status: ok ? 'ready' : 'degraded', service: 'cochpia', storageProvider, storageReady: storage.ready, databaseLatencyMs: storage.lastLatencyMs, lastStorageError: storage.lastError, modelProvider: model.provider, modelName: model.model, modelReady: model.ready, modelProtocol: model.protocol, lifeTickScheduler: lifeTickScheduler.status() });
 });
 app.get('/api/ready', (_, res) => {
   const storage = getStorageStatus();
@@ -513,7 +517,17 @@ app.delete('/api/sessions/:id', async (req, res) => {
   const index = state.sessions.findIndex(session => session.id === req.params.id);
   if (index === -1) return fail(res, 404, 'SESSION_NOT_FOUND', 'Session not found');
   // 删除传播：messages 键 + coreV0 会话域记录一并清理，不留孤儿键。
-  propagateSessionDeletion(state, req.params.id); await saveState(state); res.status(204).end();
+  //
+  // 两处曾同时缺失，导致本路由恒 500 且语义不自洽（2026-09-30 修复）：
+  //   ① propagateSessionDeletion 从未被 import → ReferenceError，路由直接 500；
+  //   ② 即便补上 import，若不先 splice sessions，session 本身**不会被删除** ——
+  //      只有它的 messages 键与 coreV0 记录被清掉，留下一个「还在列表里但数据没了」
+  //      的会话。index 上面已算出，这里按既有惯例（同文件 messages 删除、以及
+  //      agent-service.remove）用 splice(index, 1)。
+  state.sessions.splice(index, 1);
+  propagateSessionDeletion(state, req.params.id);
+  await saveState(state);
+  res.status(204).end();
 });
 app.get('/api/agents', (_, res) => res.json(agents.list()));
 app.post('/api/agents', async (req, res) => { try { res.status(201).json(await agents.create(req.body || {})); } catch (error) { fail(res, 400, 'INVALID_AGENT', error.message); } });
