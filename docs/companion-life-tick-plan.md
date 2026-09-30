@@ -63,7 +63,13 @@
 
 1. 触发一次 → `memory_assertions` 出现 life 事件（来源标记 agent、S0、source_refs 带 `life-tick`）且读回命中。
 2. 冷却内连续触发 → 第二次**不产生**生活事件、不发主动消息（cooldown 生效）。
-3. 每日预算耗尽 → 当日后续 tick 的 proactive 全部不发（生活事件仍可写——内在活动与主动打扰是两回事）。
+3. 每日预算耗尽 → 当日后续 tick 的 proactive 全部不发。~~（生活事件仍可写——内在活动与主动打扰是两回事）~~
+   > **⚠️ 2026-09-28 修订（老板批准，R-021 写放大修复 ①-A）**：原文「生活事件仍可写」这一句**已作废**。
+   > 原因：实测该实现下 life tick 3.7 天写入 **131 GB WAL**（逐日加速至 55.7 GB/天），量级问题由三处偏离相乘导致；
+   > 其中「每轮轮询无条件写入」是可直接封堵的一处。现改为：**每日 life 事件写入数受 `dailyLifeBudget`（默认 2）约束**，
+   > 配额耗尽时该次 tick **不生成、不写入、不 recordMention**，返回 `skipped: 'daily_life_budget'`。
+   > 配额由 `runLifeTick` 承担（业务面不变量），不放进调度器。配额置为 `Infinity` 即完全回到旧行为（可逆）。
+   > 详见 `.workbuddy/team-runs/20260926-2315-life-tick-remediation-plan/PLAN.md` §B.1（含 7 项返回语义硬契约）。
 4. flag 关闭 → tick 无操作（零写入）。
 5. 既有闸门全绿（npm test + tier-2 runner + e2e ×2）——行为不变性兜底。
 
