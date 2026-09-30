@@ -47,6 +47,29 @@ REPLY_TEXT = "\n".join(REPLY_LINES)
 results = []
 
 
+def assert_dist_is_fresh():
+    """dist/ 必须比 client/src 新，否则这轮检查在测**上一轮的产物**。
+
+    server/index.js 用 express.static(dist) 提供前端，而 dist/ 是 gitignore 的
+    构建产物、不入库。「改了源码忘了 build」时浏览器拿到旧 bundle，检查照样全绿
+    —— 绿的是一份不存在的代码。姊妹脚本 e2e-panels.py 里同一个守卫有完整说明。
+    """
+    dist = REPO / "dist" / "index.html"
+    if not dist.exists():
+        return False, "dist/index.html 不存在 —— 先跑 `npm run build`"
+    newest_src = 0.0
+    for path in (REPO / "client" / "src").rglob("*"):
+        if path.is_file():
+            newest_src = max(newest_src, path.stat().st_mtime)
+    index_html = REPO / "client" / "index.html"
+    if index_html.exists():
+        newest_src = max(newest_src, index_html.stat().st_mtime)
+    if newest_src > dist.stat().st_mtime:
+        return False, (f"dist 比 client/src 旧（源码新 {newest_src - dist.stat().st_mtime:.0f}s）"
+                       " —— 先跑 `npm run build`，否则测的是旧产物")
+    return True, "ok"
+
+
 def record(name, ok, detail=""):
     results.append((name, ok, detail))
     print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""), flush=True)
@@ -77,6 +100,12 @@ def wait_for_port(timeout=60):
 
 
 def main():
+    # 先守构建产物新鲜度：陈旧 dist 会让整轮检查对前端改动失去判别力。
+    fresh, why = assert_dist_is_fresh()
+    if not fresh:
+        print(f"E2E_ABORT|{why}", flush=True)
+        return 1
+
     env = dict(os.environ)
     env.update({
         "CORE_V0_ENABLED": "true",

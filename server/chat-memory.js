@@ -112,6 +112,40 @@ export function createChatMemoryAdapter({ memoryModule, state, context, persistS
     return { bundle, memories: memoryBundleToOverview(bundle) };
   };
 
+  // R-021 V2①：Agent 内在面（生活事件）的专用读视图。
+  //
+  // 为什么不复用 overview()：那条路径是 token 预算裁剪过的上下文装配
+  // （1200 tokens，且会被其它域挤占、单条还会被 clip），只适合「顺便看一眼」；
+  // 生活线要做成可翻阅的时间线，就必须拿**完整且只是 life 的**那一份。
+  // list() 是既有接口，scopeType 过滤 + canSee 治理照走，因此隔离保证不打折：
+  // 用户级调用只看到自己有权限的那些，agent 级调用按 callerAgentId 收窄。
+  const life = async ({ limit = 50, cursor = null } = {}) => {
+    await ensureLegacyImport();
+    const page = memoryModule.list(context, {
+      scopeType: 'life',
+      purpose: 'profile_view',
+      limit,
+      cursor,
+      returnPage: true
+    });
+    const items = Array.isArray(page) ? page : (page?.items || []);
+    return {
+      items: items.map(item => ({
+        id: item.memoryId,
+        summary: item.content,
+        // structuredData.lifeTick 是 life tick 自己写的标记位（life-tick.js LIFE_TICK_MARKER），
+        // 有它才算「生活事件」而非其它 life 域断言；缺标记时一律按非主动事件处理。
+        marker: item.structuredData?.lifeTick || null,
+        // 谁的生活。用户级读视图不带 callerAgentId，会把所有 agent 的 life 事件混在一起；
+        // 对「agent 自己的生活」这一页来说，owner 是语义必需（audit P0 的第二半）。
+        agentId: item.scope?.agentId || null,
+        createdAt: item.createdAt || item.observedAt || null,
+        updatedAt: item.updatedAt || null
+      })),
+      nextCursor: Array.isArray(page) ? null : (page?.nextCursor || null)
+    };
+  };
+
   const recordTurn = async ({ eventId, content, eventRole, sourceRevision = '1', channel = '默认' } = {}) => {
     if (!String(content || '').trim()) return null;
     return memoryModule.recordEvent(context, {
@@ -140,5 +174,5 @@ export function createChatMemoryAdapter({ memoryModule, state, context, persistS
     });
   };
 
-  return { ensureLegacyImport, retrieve, overview, recordTurn, remember };
+  return { ensureLegacyImport, retrieve, overview, life, recordTurn, remember };
 }

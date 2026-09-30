@@ -78,6 +78,33 @@ VISIBLE = "e => e.checkVisibility({visibilityProperty:true})"
 results = []
 
 
+def assert_dist_is_fresh():
+    """dist/ 必须比 client/src 新，否则这些检查在测**上一轮的产物**。
+
+    为什么需要这道守卫：server/index.js 用 express.static(dist) 提供前端，
+    而 dist/ 是 gitignore 的构建产物、不入库。于是「改了源码忘了 build」
+    时，浏览器拿到的是旧 bundle —— 检查照样全绿，只是绿的是一份不存在的代码。
+
+    这不是理论风险：本文件新增 P11/P12 时，反事实（删掉 Life 导航项）第一次
+    跑仍然是绿的，正是因为忘了 rebuild；补上 build 后立刻变红。也就是说，
+    没有这道守卫时，**e2e 无法证伪任何前端改动**。
+    """
+    dist = REPO / "dist" / "index.html"
+    if not dist.exists():
+        return False, "dist/index.html 不存在 —— 先跑 `npm run build`"
+    newest_src = 0.0
+    for path in (REPO / "client" / "src").rglob("*"):
+        if path.is_file():
+            newest_src = max(newest_src, path.stat().st_mtime)
+    index_html = REPO / "client" / "index.html"
+    if index_html.exists():
+        newest_src = max(newest_src, index_html.stat().st_mtime)
+    if newest_src > dist.stat().st_mtime:
+        return False, (f"dist 比 client/src 旧（源码新 {newest_src - dist.stat().st_mtime:.0f}s）"
+                       " —— 先跑 `npm run build`，否则测的是旧产物")
+    return True, "ok"
+
+
 def record(name, ok, detail=""):
     results.append((name, ok, detail))
     print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""), flush=True)
@@ -445,10 +472,68 @@ def check_panel_isolation(browser):
         context.close()
 
 
+# R-021 V2①：Life 页（agent 内在面）。这一页此前是不可达死分支 ——
+# setPage('life') 在全仓没有任何调用点，页面本身也只是「共生模式正在重建」占位。
+# 本检查钉住：入口存在且可导航、页面渲染、空状态给出可读文案而非空白。
+@check("P11 Life 页可进入并渲染（agent 内在面）")
+def check_life_page(browser):
+    context, page = fresh_page(browser)
+    try:
+        active = open_page(page, "Life")
+        nav_ok = "Life" in active
+        # 页标题是 .aube-ptitle（与 Arcana 同款）；用 eval 判断文本，避免依赖
+        # 某个 Playwright 版本才有的 filter(has_text=) 语义。
+        title_ok = page.eval_on_selector_all(
+            ".aube-ptitle", "els => els.some(e => e.textContent.trim() === 'Life')")
+        quote_ok = page.locator(".aube-pquote").count() > 0
+        # 空状态或时间线二者必居其一：新数据目录下生活线为空，应给文案。
+        has_timeline = page.locator(".timeline-item").count() > 0
+        has_empty = page.locator(".empty-detail").count() > 0
+        body_ok = has_timeline or has_empty
+        marks = {"导航": nav_ok, "标题": title_ok, "引导语": quote_ok, "内容区": body_ok}
+        return all(marks.values()), "; ".join(f"{k}{'✓' if v else '✗'}" for k, v in marks.items())
+    finally:
+        context.close()
+
+
+# Life 页的数据面：只查「页面能开」不够 —— 占位页也能开。这条钉的是
+# 「/api/memory/life 返回可渲染的形状，且页面把它渲染出来了」。
+#
+# 它**不**验证域隔离（只返回 life 域、不混入 relationship/user）：这一层做不到。
+# 独立审计的反事实 CF-C 证明过——把 life() 的 scopeType 过滤整个删掉，这条检查
+# 仍然全绿（页面照样渲染出 4 条别的域的记录）。域隔离改由
+# server/chat-memory-life.test.js 的 LIFE-1 在模块层钉住（那里能直接构造反例）。
+# 下面的形状断言保留，但注释不再声称它抓域混入。
+@check("P12 Life 页接口贯通（/api/memory/life 返回可渲染形状）")
+def check_life_page_data(browser):
+    context, page = fresh_page(browser)
+    try:
+        payload = http_json("/api/memory/life")
+        api_ok = isinstance(payload, dict) and isinstance(payload.get("items"), list)
+        items = (payload or {}).get("items") or []
+        # 每条必须有渲染所需的 id/summary；空列表也算合法（all([]) 为真）。
+        shape_ok = all(isinstance(it, dict) and "id" in it and "summary" in it for it in items)
+        open_page(page, "Life")
+        time.sleep(0.8)
+        rendered = page.locator(".timeline-item").count() + page.locator(".empty-detail").count()
+        detail = f"items={len(items)}; shape_ok={shape_ok}; rendered={rendered}"
+        return api_ok and shape_ok and rendered > 0, detail
+    finally:
+        context.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", default=None, help="run a single check by name in an isolated server+browser and exit")
     args = parser.parse_args()
+
+    # 先守构建产物新鲜度：陈旧 dist 会让**所有**检查对前端改动失去判别力
+    # （见 assert_dist_is_fresh 的说明）。这是失败前置条件，不是某条检查的失败。
+    fresh, why = assert_dist_is_fresh()
+    if not fresh:
+        print(f"E2E_ABORT|{why}", flush=True)
+        return 1
+
     if args.check:
         return _run_check_isolated(args.check)
 

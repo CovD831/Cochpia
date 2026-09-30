@@ -572,6 +572,20 @@ app.get('/api/memory/overview', async (req, res) => {
     fail(res, error.status || 503, error.code || 'MEMORY_MODULE_UNAVAILABLE', error.message || 'Memory Module unavailable');
   }
 });
+// R-021 V2①：Agent 内在面（生活事件）专用读视图。
+// 与 /api/memory/overview 一样是**用户级**视图（无 session 也能读，见 A-4 回归）：
+// 用户在 Sanctum 里应当能看见「它自己这些天做了什么」，不必先开一个会话。
+// 隔离由 Memory 模块的 canSee 保证，本路由不额外放宽任何作用域。
+app.get('/api/memory/life', async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
+    const { items, nextCursor } = await chatMemoryForRequest(req).life({ limit, cursor });
+    res.json({ count: items.length, items, nextCursor, memorySystem: 'memory-module' });
+  } catch (error) {
+    fail(res, error.status || 503, error.code || 'MEMORY_MODULE_UNAVAILABLE', error.message || 'Memory Module unavailable');
+  }
+});
 app.post('/api/models/:provider/test', async (req, res) => {
   const provider = String(req.params.provider || '').trim();
   const requestedModel = String(req.body?.model || '').trim();
@@ -1065,7 +1079,11 @@ const lifeTickScheduler = createLifeTickScheduler({
         // 按 state 缓存），避免产生第二个写者导致 outbox/sequence 分叉。
         memory: memoryRuntime.moduleForRequest({ body: {}, query: {} }),
         context: {
-          tenantId: 'default',
+          // 必须与读取侧同源（memoryRuntime.tenantId）。此前这里硬编码 'default'，
+          // 而 contextFromRequest 用的是 MEMORY_TENANT_ID || 'local-tenant' —— 两者不等时
+          // canSee() 的 tenantId 比对直接判否，life 事件写得进、读不出，
+          // 表现为「Life 页永远为空」且没有任何报错。
+          tenantId: memoryRuntime.tenantId,
           subjectUserId: 'local-user',
           actorType: 'agent',
           actorId: agent.id,
