@@ -243,6 +243,11 @@ export function createMemoryModuleRuntime({
   return {
     moduleForRequest,
     contextFromRequest,
+    // 租户常量必须**同源**：写入侧（life tick 等内部写入者）与读取侧
+    // （contextFromRequest）若各自硬编码，就会出现「写进 tenant A、按 tenant B 读」
+    // 的静默空读 —— canSee() 第一行就是 tenantId 比对，不等即 100% 读不到。
+    // 暴露出来供内部写入者复用，杜绝两个字面量各自演化。
+    tenantId,
     async prepareForRequest(req) {
       const state = stateForRequest(req);
       const module = moduleForRequest(req);

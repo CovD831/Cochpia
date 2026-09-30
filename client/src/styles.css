@@ -673,6 +673,12 @@ h1, h2, .brand strong, .empty-state h2, .inspector h2, .settings-header h2, .bub
 .aube-pbar i { display:block; height:100%; border-radius:4px; background:var(--action-primary); transition:width .8s cubic-bezier(.22,1,.36,1); }
 .aube-ptitle { font-family:var(--font-voice); font-size:28px; margin-bottom:14px; color:var(--text-strong); }
 .aube-sect { font-size:9px; letter-spacing:3px; color:var(--text-muted); margin:18px 0 10px; text-transform:uppercase; }
+/* R-021 V2①：Life 页顶部三格摘要。沿用 aube-card 的底与圆角，只定义内部栅格 ——
+   配色一律走既有 token（--action-primary / --text-muted），不引入新色。 */
+.aube-life-head { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; padding:16px 22px; margin-bottom:6px; }
+.aube-life-head > div { display:grid; gap:3px; }
+.aube-life-head strong { font-family:var(--font-voice); font-size:20px; font-weight:400; color:var(--action-primary); }
+.aube-life-head span { font-size:10px; color:var(--text-muted); }
 .aube-veils { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
 .aube-veil { padding:9px 14px; border:1px solid var(--border-default); border-radius:999px; background:var(--surface-elevated); color:var(--text-muted); cursor:pointer; font-size:11px; transition:.2s; }
 .aube-veil:hover { transform:translateY(-2px); }
@@ -782,6 +788,9 @@ h1, h2, .brand strong, .empty-state h2, .inspector h2, .settings-header h2, .bub
   .aube-page-scroll { left:0; top:0; width:100%; bottom:0; padding:16px 14px calc(76px + env(safe-area-inset-bottom, 0px)); box-sizing:border-box; }
   .aube-ptitle { font-size:23px; }
   .aube-duo { grid-template-columns:1fr; gap:12px; }
+  .aube-life-head { padding:13px 16px; gap:8px; }
+  .aube-life-head strong { font-size:17px; }
+  .aube-life-head span { font-size:9px; }
   .aube-profile { padding:16px; gap:14px; }
 
   /* 悬浮元素上移，避开底部导航 */

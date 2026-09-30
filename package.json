@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently \"node server/index.js\" \"vite --host 0.0.0.0\"",
     "server": "node server/index.js",
-    "test": "node --test server/*.test.js client/src/chat/*.test.js",
+    "test": "node --test server/*.test.js client/src/chat/*.test.js client/src/life/*.test.js",
     "build": "vite build",
     "start": "node server/index.js",
     "start:web": "node services/web-static.js",
@@ -39,7 +39,7 @@
     "smoke:turns-local": "node scripts/turns-local-smoke.js",
     "smoke:chat-memory": "node scripts/chat-memory-smoke.js",
     "proof:memory-loop": "node scripts/memory-loop-proof.js",
-    "test:client": "node --test client/src/chat/*.test.js",
+    "test:client": "node --test client/src/chat/*.test.js client/src/life/*.test.js",
     "test:e2e:panels": "/Users/abab/.workbuddy/binaries/python/envs/default/bin/python scripts/e2e-panels.py",
     "test:e2e:all": "/Users/abab/.workbuddy/binaries/python/envs/default/bin/python scripts/e2e-acceptance.py && /Users/abab/.workbuddy/binaries/python/envs/default/bin/python scripts/e2e-panels.py",
     "gate:memory-quality": "node scripts/memory-quality-gate.mjs",
