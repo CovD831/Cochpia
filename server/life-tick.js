@@ -26,6 +26,12 @@ export const LIFE_TICK_FLAG = 'MEMORY_LIFE_TICK_ENABLED';
 // 治理默认值（计划 §3，老板 2026-09-16 裁决：每日 2 条、不固定时刻）
 export const LIFE_TICK_DEFAULTS = Object.freeze({
   dailyProactiveBudget: 2,
+  // 每日 life 事件写入配额（R-021 写放大修复 ①-A，2026-09-28）。
+  // 背景：原实现每轮轮询（~10min）对每个 agent 无条件 hold() 一次，叠加「全量重写
+  // 整份 state」⇒ 实测 3.7 天 131 GB WAL。本配额把**写入**也纳入每日上限，
+  // 同时打断「写入次数 → state 膨胀 → 单次重写更贵」的负反馈回路。
+  // 置为 Infinity（或超大值）即完全回到修复前行为 —— 开关级可逆。
+  dailyLifeBudget: 2,
   minProactiveGapMs: 3 * 60 * 60 * 1000, // 两次主动消息间隔 ≥3h
   proactiveCooldownMs: 6 * 60 * 60 * 1000, // 单条记忆的 mention cooldown
   wakeWindowStartHour: 8, // 唤醒窗口（本地时）—— 窗口内随机抖动，不固定时刻
@@ -124,6 +130,25 @@ export function countProactiveToday(state, { tenantId, userId, callerAgentId }, 
   return count;
 }
 
+// 近 24h 内本 agent 写入的 life 事件数（R-021 写放大修复 ①-A）。
+// 与 countProactiveToday 的关键差别：**不要求 marker.proactive**。
+// 本闸封的是「写 life 事件」这件事本身，与是否主动打扰无关——一个 tick 即使
+// 不发主动消息，也照样会写一条生活事件，所以配额必须覆盖它，否则闸形同虚设。
+// 用 marker 存在性把「life tick 写入的事件」与其它 life 域断言区分开。
+export function countLifeEventsToday(state, { tenantId, userId, callerAgentId }, nowIso) {
+  const anchor = new Date(nowIso).getTime();
+  let count = 0;
+  for (const assertion of state.assertions || []) {
+    if (!isLifeTickAssertion(assertion, { tenantId, userId, callerAgentId })) continue;
+    if (!markerOf(state, assertion)) continue; // 非 life tick 写入的 life 断言不计
+    const at = new Date(assertion.createdAt).getTime();
+    const age = Number.isFinite(at) ? anchor - at : 0;
+    if (age >= DAY_MS) continue;
+    count += 1;
+  }
+  return count;
+}
+
 // 最近一次主动消息的时间（用于 ≥3h 间隔闸）。
 export function lastProactiveAt(state, { tenantId, userId, callerAgentId }) {
   let latest = null;
@@ -159,8 +184,21 @@ export async function runLifeTick(deps = {}) {
     rng = Math.random,
     templateId = null,
     allowProactive = true,
-    defaults = LIFE_TICK_DEFAULTS,
+    defaults: forcedDefaults,
   } = deps;
+
+  // 审计 N2/R1 加固：得到真正完整的有效默认值。
+  // 两个坑都要防：
+  //   ① 解构默认值只在值为 undefined 时生效 ⇒ 传 {} 会原样拿到 {}；
+  //   ② 展开合并防不住「显式传 undefined」——`{...{a:2}, ...{a:undefined}}` 的结果是
+  //      `a: undefined`（键仍存在，覆盖生效）。
+  // 任一情况都会让 minProactiveGapMs / dailyProactiveBudget / wakeWindow* / lookbackLimit
+  // 变成 undefined ⇒ 比较恒 false ⇒ 四个闸静默失效（fail-open）。
+  // 故逐键回落到 LIFE_TICK_DEFAULTS；显式传 Infinity / 0 仍被尊重（V0-Q2 / V0-Q10）。
+  const defaults = { ...LIFE_TICK_DEFAULTS, ...(forcedDefaults || {}) };
+  for (const key of Object.keys(LIFE_TICK_DEFAULTS)) {
+    if (defaults[key] === undefined) defaults[key] = LIFE_TICK_DEFAULTS[key];
+  }
 
   // 闸 0：feature flag（默认 false，关闭即完全无操作 —— 验收 §4.4）
   if (!isEnabled(env)) return { status: 'disabled', reason: 'MEMORY_LIFE_TICK_ENABLED is not true' };
@@ -171,6 +209,46 @@ export async function runLifeTick(deps = {}) {
   if (!context || context.actorType !== 'agent' || !context.callerAgentId) {
     // 显式治理通道：agent 自主写入必须声明 agent 身份 + callerAgentId（C-6.4）
     throw new Error('runLifeTick requires an agent context with callerAgentId');
+  }
+
+  // 闸 1：每日 life 事件写入配额（R-021 写放大修复 ①-A）。
+  // 位置是硬契约：身份校验之后、生成（模型/规则）之前，且在 memory.list() 之前——
+  // 命中即零模型调用（省 token）、零写入（省 WAL）、零 recordMention。
+  // 返回形状亦为硬契约（见下方注释与 plan §B.1.1）：proactive 键恒在、sent 必须为 false、
+  // 用独立 reason 码、不含 mention 键。
+  {
+    const state = memory.state || null;
+    if (state) {
+      const quotaKey = {
+        tenantId: context.tenantId,
+        userId: context.subjectUserId,
+        callerAgentId: context.callerAgentId,
+      };
+      const lifeCount = countLifeEventsToday(state, quotaKey, nowIso);
+      // defaults 已在函数入口做展开合并（见 N2 加固），但这里仍用 ?? 兜一层：
+      // 调用方若显式传 `dailyLifeBudget: undefined`，展开会把它覆盖成 undefined
+      // （`{...{a:1}, a:undefined}` → a 为 undefined），比较恒 false ⇒ 闸静默失效。
+      // 显式传 Infinity 仍可完全关闭配额（可逆性依赖于此，见 V0-Q2）。
+      const lifeBudget = defaults.dailyLifeBudget ?? LIFE_TICK_DEFAULTS.dailyLifeBudget;
+      if (lifeCount >= lifeBudget) {
+        return {
+          status: 'ok',
+          lifeEventId: null,
+          generator: null,
+          content: null,
+          skipped: 'daily_life_budget',
+          proactive: {
+            sent: false, // 无 life 事件即无 mention；报 true 属 fail-open 误报
+            reason: 'daily_life_budget_exhausted', // 新码，不复用 daily_budget_exhausted
+            todayCount: countProactiveToday(state, quotaKey, nowIso),
+            lifeCount,
+          },
+        };
+      }
+    }
+    // state 不可读 → 不跳过（fail-open，沿用既有 if (state) 惯例）。
+    // 生产路径 memory.state 恒存在（memory-module-runtime.js 注入）；
+    // 该分支实际不可达，但保留它以免吞掉 V1-R1 的 error 传播回归钉。
   }
 
   // 1. 读最近记忆。

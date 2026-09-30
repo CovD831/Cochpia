@@ -242,6 +242,8 @@ test('V1-G1: 窗口内连续轮询仍受每日预算与间隔闸约束', async (
   assert.equal(r1.results[0].result.proactive.sent, true, '首次发出');
   assert.equal(r2.results[0].result.proactive.sent, false, '间隔未满不发');
   assert.equal(r3.results[0].result.proactive.sent, false, '仍不发');
-  assert.equal(state.assertions.length, 3, '生活事件照常写（内在活动 ≠ 主动打扰）');
+  // ①-A（R-021 写放大修复）后：每日 life 写入配额 = 2，第 3 轮被配额闸拦住，
+  // 因此**只写 2 条**——生活事件同样受每日配额约束（plan §4.3 口径已于 2026-09-28 修订）。
+  assert.equal(state.assertions.length, 2, '生活事件受每日配额约束（每天 2 条）');
   s.stop();
 });
