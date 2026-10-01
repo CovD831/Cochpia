@@ -580,17 +580,23 @@ app.patch('/api/preferences', async (req, res) => {
 });
 app.get('/api/memory/overview', async (req, res) => {
   try {
-    const { memories } = await chatMemoryForRequest(req).overview();
-    // 诚实截断（2026-09-30 阶段 0）：此前 count 是**截断前**的总数、memories 却被
-    // slice(0,8)，于是界面写着「20 条」却只列出 8 条，用户无从知道少了什么。
-    // 现在两个数分开给：count=实际返回条数，total=可用总数，truncated 明示是否截断。
-    // 真正的「翻页看全部」属阶段 1（记忆主权面板），本阶段只保证不骗人。
-    const OVERVIEW_LIMIT = 8;
+    const { memories, bundle } = await chatMemoryForRequest(req).overview();
+    // 诚实截断（2026-09-30 阶段 0；**第二版**）。
+    //
+    // 第一版修错了地方，已废弃：我在**这里** slice(0,8) 并据此算 truncated，
+    // 但真正的截断发生在上游 —— contextBundleAsync 受 tokenBudget(1200) 裁剪
+    // （memory-module.js:1523-1555），实测「实有 100 条 → 只回 6 条」。
+    // 于是 slice(0,8) **永不触发**、truncated **恒为 false**，而
+    // `bundle.truncated=true` 这个唯一说真话的标志被本路由丢弃 ——
+    // 界面照旧显示「6 条」，用户无从知道还有 94 条。那正是本阶段要消灭的假话。
+    //
+    // 现在：截断标志直接取上游的 bundle.truncated（唯一的真源），
+    // count 仍是实际返回条数；不再在本层假装截断。
+    const OVERVIEW_LIMIT = 8; // 保留本层上限，但它是**兜底**，正常不触发
     const limited = memories.slice(0, OVERVIEW_LIMIT);
     res.json({
       count: limited.length,
-      total: memories.length,
-      truncated: memories.length > limited.length,
+      truncated: Boolean(bundle?.truncated) || memories.length > limited.length,
       memories: limited,
       memorySystem: 'memory-module'
     });

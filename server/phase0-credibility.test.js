@@ -15,6 +15,7 @@ const repo = join(here, '..');
 const mainSource = readFileSync(join(repo, 'client', 'src', 'main.jsx'), 'utf8');
 const indexSource = readFileSync(join(repo, 'server', 'index.js'), 'utf8');
 const htmlSource = readFileSync(join(repo, 'client', 'index.html'), 'utf8');
+const s_readApi = () => readFileSync(join(repo, 'client', 'src', 'api.js'), 'utf8');
 
 // --- F1 日历：假 UI 与其假承诺 ---
 
@@ -70,16 +71,22 @@ test('F4: 首屏不再引用不存在的视频文件（必然 404）', () => {
 
 // --- F7 记忆截断的诚实性 ---
 
-test('F7: 服务端 overview 区分 count（已返回）与 total（可用总数）', () => {
+test('F7: 服务端 overview 的截断标志取自上游 bundle（第一版修错了地方）', () => {
   const route = indexSource.slice(indexSource.indexOf("app.get('/api/memory/overview'"));
   const body = route.slice(0, route.indexOf('});'));
-  assert.ok(/total:/.test(body), '缺少 total 字段 ⇒ 界面无法知道还有多少没显示');
-  assert.ok(/truncated:/.test(body), '缺少 truncated 标志');
-  // 关键：count 必须等于**实际返回的条数**，不能像以前那样是截断前的总数
+  // 第一版只在本层 slice(0,8) 并据此算 truncated —— 实测上游产出恒 ≤6，
+  // 于是 truncated 结构性恒为 false、唯一说真话的 bundle.truncated 被丢弃。
+  // 现在必须**同时**认上游标志。
+  assert.ok(
+    /bundle\?\.truncated/.test(body),
+    '截断标志必须取自上游 bundle.truncated —— 只靠本层 slice 判断会恒为 false'
+  );
   assert.ok(
     /count: limited\.length/.test(body),
-    'count 必须是实际返回条数（此前它等于截断前总数，界面写 20 条却只列 8 条）'
+    'count 必须等于实际返回条数'
   );
+  // 不应再提供已废弃的 total（第一版的产物）
+  assert.ok(!/total:/.test(body), 'total 已废弃（它曾是「上游已裁剪后的条数」，具误导性）');
 });
 
 test('F7: 前端不再把记忆列表硬截到 3 条', () => {
@@ -120,22 +127,54 @@ test('AR-212: refresh() 的逐接口隔离未被回退', () => {
 // 上面的 F7 用例是源码形状检查；下面这条把「12 条输入」喂进同一段算法，
 // 钉住 count/total/truncated 三个数的**具体取值**——否则字段加错了也算过。
 
-test('F7: 截断分支的实际取值（12 条 → count=8 / total=12 / truncated=true）', () => {
-  const OVERVIEW_LIMIT = 8;
-  const compute = all => {
-    const limited = all.slice(0, OVERVIEW_LIMIT);
-    return { count: limited.length, total: all.length, truncated: all.length > limited.length };
-  };
-  const make = n => Array.from({ length: n }, (_, i) => ({ id: `m${i}` }));
+// 【行为层，替换掉第一版的自证测试】
+// 第一版把路由算法在测试里**重抄了一遍**再断言副本 —— 审计指出它验证的是
+// 「我手抄的这段逻辑自洽」，而非真实路由，因此对 F7 这类缺陷零判别力。
+// 现在直接驱动**真实模块**：createMemoryModule + createChatMemoryAdapter，
+// 用真实 contextBundle 的 token 预算裁剪产出，再套用真实路由的取值方式。
+// 这条能抓到「truncated 恒为 false」这个真实缺陷（审计 P0-1）。
+test('F7（行为层）: 真实截断必须被标记——不能因为上游裁剪就不告诉用户', async () => {
+  const { createMemoryModule, createMemoryModuleState } = await import('./memory-module.js');
+  const { createChatMemoryAdapter } = await import('./chat-memory.js');
 
-  assert.deepEqual(compute(make(12)), { count: 8, total: 12, truncated: true }, '超限时应明示截断');
-  assert.deepEqual(compute(make(9)), { count: 8, total: 9, truncated: true });
-  assert.deepEqual(compute(make(8)), { count: 8, total: 8, truncated: false }, '恰好等于上限不算截断');
-  assert.deepEqual(compute(make(3)), { count: 3, total: 3, truncated: false });
-  assert.deepEqual(compute(make(0)), { count: 0, total: 0, truncated: false });
+  const runFor = async N => {
+    const state = createMemoryModuleState();
+    const memory = createMemoryModule(state, async () => {});
+    const actx = { tenantId: 't1', subjectUserId: 'u1', actorType: 'agent', actorId: 'a1', callerAgentId: 'a1' };
+    for (let i = 0; i < N; i += 1) {
+      await memory.hold(actx, { content: `共同记忆 ${i}`, memoryType: 'fact', assertionType: 'observed_fact', scopeType: 'relationship', relationshipAgentId: 'a1', sensitivity: 'S0' });
+    }
+    const uctx = { tenantId: 't1', subjectUserId: 'u1', actorType: 'user', actorId: 'u1', callerAgentId: null };
+    const adapter = createChatMemoryAdapter({ memoryModule: memory, state: { memoryModule: state }, context: uctx });
+    const { memories, bundle } = await adapter.overview();
+    const LIMIT = 8;
+    const limited = memories.slice(0, LIMIT);
+    return {
+      realTruncated: Boolean(bundle?.truncated),
+      payloadTruncated: Boolean(bundle?.truncated) || memories.length > limited.length,
+      count: limited.length
+    };
+  };
+
+  // 少量记忆：不截断，且不得谎报截断
+  const few = await runFor(3);
+  assert.equal(few.realTruncated, false, '3 条不该触发截断');
+  assert.equal(few.payloadTruncated, false, '3 条不该谎报截断');
+
+  // 大量记忆：上游 token 预算会裁剪，必须如实标记
+  const many = await runFor(120);
+  assert.equal(many.realTruncated, true, '120 条时上游应已裁剪（bundle.truncated=true）');
+  assert.equal(
+    many.payloadTruncated, true,
+    '真实的截断必须被标记：不能因为「上游已经裁好」就不告诉用户'
+  );
+  assert.ok(
+    many.count < 120,
+    `返回条数应远小于实有数（实得 ${many.count}），这正是需要标记截断的原因`
+  );
 });
 
-test('F7: 服务端真实路由用的是同一套取值（防止只改注释不改算法）', () => {
+test('F7（characterization）: 路由源码形状——截断标志取自上游 bundle', () => {
   const route = indexSource.slice(indexSource.indexOf("app.get('/api/memory/overview'"));
   const body = route.slice(0, route.indexOf('});'));
   const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
@@ -192,4 +231,79 @@ test('计数卡片：数据源失败时不得静默显示 0', () => {
     '首页卡片必须区分「接口失败」与「真的 0 条」——否则失败时静默显示 0'
   );
   assert.ok(/暂不可用/.test(home), '缺少失败态文案');
+});
+
+// --- P0-2 回归：SW 缓存不得让「已连接」变成假话 ---
+// 审计实测：杀掉后端、浏览器仍在线时，SW 的 cache-fallback 会回一份缓存的 200，
+// 9 路探测全部 fulfilled ⇒ 顶栏仍显示「已连接」。修复分三处，缺一不可：
+//   ① sw.js 给回退响应打标记；② api.js 识别该标记；③ refresh 把「来自缓存」计为不可达。
+test('P0-2: SW 的 /api/ 回退响应必须带缓存标记（否则与真实响应无法区分）', () => {
+  const sw = readFileSync(join(repo, 'client', 'public', 'sw.js'), 'utf8');
+  const api = s_readApi();
+  assert.ok(
+    /X-Cochpia-From-Cache/.test(sw),
+    'sw.js 的 cache-fallback 必须打标记 —— 否则后端已死时前端无法分辨，会谎报「已连接」'
+  );
+  assert.ok(
+    /FROM_CACHE_HEADER|x-cochpia-from-cache/i.test(api),
+    'api.js 必须识别该标记'
+  );
+  assert.ok(
+    /__fromCache/.test(api),
+    'api.js 应把它转成调用方可判定的信号'
+  );
+  assert.ok(
+    /__fromCache/.test(mainSource),
+    'refresh 的可达性推导必须把「来自缓存」计为不可达'
+  );
+});
+
+test('P0-2: 可达性判据不得只用「有 fulfilled 就算连接」（会被缓存击穿）', () => {
+  const start = mainSource.indexOf('const anyReal');
+  assert.ok(start !== -1, '找不到 anyReal 判据');
+  const body = mainSource.slice(start, start + 260);
+  assert.ok(/\.some\(/.test(body) || /values\.some/.test(body), '应逐路筛掉缓存响应');
+  assert.ok(!/setServerReachable\(allResults\.some\(/.test(mainSource),
+    '不能退回「allResults.some(fulfilled)」——那正是被 SW 缓存击穿的写法');
+});
+
+// --- P0-2 的最终修法：必须有**主动**探活 ---
+// 审计指出 SW 缓存让启动快照说谎；我进一步实测发现更根本的问题：
+// 后端死后**根本不会再有 api() 调用**（点「新的相遇」只触发 /api/preferences，
+// 且它命中缓存），所以纯被动监听永远等不到信号、顶栏停在旧值。
+// 实测证据：只有加入 30s 主动探活后，顶栏才在 ~28s 变为「连接中断」。
+test('P0-2: 必须存在主动探活（被动上报在后端死后收不到任何信号）', () => {
+  const api = s_readApi();
+  assert.ok(/startReachabilityProbe/.test(api), 'api.js 必须提供主动探活');
+  assert.ok(/\/api\/health/.test(api), '探活应打轻量的 /api/health，而不是业务接口');
+  assert.ok(/cache:\s*'no-store'/.test(api), '探活必须绕开缓存——「缓存的答案」不能回答「后端现在答不答」');
+  assert.ok(/startReachabilityProbe\(\)/.test(mainSource), 'App 必须真的启动它');
+  assert.ok(/stopReachabilityProbe/.test(mainSource), '卸载时必须停掉，避免泄漏定时器');
+  // 与 R-020 移除的重负载轮询划清界限：探活不得传业务数据
+  const probe = api.slice(api.indexOf('const probeOnce'));
+  assert.ok(!/JSON\.stringify/.test(probe.slice(0, 500)), '探活不得序列化业务数据（重蹈 R-020 轮询覆辙）');
+});
+
+test('P0-2: 缓存响应必须被当作「不可达」，而不是「不确定」', () => {
+  const start = mainSource.indexOf('onReachability(state =>');
+  const body = mainSource.slice(start, start + 400);
+  // 第一版把 'cache' 当「不动」，结果离线后唯一还会发生的请求全命中缓存 ⇒ 永远不变
+  assert.ok(
+    /state === 'up'/.test(body),
+    '判据应简化为「只有收到真实响应才算可达」——cache/down 都不可达'
+  );
+});
+
+// --- P1-1 回归：F8 的分档阈值必须在实际可得范围内可达 ---
+test('P1-1: relationshipState 的每一档都必须可达（阈值不得超过 count 上限）', () => {
+  const start = mainSource.indexOf('const relationshipState = useMemo');
+  const body = mainSource.slice(start, mainSource.indexOf('}, [memory.count, personality?.version]);', start));
+  // overview 的返回上限 = OVERVIEW_LIMIT（8），且上游 token 裁剪后实测更小。
+  // 任何 >= 9 的阈值都结构上不可达 —— 第一版用了 10，是死代码。
+  const thresholds = [...body.matchAll(/memories\s*>=\s*(\d+)/g)].map(m => Number(m[1]));
+  for (const t of thresholds) {
+    assert.ok(t <= 8, `阈值 ${t} 超过 count 上限 8 ⇒ 该档永不渲染（死代码）`);
+  }
+  // 且最高档应依赖 count 之外的信号（人格版本），因为 count 本身有上限
+  assert.ok(/version\s*>\s*1/.test(body), '最高档应同时要求人格已演进（count 有上限，单靠它无法区分）');
 });

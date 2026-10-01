@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, supabase, apiBase } from './api';
+import { api, supabase, apiBase, onReachability, startReachabilityProbe, stopReachabilityProbe } from './api';
 // R-020 stage 3: one shared mode-switch detector. The client uses it to decide
 // which chat route a message belongs to, so it can never disagree with the
 // server about what counts as a mode command.
@@ -230,23 +230,60 @@ function App() {
   const selectedProviderInfo = useMemo(() => models.providers.find(item => item.provider === selectedProvider), [models.providers, selectedProvider]);
   const currentSession = useMemo(() => sessions.find(item => item.id === sessionId) || null, [sessions, sessionId]);
 
+  // 顶栏「连接状态」的持续真值来源（2026-09-30 阶段 0；**第三版，最终修法**）。
+  //
+  // 前两版都不成立：
+  //   ① 写死「SSE 已连接」—— 客户端根本没有持久 SSE 连接，任何时刻都不为真；
+  //   ② 由 refresh() 的 9 路探测推导 —— 但 refresh() **只在启动与导入后各跑一次、
+  //      没有轮询**（实测：后端死后切页只触发 /api/preferences，refresh 不再执行），
+  //      所以那是「打开页面那一刻的快照」，之后永不更新。
+  //      （审计另指出 SW 会对 /api/ 做 cache-fallback 从而让快照也说谎 —— 属实，
+  //      但即使没有 SW，快照本身也不会更新，所以 SW 不是唯一原因。）
+  //   ③ 现在：以**最近一次真实请求**的结果为准。api.js 在每次请求结束时上报
+  //      up / down / cache，这里订阅它。用户每做一次操作都在刷新这个判断，
+  //      因此它反映的是「此刻」而不是「打开时」。
+  useEffect(() => {
+    onReachability(state => {
+      // 'up'    = 收到真实响应 ⇒ 可达
+      // 'down'  = 网络层失败 ⇒ 不可达
+      // 'cache' = SW 回了缓存，即**后端没有答复** ⇒ 同样不可达
+      //   （SW 只在 fetch reject 时才回退缓存，所以这不是「弱网」，是没答复。
+      //    第一版把它当「不确定」而选择不动 —— 结果后端已死时顶栏永远不变，
+      //    正是因为离线后唯一还会发生的请求（/api/preferences）全部命中缓存。）
+      setServerReachable(state === 'up');
+    });
+    // 同时启动轻量主动探活：被动监听只在「有请求发生」时才有信号，而后端死后
+    // 往往一个请求都不会发生（实测），顶栏会一直停在旧值。
+    // 探针只 GET /api/health，不传业务数据 —— 与 R-020 移除的那个「重负载轮询」
+    // （重新序列化全部 session/message/memory 后丢弃）性质不同。
+    startReachabilityProbe();
+    return () => { onReachability(null); stopReachabilityProbe(); };
+  }, []);
+
   // F8（阶段 0）：把写死的「关系正在形成」换成由真实数据推导的一句话。
   // 此前它是一个静态字符串 —— 无论用户刚注册还是聊了三个月，显示都一样，
   // 断网时也一样。现在按「有多少共同记忆 / 人格是否已演进过版本」分档，
   // 数据不足时如实说数据不足，而不是编一句听起来很像真的话。
+  //
+  // ⚠️ 阈值必须与**实际可得的数据范围**对齐（审计 P1-1 抓到的错）：
+  // inspector 拿到的 memory.count 是 overview 的返回条数，而它受上游
+  // token 预算裁剪，实测上限约 6（见 server/index.js 的 F7 注释）。
+  // 第一版把「关系已具雏形」的阈值定在 10 —— 结构上永不触发，是死代码。
+  // 现在改用可得范围内的分档，并让最高档同时要求「人格已升过版本」，
+  // 因为它才是真正说明关系在演进的信号（count 本身有上限）。
   const relationshipState = useMemo(() => {
     const memories = Number(memory.count) || 0;
     const version = Number(personality?.version) || 1;
     if (memories === 0 && version <= 1) {
       return { label: '关系尚未开始', detail: '还没有沉淀共同记忆' };
     }
-    if (memories < 10) {
-      return { label: '关系正在形成', detail: `已沉淀 ${memories} 条共同记忆` };
+    if (version > 1 && memories > 0) {
+      return { label: '关系正在演进', detail: `${memories} 条共同记忆 · 人格已到 v${version}` };
     }
-    return {
-      label: version > 1 ? '关系已具雏形' : '关系正在沉淀',
-      detail: `${memories} 条共同记忆 · 人格 v${version}`
-    };
+    if (memories >= 5) {
+      return { label: '关系已有积累', detail: `${memories} 条共同记忆` };
+    }
+    return { label: '关系正在形成', detail: `已沉淀 ${memories} 条共同记忆` };
   }, [memory.count, personality?.version]);
 
   // R-021 V2①：生活线的排序 / 分组 / 摘要在前端定，不指望上游顺序
@@ -421,8 +458,8 @@ function App() {
     setSessions(safeSessions);
     setMemory({
       count: Number(nextMemory?.count) || 0,
-      // 后端现在区分 count（已返回条数）与 total（可用总数），截断时如实显示。
-      total: Number(nextMemory?.total) || Number(nextMemory?.count) || 0,
+      // 截断标志直接来自服务端（其真源是 contextBundle 的 token 预算裁剪结果）。
+      // 不再用 total>count 自行推断 —— 那个推断曾经恒为 false（见 server/index.js 注释）。
       truncated: Boolean(nextMemory?.truncated),
       memories: asArray(nextMemory?.memories)
     });
@@ -448,9 +485,12 @@ function App() {
     if (lifeR.status !== 'fulfilled') nextPanelErrors.life = panelErrorMessage('它的近况', lifeR.reason);
     setPanelErrors(nextPanelErrors);
 
-    // 9 路全部失败 ⇒ 后端不可达。只要有一路成功，就说明服务是活的
-    // （单接口失败由 panelErrors 各自呈现，不应把整体判成离线 —— 这正是 AR-212 的教训）。
-    setServerReachable(allResults.some(r => r.status === 'fulfilled'));
+    // 启动时先给一个初值：任一**真实**响应即算可达。
+    // 注意这只是初值 —— 顶栏的持续真值由 api.js 的 onReachability 上报驱动
+    // （见下方 useEffect），因为 refresh() 只在启动/导入时各跑一次、没有轮询。
+    const values = allResults.filter(r => r.status === 'fulfilled').map(r => r.value);
+    const anyReal = values.some(v => !(v && typeof v === 'object' && v.__fromCache));
+    setServerReachable(values.length > 0 && anyReal);
 
     if (safeSessions.some(item => item.id === sessionId)) await loadModel(sessionId);
     return safeSessions;
@@ -1031,7 +1071,7 @@ function App() {
    本修复的第一版正是如此（写了状态没人读），自查时才发现。 */}
 {(panelErrors.channels || panelErrors.persona || panelErrors.atmosphere || panelErrors.mode) && <div className="load-errors">{panelErrors.channels && <PanelError message={panelErrors.channels} />}{panelErrors.persona && <PanelError message={panelErrors.persona} />}{panelErrors.atmosphere && <PanelError message={panelErrors.atmosphere} />}{panelErrors.mode && <PanelError message={panelErrors.mode} />}</div>}{messages.length === 0 && <div className="empty-state"><span className="empty-mark">01</span><h2>从一段真实的分享开始</h2><p>每次对话都会成为可审计的共同经历，只有重要的内容才会进入长记忆。</p></div>}{groupedMessages.map(item => item.type === 'date' ? <div key={item.key} className="date-sep"><span>{item.label}</span></div> : <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}><div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || (profile.avatarImage ? <img src={profile.avatarImage} alt="" /> : profile.avatar)) : '你'}</div><div className="message-content"><div className="message-meta">{item.role === 'assistant' ? (item.senderName || profile.name) : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>{editingMessageId === item.id && item.lastInGroup ? <div className="message-edit"><textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus /><div><button type="button" className="text-button" onClick={() => saveMessageEdit(item.id)}>保存</button><button type="button" className="text-button muted-button" onClick={cancelEditingMessage}>取消</button></div></div> : <><div className="bubble">{item.content || <span className="typing">正在形成回应<span>.</span><span>.</span><span>.</span></span>}{item.isStreaming && item.content ? <span className="typing-cursor" /> : null}</div>{item.lastInGroup && !('isStreaming' in item) && <div className="message-actions">{item.role === 'assistant' && ttsSupported && <button type="button" className="text-button" onClick={() => toggleSpeak(item)}>{speakingId === item.id ? '停止朗读' : '朗读'}</button>}<button type="button" className="text-button" onClick={() => startEditingMessage(item)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => removeMessage(item.id)}>删除</button></div>}</>}</div></article>)}{toolEvents.length > 0 && <div className="tool-log">{toolEvents.map((item, i) => <details key={i} className="tool-item" open={item.result === null}><summary>🔧 {item.name} {item.args?.path || item.args?.pattern || item.args?.name || item.args?.dir || ''}</summary>{item.result === null ? <span className="tool-pending">执行中…</span> : <pre className="tool-result">{item.result}</pre>}</details>)}</div>}{jumpToBottom && <button className="jump-bottom" onClick={() => { nearBottomRef.current = true; setJumpToBottom(false); scrollToBottom('smooth'); }} aria-label="回到底部" title="回到底部"><FeatherIcon name="chevronDown" size={18} /></button>}</div><form className="composer" onSubmit={sendMessage}><CompanionIntentBar mode={mode} intent={companionIntent} onChange={setCompanionIntent} /><button type="button" className="upload-button" onClick={() => fileRef.current?.click()} disabled={streaming} aria-label="上传文件" title="上传文件"><FeatherIcon name="paperclip" size={17} /></button><button type="button" className={`upload-button voice-button${listening ? ' listening' : ''}`} onClick={toggleListening} disabled={streaming || !recognitionSupported} aria-pressed={listening} aria-label={listening ? '停止语音输入' : '语音输入'} title={recognitionSupported ? (listening ? '点击停止说话' : '点击开始说话') : '当前浏览器不支持语音识别'}>{listening ? <FeatherIcon name="stopCircle" size={17} /> : <FeatherIcon name="mic" size={17} />}</button><button type="button" className={`upload-button auto-read${autoRead ? ' active' : ''}`} onClick={toggleAutoRead} disabled={!ttsSupported} aria-pressed={autoRead} aria-label="自动朗读回复" title={ttsSupported ? (autoRead ? '已开启自动朗读回复' : '开启自动朗读回复') : '当前浏览器不支持语音合成'}><FeatherIcon name="volume2" size={17} /></button><textarea value={listening ? `${input}${finalText}${interimText}` : input} onChange={event => setInput(event.target.value)} disabled={streaming} readOnly={listening} placeholder={listening ? '正在聆听…' : '写下此刻想分享的事…'} rows="1" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event); } }} /><input ref={fileRef} type="file" hidden onChange={uploadFile} />{streaming ? <button type="button" className="send-button stop-button" onClick={cancelGeneration} aria-label="停止生成" title="停止生成"><FeatherIcon name="stopCircle" size={18} /></button> : <button className="send-button" disabled={!input.trim()} aria-label="发送消息" title="发送消息"><FeatherIcon name="arrowUp" size={18} /></button>}<div className="composer-note">Enter 发送 · 🎤 语音输入 · 🔊 自动朗读</div></form></main>
 
-    <div className="window-layer"><FloatingWindow id="inspector" title="共同状态"><aside className="inspector"><div className="inspector-head"><div><p className="eyebrow">COGNITIVE STATE</p><h2>共同状态</h2></div><span className="live-pill">LIVE</span></div><section className="state-card"><div className="state-card-top"><span className="state-icon">✦</span><div><strong>{relationshipState.label}</strong><span>{relationshipState.detail}</span></div></div><div className="state-line"><span>共享记忆</span><strong>{memory.count}</strong></div><div className="state-line"><span>人格版本</span><strong>v{personality?.version || 1}</strong></div></section><MaterialPreview /><section className="inspector-section"><div className="section-heading"><span>人格趋势</span><button type="button" className="text-button" onClick={() => setHistoryOpen(true)}>查看版本</button></div>{(personality?.traits || []).map(trait => <div className="trait" key={trait.key}><div><span>{trait.label}</span><b>{Math.round(trait.value * 100)}%</b></div><div className="progress"><i style={{ width: `${trait.value * 100}%` }} /></div></div>)}</section><section className="inspector-section">{panelErrors.memory && <PanelError message={panelErrors.memory} />}<div className="section-heading"><span>最近记忆</span><span className="count-label">{memory.total > memory.count ? `列出 ${memory.count} / 共 ${memory.total} 条` : `${memory.count} 条`}</span></div>{memory.memories.map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.type === 'relationship' ? '关系' : '事件'}</span><p>{item.summary}</p><small>{Math.round(item.confidence * 100)}% 确信 · {item.source}</small></div>)}</section><section className="inspector-section">{panelErrors.growthEvidence && <PanelError message={panelErrors.growthEvidence} />}<div className="section-heading"><span>成长证据</span><button type="button" className="text-button" onClick={() => setGrowthOpen(true)}>查看时间线</button></div>{growthEvidence.slice(0, 2).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.status || 'draft'}</span><p>{item.claim}</p><small>{item.evidence}</small></div>)}</section><section className="protocol-note"><span>◎</span><p><strong>可验证成长</strong>每次人格变化都保留证据和版本，随时可回滚。</p></section></aside></FloatingWindow></div>
+    <div className="window-layer"><FloatingWindow id="inspector" title="共同状态"><aside className="inspector"><div className="inspector-head"><div><p className="eyebrow">COGNITIVE STATE</p><h2>共同状态</h2></div><span className="live-pill">LIVE</span></div><section className="state-card"><div className="state-card-top"><span className="state-icon">✦</span><div><strong>{relationshipState.label}</strong><span>{relationshipState.detail}</span></div></div><div className="state-line"><span>共享记忆</span><strong>{memory.count}</strong></div><div className="state-line"><span>人格版本</span><strong>v{personality?.version || 1}</strong></div></section><MaterialPreview /><section className="inspector-section"><div className="section-heading"><span>人格趋势</span><button type="button" className="text-button" onClick={() => setHistoryOpen(true)}>查看版本</button></div>{(personality?.traits || []).map(trait => <div className="trait" key={trait.key}><div><span>{trait.label}</span><b>{Math.round(trait.value * 100)}%</b></div><div className="progress"><i style={{ width: `${trait.value * 100}%` }} /></div></div>)}</section><section className="inspector-section">{panelErrors.memory && <PanelError message={panelErrors.memory} />}<div className="section-heading"><span>最近记忆</span><span className="count-label">{memory.truncated ? `仅显示最近 ${memory.count} 条` : `${memory.count} 条`}</span></div>{memory.memories.map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.type === 'relationship' ? '关系' : '事件'}</span><p>{item.summary}</p><small>{Math.round(item.confidence * 100)}% 确信 · {item.source}</small></div>)}</section><section className="inspector-section">{panelErrors.growthEvidence && <PanelError message={panelErrors.growthEvidence} />}<div className="section-heading"><span>成长证据</span><button type="button" className="text-button" onClick={() => setGrowthOpen(true)}>查看时间线</button></div>{growthEvidence.slice(0, 2).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.status || 'draft'}</span><p>{item.claim}</p><small>{item.evidence}</small></div>)}</section><section className="protocol-note"><span>◎</span><p><strong>可验证成长</strong>每次人格变化都保留证据和版本，随时可回滚。</p></section></aside></FloatingWindow></div>
 
     {growthOpen && <GrowthPanel growthEvidence={growthEvidence} growthError={panelErrors.growthEvidence} reviewingEvidence={reviewingEvidence} reviewAllEvidence={reviewAllEvidence} reviewEvidence={reviewEvidence} traitLabel={traitLabel} onClose={() => setGrowthOpen(false)} />}
     {historyOpen && <HistoryPanel currentVersion={currentVersion} previousVersion={previousVersion} historyError={panelErrors.personalityHistory} versionChanges={versionChanges} traitLabel={traitLabel} onClose={() => setHistoryOpen(false)} />}
