@@ -580,8 +580,26 @@ app.patch('/api/preferences', async (req, res) => {
 });
 app.get('/api/memory/overview', async (req, res) => {
   try {
-    const { memories } = await chatMemoryForRequest(req).overview();
-    res.json({ count: memories.length, memories: memories.slice(0, 8), memorySystem: 'memory-module' });
+    const { memories, bundle } = await chatMemoryForRequest(req).overview();
+    // 诚实截断（2026-09-30 阶段 0；**第二版**）。
+    //
+    // 第一版修错了地方，已废弃：我在**这里** slice(0,8) 并据此算 truncated，
+    // 但真正的截断发生在上游 —— contextBundleAsync 受 tokenBudget(1200) 裁剪
+    // （memory-module.js:1523-1555），实测「实有 100 条 → 只回 6 条」。
+    // 于是 slice(0,8) **永不触发**、truncated **恒为 false**，而
+    // `bundle.truncated=true` 这个唯一说真话的标志被本路由丢弃 ——
+    // 界面照旧显示「6 条」，用户无从知道还有 94 条。那正是本阶段要消灭的假话。
+    //
+    // 现在：截断标志直接取上游的 bundle.truncated（唯一的真源），
+    // count 仍是实际返回条数；不再在本层假装截断。
+    const OVERVIEW_LIMIT = 8; // 保留本层上限，但它是**兜底**，正常不触发
+    const limited = memories.slice(0, OVERVIEW_LIMIT);
+    res.json({
+      count: limited.length,
+      truncated: Boolean(bundle?.truncated) || memories.length > limited.length,
+      memories: limited,
+      memorySystem: 'memory-module'
+    });
   } catch (error) {
     fail(res, error.status || 503, error.code || 'MEMORY_MODULE_UNAVAILABLE', error.message || 'Memory Module unavailable');
   }
