@@ -173,3 +173,23 @@ test('panelErrors：写入的键必须都有渲染位（防「写了状态没人
   );
   assert.ok(written.size > 0, '没解析到任何写入键，说明匹配式失效了');
 });
+
+// --- 计数类 UI：接口失败时不得静默显示 0 ---
+// 这一类 bug 在本阶段出现了两次：
+//   ① load() 把失败写进 panelErrors 却没人渲染（已修，见上一条护栏）；
+//   ② 首页「它的近况」卡片直接显示 lifeEvents.length —— Life API 失败时
+//      长度是 0，看起来就像「它真的没有生活记录」，用户无从分辨。
+// 判据：凡是渲染「N 条/个」这类计数的卡片，若其数据源有对应的 panelErrors.X，
+// 就必须在该接口失败时给出不同文案。
+test('计数卡片：数据源失败时不得静默显示 0', () => {
+  const code = mainSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const homeStart = code.indexOf("{page === 'home' &&");
+  assert.ok(homeStart !== -1, '找不到首页段');
+  const home = code.slice(homeStart, code.indexOf("{page === 'life' &&", homeStart));
+  assert.ok(/lifeEvents\.length/.test(home), '首页卡片应显示生活记录数（前提）');
+  assert.ok(
+    /panelErrors\.life\s*\?/.test(home),
+    '首页卡片必须区分「接口失败」与「真的 0 条」——否则失败时静默显示 0'
+  );
+  assert.ok(/暂不可用/.test(home), '缺少失败态文案');
+});
