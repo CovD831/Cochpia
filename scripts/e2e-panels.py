@@ -522,6 +522,60 @@ def check_life_page_data(browser):
         context.close()
 
 
+# R-021 阶段 0「修信用」：删掉假 UI 之后，必须钉住「假的真的没了」。
+# 判据刻意用**页面实际 DOM/网络**，不是源码 grep（源码检查已在 npm test 里）。
+#
+# 注意：不能复用 fresh_page() —— 它内部已经 goto + 点击 splash 穿过首屏，
+# 那样 (a) 首屏 <video> 已经不在 DOM 里、(b) 4xx 监听器注册得太晚什么都抓不到。
+# 本检查自行控制导航顺序。
+@check("P13 阶段 0：无首屏视频 404、首页无日历假入口、顶栏连接文案真实")
+def check_phase0_credibility(browser):
+    context = browser.new_context(accept_downloads=True)
+    page = context.new_page()
+    bad = []
+    page.on("response", lambda r: bad.append((r.status, r.url)) if r.status >= 400 else None)
+    try:
+        page.goto(BASE, wait_until="load")
+        page.wait_for_selector(".aube-splash", timeout=15000)
+        time.sleep(0.8)
+
+        # (a) 首屏不应再有 <video>（原引用不存在的 mp4 ⇒ 必然 404）
+        video_count = page.locator(".aube-splash-video").count()
+
+        page.click(".aube-splash", timeout=15000)
+        page.wait_for_selector(".aube-nav", timeout=15000)
+        time.sleep(1.2)
+
+        # (b) 首页卡片：不得出现「日历」（events 恒空 ⇒ 永远显示 0 条日程）
+        cards = page.eval_on_selector_all(
+            ".aube-mini h5", "els => els.map(e => e.textContent.trim())")
+
+        # (c) 顶栏连接文案必须是真实推导的三态之一，不得是写死的「SSE 已连接」
+        conn = page.eval_on_selector(
+            ".connection", "e => e.textContent.trim()") if page.locator(".connection").count() else ""
+
+        # (d) 日历弹窗不应存在（.event-form 是它独有的表单类）
+        event_form = page.locator(".event-form").count()
+
+        # 只看首屏 splash 视频相关的 4xx —— 其它 4xx 由各自面板的检查负责，
+        # 避免把无关噪声算进本检查（例如用户没上传过文件时的可选资源）。
+        video_4xx = [u for st, u in bad if st >= 400 and "306155_medium" in u]
+
+        marks = {
+            "无首屏视频元素": video_count == 0,
+            "无日历卡片": "日历" not in cards,
+            "连接文案真实": conn in ("已连接", "连接中断", "连接中…") and "SSE" not in conn,
+            "无日历弹窗": event_form == 0,
+            "无视频404": len(video_4xx) == 0,
+        }
+        detail = "; ".join(f"{k}{'✓' if v else '✗'}" for k, v in marks.items())
+        if video_4xx:
+            detail += f" [视频请求: {video_4xx[0][:70]}]"
+        return all(marks.values()), detail
+    finally:
+        context.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", default=None, help="run a single check by name in an isolated server+browser and exit")

@@ -581,7 +581,19 @@ app.patch('/api/preferences', async (req, res) => {
 app.get('/api/memory/overview', async (req, res) => {
   try {
     const { memories } = await chatMemoryForRequest(req).overview();
-    res.json({ count: memories.length, memories: memories.slice(0, 8), memorySystem: 'memory-module' });
+    // 诚实截断（2026-09-30 阶段 0）：此前 count 是**截断前**的总数、memories 却被
+    // slice(0,8)，于是界面写着「20 条」却只列出 8 条，用户无从知道少了什么。
+    // 现在两个数分开给：count=实际返回条数，total=可用总数，truncated 明示是否截断。
+    // 真正的「翻页看全部」属阶段 1（记忆主权面板），本阶段只保证不骗人。
+    const OVERVIEW_LIMIT = 8;
+    const limited = memories.slice(0, OVERVIEW_LIMIT);
+    res.json({
+      count: limited.length,
+      total: memories.length,
+      truncated: memories.length > limited.length,
+      memories: limited,
+      memorySystem: 'memory-module'
+    });
   } catch (error) {
     fail(res, error.status || 503, error.code || 'MEMORY_MODULE_UNAVAILABLE', error.message || 'Memory Module unavailable');
   }
