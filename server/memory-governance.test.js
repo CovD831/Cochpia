@@ -828,3 +828,76 @@ test('forget/revoke/remove keep a source event shared with a surviving memory', 
     assert.equal(state.rawEvents[0].content, '两个人共用的原始对话', `${action}: the shared event must keep its content while referenced`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 18. 全量共用矩阵：{forget, revoke, remove} × n∈{1,2,3} 全部处理完 → 导出必须干净
+// ---------------------------------------------------------------------------
+// 第二轮审计点出的缺口：17 号测试只覆盖「删一条、留一条」，6 号守卫又只跑 remove。
+// **「多条记忆共用同一来源、且全部被处理完」这个组合从未被断言过** ——
+// 而那正是 forget/revoke 的真实主路径（面板只接这两个动词）。
+//
+// 当时的具体缺陷：判据写成「排除本次这一条」，于是 n≥2 时每条都只排除自己、
+// 却仍被同批其它条"引用着" ⇒ 永不清理 ⇒ /api/export 仍吐原文。
+const SHARED_MATRIX_SECRET = '共用来源矩阵验证原文';
+
+const TERMINAL_ACTIONS = [
+  ['forget', (memory, id, revision) => memory.forget(userContext(), id, { resource_revision: revision })],
+  ['revoke', (memory, id, revision) => memory.revoke(userContext(), id, { resource_revision: revision })],
+  ['remove', (memory, id, revision) => memory.remove(userContext(), id, { resource_revision: revision })]
+];
+
+for (const [action, run] of TERMINAL_ACTIONS) {
+  for (const n of [1, 2, 3]) {
+    test(`${action} purges a shared source event once all ${n} sharer(s) are terminal`, async () => {
+      const { state, memory } = createHarness();
+      await memory.recordEvent(userContext(), { eventId: `evt-matrix-${action}-${n}`, content: SHARED_MATRIX_SECRET, eventRole: 'user' });
+      const rawEventId = state.rawEvents[0].id;
+
+      // n 条记忆共用**同一个** rawEvent —— 真实形态：一次对话提取出多条记忆。
+      const held = [];
+      for (let index = 0; index < n; index += 1) {
+        held.push(await memory.hold(userContext(), { content: `${SHARED_MATRIX_SECRET}#${index}`, sensitivity: 'S0', sourceEventId: rawEventId }));
+      }
+      assert.equal(state.assertions.length, n, 'precondition: all sharers exist');
+      assert.equal(JSON.stringify(state).includes(SHARED_MATRIX_SECRET), true, 'precondition: the plaintext is present before erasure');
+
+      // 逐个处理到终态（每次都取当前 revision —— 处理会推进它）。
+      for (const item of held) {
+        const current = state.assertions.find(assertion => assertion.id === item.memory.memoryId);
+        await run(memory, item.memory.memoryId, current.resourceRevision);
+      }
+
+      // 核心断言：全部终态后，导出不得含原文。
+      assert.equal(JSON.stringify(state).includes(SHARED_MATRIX_SECRET), false, `${action} n=${n}: plaintext survived the shared-source purge`);
+      assert.equal(state.rawEvents.length, 0, `${action} n=${n}: the orphaned source event must be gone`);
+      assert.equal(state.rawEvents.some(event => event.content && event.content.includes(SHARED_MATRIX_SECRET)), false, `${action} n=${n}: no raw event may retain the text`);
+      assert.equal(state.assertionVersions.some(version => version.content && version.content.includes(SHARED_MATRIX_SECRET)), false, `${action} n=${n}: no version may retain the text`);
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 19. 反向保证：只要有**一条**还是 active，事件与其正文就必须保留
+// ---------------------------------------------------------------------------
+// 与 18 号互为反面 —— 两者不能互相踩：
+//   全部终态 ⇒ 清；还剩一个可见 ⇒ 留。
+// 判据用的是模块自己的可见性定义（status === 'active'），不是硬编码状态名。
+test('a shared source event survives while any sharer keeps visible content', async () => {
+  for (const [action, run] of TERMINAL_ACTIONS) {
+    const { state, memory } = createHarness();
+    await memory.recordEvent(userContext(), { eventId: `evt-keep-${action}`, content: '仍在被引用的共享对话', eventRole: 'user' });
+    const rawEventId = state.rawEvents[0].id;
+    const victim = await memory.hold(userContext(), { content: '被处理的记忆', sensitivity: 'S0', sourceEventId: rawEventId });
+    const survivor = await memory.hold(userContext(), { content: '保留下来的记忆', sensitivity: 'S0', sourceEventId: rawEventId });
+
+    await run(memory, victim.memory.memoryId, victim.memory.resourceRevision);
+
+    // 还有一个 active 的引用者 ⇒ 事件必须留下、正文必须还在、幸存者必须可读。
+    assert.equal(state.rawEvents.length, 1, `${action}: the event must survive while a visible sharer remains`);
+    assert.equal(state.rawEvents[0].content, '仍在被引用的共享对话', `${action}: the event must keep its content`);
+    assert.equal(state.assertionVersionSources.some(source => source.sourceId === rawEventId), true, `${action}: the survivor must keep its source link`);
+    const listed = memory.list(userContext(), { purpose: 'governance' }).find(item => item.memoryId === survivor.memory.memoryId);
+    assert.ok(listed, `${action}: the survivor must still be listed`);
+    assert.equal(listed.content, '保留下来的记忆', `${action}: the survivor must remain readable`);
+  }
+});

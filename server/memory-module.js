@@ -1707,7 +1707,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const revokeEpoch = state.redactionEpochs[userKey(context)] || 0;
     redactAssertionContent([assertion.id]);
     state.indexDocuments = (state.indexDocuments || []).filter(document => document.sourceId !== assertion.id);
-    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { excludingAssertionIds: [assertion.id] })) {
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds)) {
       state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'revoke', redactionEpoch: revokeEpoch, createdAt: nowIso() });
     }
     audit(state, context, 'memory_revoked', { memoryId: assertion.id });
@@ -1733,7 +1733,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const versionIds = state.assertionVersions.filter(item => item.assertionId === assertion.id).map(item => item.id);
     cleanDerivedForDeletion({ assertionIds: [assertion.id], versionIds, preserveRedactedOutbox: true });
     invalidateMutationRecords({ resourceType: 'memory', resourceIds: [assertion.id] });
-    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { excludingAssertionIds: [assertion.id] })) {
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds)) {
       state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
     }
     state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'memory', targetId: assertion.id, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
@@ -1840,7 +1840,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     state.indexDocuments = (state.indexDocuments || []).filter(item => !(item.scopeType === 'relationship' && item.relationshipAgentId === relationshipAgentId));
     cleanDerivedForDeletion({ assertionIds, versionIds, preserveRedactedOutbox: true });
     const epoch = bumpEpoch(context);
-    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { excludingAssertionIds: assertionIds })) {
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds)) {
       state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
     }
     const operation = { id: randomUUID(), tenantId: context.tenantId, subjectUserId: context.subjectUserId, targetType: 'relationship', targetId: relationshipAgentId, requestedScope: { relationshipAgentId }, action: 'forget', status: 'completed', requestedBy: context.actorId, requestedAt: nowIso(), canonicalHiddenAt: nowIso(), completedAt: nowIso(), redactionEpoch: epoch, resourceRevision: 1, lastErrorCode: null };
@@ -1957,18 +1957,35 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
 
   // 清除「因本次操作而失去全部引用者」的来源事件（裁决 A：forget / revoke / remove 共用）。
   //
-  // 判据（防误伤）：一条 rawEvent 可能被多条记忆共用（一次对话产出多条记忆），
-  // 只有在它不再被任何**存活** assertion 引用时才清除。
+  // 判据：一条 rawEvent 只有在**不再被任何"正文仍可见"的 assertion 引用**时才清除。
   //
-  // excludingAssertionIds 必须显式排除「本次正在抹掉的 assertion」：forget/revoke
-  // 只改状态、**保留** assertion 行与 source 行，所以不排除的话「仍被引用」恒为真，
-  // 清理永远不会发生。remove 走 physicallyRemoveAssertions 已删行，传不传都一样。
-  const purgeOrphanedSourceEvents = (candidateRawEventIds, { excludingAssertionIds = [] } = {}) => {
-    const excluding = new Set(excludingAssertionIds);
+  // 为什么判据是「正文是否仍可见」而不是「排除本次那条」（第二轮审计的教训）：
+  // forget/revoke **保留** assertion 行与 source 行（只改 status），所以若只排除
+  // "本次正在处理的那一条"，当**多条**记忆共用同一事件、且全部被 forget/revoke 时，
+  // 每一条都只排除自己、却仍被同批的其它条"引用着" ⇒ 判据恒为真 ⇒ 永不清理 ⇒
+  // 导出仍吐原文。remove 之所以看起来对，只是因为它物理删行、天然不残留引用。
+  // 面板用户能按到的正是 forget/revoke，所以漏的恰是主路径。
+  //
+  // 复用模块**自己**对可见性的定义（serializeAssertion 的 contentVisible 与
+  // canSee 的 !['active'].includes(...) 同一语义）：status === 'active' 才算可见。
+  // 绝不硬编码 ['forgotten','revoked'] —— MEMORY_STATUSES 有 5 个取值
+  // （active/expired/forgotten/revoked/rejected），硬编码会漏掉 expired/rejected，
+  // 将来新增状态还会再漏一次。
+  const isContentVisible = assertion => assertion.status === 'active';
+
+  const purgeOrphanedSourceEvents = candidateRawEventIds => {
     if (!candidateRawEventIds.length) return [];
+    // 只统计"正文仍可见"的 assertion 所持有的 raw_event 引用。
     const stillReferenced = new Set(state.assertionVersionSources
       .filter(source => source.sourceType === 'raw_event')
-      .filter(source => !state.assertionVersions.some(version => version.id === source.versionId && excluding.has(version.assertionId)))
+      .filter(source => {
+        const owningAssertion = state.assertionVersions
+          .filter(version => version.id === source.versionId)
+          .map(version => state.assertions.find(assertion => assertion.id === version.assertionId))
+          .find(Boolean);
+        // 找不到宿主（行已被物理删除）⇒ 不算引用。
+        return Boolean(owningAssertion) && isContentVisible(owningAssertion);
+      })
       .map(source => source.sourceId));
     const orphaned = candidateRawEventIds.filter(id => !stillReferenced.has(id));
     if (!orphaned.length) return [];
