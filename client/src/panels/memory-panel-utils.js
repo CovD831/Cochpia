@@ -103,6 +103,42 @@ export function memoryTypeLabel(item) {
   return ownString(TYPE_LABELS, type) || type;
 }
 
+// 记忆正文的显示文本。
+//
+// **为什么必须有这一层**：遗忘（forget）之后服务端会**抹掉正文** —— 这是 T1 修的
+// P0，删除权要求原文不可取回。于是治理列表返回的该条 `summary` 是**空串**。
+// 面板若无条件渲染 `{item.summary}`，就会画出一张「只有状态胶囊、没有内容」的
+// 空白卡。用户视角是：删了一条记忆，列表里反而多出一张说不清是什么的空卡。
+//
+// 关键在于**区分两种「空」**，它们的原因完全不同，不能用同一句话掩盖：
+//
+//   1. 终态（forgotten / revoked）—— 正文是被**有意抹掉**的。此时应明确告知
+//      「内容已清除」。这不是错误，而是删除权生效的正常结果。
+//   2. 非终态却为空 —— 这是**异常**（数据缺失/上游 bug）。此时**不能**说
+//      「内容已清除」，那会把一个数据问题伪装成一个正常状态，让 bug 再也
+//      不会被发现。应如实说「内容缺失」。
+//
+// 两种文案都**不编造**任何像原文的内容 —— 本项目刚花两轮清理「看起来像真的」
+// 的假信息（假日历、假 SSE、假关系文案）。占位语只说事实：内容还在不在。
+export function memorySummaryText(item) {
+  const raw = item && typeof item === 'object' ? item.summary : null;
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text) return text;
+  const status = normalizeStatus(item?.status);
+  if (status === 'forgotten') return '内容已清除';
+  if (status === 'revoked') return '内容已撤销，不再使用';
+  // 非终态却拿不到正文：如实说缺失，不要伪装成「已清除」。
+  return '内容缺失';
+}
+
+// 正文是否是「占位」而非真实内容。供组件决定是否加视觉提示（弱化显示）。
+export function isSummaryPlaceholder(item) {
+  const raw = item && typeof item === 'object' ? item.summary : null;
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text) return false;
+  return true;
+}
+
 // 认同度 → 0..100 整数百分比；脏值返回 null（表示「不显示」而不是「显示 NaN%」）。
 export function confidencePercent(item) {
   const raw = item && typeof item === 'object' ? item.confidence : null;

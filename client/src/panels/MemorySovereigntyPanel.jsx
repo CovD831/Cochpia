@@ -43,7 +43,9 @@ import {
   isPinned,
   validateSummaryDraft,
   formatMemoryTime,
-  panelPhase
+  panelPhase,
+  memorySummaryText,
+  isSummaryPlaceholder
 } from './memory-panel-utils.js';
 
 // 需要二次确认的动作（终态、不可逆）。
@@ -89,7 +91,12 @@ function MemoryRow({ item, index, busy, confirming, draft, editing, onStartEdit,
           </div>
         </form>
       ) : (
-        <p className="memory-summary">{item.summary}</p>
+        // 绝不能无条件渲染 {item.summary}：forget 之后服务端会抹掉正文（T1 的
+        // P0），summary 为空串 ⇒ 会画出一张只有状态胶囊的空白卡。
+        // memorySummaryText 区分「终态被有意清除」与「异常缺失」，两种都说实话。
+        <p className={`memory-summary${isSummaryPlaceholder(item) ? ' memory-summary-placeholder' : ''}`}>
+          {memorySummaryText(item)}
+        </p>
       )}
 
       <small className="memory-footnote">
@@ -318,6 +325,9 @@ if (typeof document !== 'undefined' && !document.getElementById('memory-sovereig
 .memory-status-forgotten { color:var(--state-danger); border-color:color-mix(in srgb, var(--state-danger) 27%, transparent); }
 .memory-scope { font-size:9px; color:var(--text-muted); }
 .memory-summary { margin-top:7px; }
+/* 占位文案（正文已被清除 / 缺失）：弱化 + 斜体，明确区分于真实记忆内容，
+   避免用户把「内容已清除」误读成一条真的还记得的记忆。只用既有变量。 */
+.memory-summary-placeholder { color:var(--text-muted); font-style:italic; }
 .memory-footnote { display:block; }
 .memory-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:9px; }
 .memory-actions .text-button { cursor:pointer; }

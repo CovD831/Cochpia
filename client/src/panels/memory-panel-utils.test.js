@@ -26,7 +26,9 @@ import {
   validateSummaryDraft,
   formatMemoryTime,
   panelPhase,
-  UNKNOWN_SCOPE
+  UNKNOWN_SCOPE,
+  memorySummaryText,
+  isSummaryPlaceholder
 } from './memory-panel-utils.js';
 
 const memory = (over = {}) => ({ id: 'm1', summary: '一起看过落日', status: 'active', confidence: 0.8, createdAt: '2026-01-02T03:04:05.000Z', source: '对话', scopeType: 'relationship', memoryType: 'fact', ...over });
@@ -461,4 +463,76 @@ test('【回归】memoryScopeLabel 对缺失作用域返回「作用范围未知
   assert.equal(memoryScopeLabel('user'), '只属于我');
   assert.equal(memoryScopeLabel('relationship'), '这段关系');
   assert.equal(memoryScopeLabel(UNKNOWN_SCOPE), '作用范围未知');
+});
+
+// ---------------------------------------------------------------------------
+// P4c 回归防线（e2e T7 实测发现，captain 独立复现确认）
+//
+// 缺陷：遗忘后服务端抹掉正文（T1 的 P0，删除权要求原文不可取回）⇒ summary 为空串，
+// 而组件无条件渲染 `{item.summary}` ⇒ 画出一张「只有状态胶囊、没有内容」的空白卡。
+// 用户视角：删了一条记忆，列表里反而多出一张说不清是什么的空卡。
+//
+// 断言要求（captain 明确）：**不要只断言「有文案」，要断言「不是空白」** ——
+// 因为「有文案」可能被一个空元素满足，而 P4c 恰恰就是「元素在、内容空」。
+// ---------------------------------------------------------------------------
+
+test('【回归 P4c】终态条目的内容区不得为空白', () => {
+  for (const status of ['forgotten', 'revoked']) {
+    const item = memory({ id: `p4c-${status}`, status, summary: '' });
+    const text = memorySummaryText(item);
+    // 三重断言，任何一条单独放水都测不出空白卡
+    assert.equal(typeof text, 'string', `${status} 必须返回字符串`);
+    assert.notEqual(text.trim(), '', `${status} 的内容区不得为空白（这正是 P4c）`);
+    assert.ok(text.trim().length > 0, `${status} 渲染出的可见文本长度必须 > 0`);
+  }
+});
+
+test('【回归 P4c】终态占位文案必须诚实说明「已被清除」，且不编造像原文的内容', () => {
+  assert.equal(memorySummaryText(memory({ status: 'forgotten', summary: '' })), '内容已清除');
+  assert.equal(memorySummaryText(memory({ status: 'revoked', summary: '' })), '内容已撤销，不再使用');
+  // 占位语不得暗示「还记得什么」—— 不能出现像内容的描述性措辞
+  for (const status of ['forgotten', 'revoked']) {
+    const text = memorySummaryText(memory({ status, summary: '' }));
+    assert.ok(/清除|撤销/.test(text), `${status} 占位语应说明内容的下场`);
+    assert.ok(!/记得|喜欢|曾经|曾经说/.test(text), `${status} 占位语不得编造像原文的内容`);
+  }
+});
+
+test('【回归 P4c】必须区分「终态被有意清除」与「异常空值」，不得用同一句掩盖', () => {
+  // 若把非终态的空正文也说成「内容已清除」，就把一个数据问题伪装成了正常状态，
+  // bug 从此再也不会被发现 —— 这正是本任务要求「区分两类空」的原因。
+  const terminal = memorySummaryText(memory({ status: 'forgotten', summary: '' }));
+  const anomaly = memorySummaryText(memory({ status: 'active', summary: '' }));
+  assert.notEqual(anomaly, terminal, '异常缺失不得与终态清除共用同一句文案');
+  assert.equal(anomaly, '内容缺失');
+});
+
+test('【回归 P4c】有真实正文时必须原样显示，不被占位逻辑覆盖', () => {
+  const real = 'T6探针：小林喜欢在雨天读书';
+  assert.equal(memorySummaryText(memory({ status: 'active', summary: real })), real);
+  // 终态但仍有正文（比如服务端还没抹掉）时也应显示正文，而不是强行占位
+  assert.equal(memorySummaryText(memory({ status: 'forgotten', summary: real })), real);
+});
+
+test('【回归 P4c】summary 脏值（null/非字符串/纯空白）一律不得渲染成空白', () => {
+  for (const bad of [null, undefined, 42, {}, [], true, '   ', '\n\t']) {
+    const text = memorySummaryText(memory({ status: 'forgotten', summary: bad }));
+    assert.notEqual(text.trim(), '', `summary=${String(bad)} 不得产出空白内容区`);
+    assert.ok(text.trim().length > 0);
+  }
+  // 非对象同样安全
+  for (const bad of [null, undefined, 'x', 7]) {
+    assert.notEqual(memorySummaryText(bad).trim(), '');
+  }
+});
+
+test('【回归 P4c】isSummaryPlaceholder 与实际占位判定一致', () => {
+  assert.equal(isSummaryPlaceholder(memory({ summary: '' })), true);
+  assert.equal(isSummaryPlaceholder(memory({ summary: '   ' })), true);
+  assert.equal(isSummaryPlaceholder(memory({ summary: null })), true);
+  assert.equal(isSummaryPlaceholder(memory({ summary: '真实内容' })), false);
+  // 与 memorySummaryText 的一致性：占位 ⇔ 文本不是原文
+  const empty = memory({ status: 'forgotten', summary: '' });
+  assert.equal(isSummaryPlaceholder(empty), true);
+  assert.notEqual(memorySummaryText(empty), '');
 });
