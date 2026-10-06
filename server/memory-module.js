@@ -1698,11 +1698,18 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const assertion = findAssertion(state, normalizeId(id, 'memory_id'), context);
     if (!assertion) throw new MemoryModuleError('MEMORY_NOT_FOUND', 'Memory not found', { status: 404 });
     assertRevision(assertion, input);
+    // 裁决 A：revoke 与 remove 在「正文不该被取回」上没有区别，区别只在保留状态痕迹。
+    const candidateSourceEventIds = sourceEventIdsForAssertion(assertion.id);
     assertion.status = 'revoked';
     assertion.resourceRevision += 1;
     assertion.updatedAt = nowIso();
     bumpEpoch(context);
+    const revokeEpoch = state.redactionEpochs[userKey(context)] || 0;
+    redactAssertionContent([assertion.id]);
     state.indexDocuments = (state.indexDocuments || []).filter(document => document.sourceId !== assertion.id);
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { excludingAssertionIds: [assertion.id] })) {
+      state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'revoke', redactionEpoch: revokeEpoch, createdAt: nowIso() });
+    }
     audit(state, context, 'memory_revoked', { memoryId: assertion.id });
     bumpSequence();
     await persist();
@@ -1715,14 +1722,20 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const assertion = findAssertion(state, normalizeId(id, 'memory_id'), context);
     if (!assertion) throw new MemoryModuleError('MEMORY_NOT_FOUND', 'Memory not found', { status: 404 });
     assertRevision(assertion, input);
+    // 裁决 A：forget 保留状态痕迹，但**不保留原文** —— 含来源事件。
+    const candidateSourceEventIds = sourceEventIdsForAssertion(assertion.id);
     assertion.status = 'forgotten';
     assertion.resourceRevision += 1;
     assertion.updatedAt = nowIso();
     const epoch = bumpEpoch(context);
+    redactAssertionContent([assertion.id]);
     state.indexDocuments = (state.indexDocuments || []).filter(document => document.sourceId !== assertion.id);
     const versionIds = state.assertionVersions.filter(item => item.assertionId === assertion.id).map(item => item.id);
     cleanDerivedForDeletion({ assertionIds: [assertion.id], versionIds, preserveRedactedOutbox: true });
     invalidateMutationRecords({ resourceType: 'memory', resourceIds: [assertion.id] });
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { excludingAssertionIds: [assertion.id] })) {
+      state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
+    }
     state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'memory', targetId: assertion.id, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
     audit(state, context, 'memory_forgotten', { memoryId: assertion.id, redactionEpoch: epoch });
     bumpSequence();
@@ -1750,6 +1763,9 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     state.indexDocuments = (state.indexDocuments || []).filter(item => !assertionIds.includes(item.sourceId));
     state.episodes = (state.episodes || []).map(episode => state.episodeMembers?.some(member => member.rawEventId === sourceEventId && member.episodeId === episode.id) ? { ...episode, status: 'invalidated', updatedAt: nowIso() } : episode);
     state.outboxEvents = state.outboxEvents.map(item => item.aggregateId === sourceEventId || assertionIds.includes(item.aggregateId) ? { ...item, status: 'completed', result: 'redacted', leaseOwner: null, leaseUntil: null } : item);
+    // 正文三处一起清：versions + 该事件本体（否则 export 仍可读回原文）。
+    redactVersionContent(sourceVersionIds);
+    redactRawEventContent([sourceEventId]);
     cleanDerivedForDeletion({ rawEventIds: [sourceEventId], assertionIds, versionIds: sourceVersionIds, preserveRedactedOutbox: true });
     const epoch = bumpEpoch(context);
     const operation = { id: randomUUID(), tenantId: context.tenantId, subjectUserId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, requestedScope: { sourceEventId }, action: 'forget', status: 'completed', requestedBy: context.actorId, requestedAt: nowIso(), canonicalHiddenAt: nowIso(), completedAt: nowIso(), redactionEpoch: epoch, resourceRevision: 1, lastErrorCode: null };
@@ -1772,7 +1788,13 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     session.resourceRevision += 1;
     const assertionIds = state.assertions.filter(item => item.sessionId === session.id).map(item => item.id);
     const rawEventIds = state.rawEvents.filter(item => item.sessionId === session.id).map(item => item.id);
-    const versionIds = state.assertionVersions.filter(item => assertionIds.includes(item.assertionId)).map(item => item.id);
+    // 版本追溯两条路：assertion.sessionId（作用域直接挂会话）＋ 经该会话原始事件
+    // 反向关联（记忆来自会话对话、作用域却记在 user 上）。只走第一条会漏正文。
+    const rawEventIdSet = new Set(rawEventIds);
+    const versionIds = [...new Set([
+      ...state.assertionVersions.filter(item => assertionIds.includes(item.assertionId)).map(item => item.id),
+      ...state.assertionVersionSources.filter(source => source.sourceType === 'raw_event' && rawEventIdSet.has(source.sourceId)).map(source => source.versionId)
+    ])];
     invalidateMutationRecords({ resourceType: 'session', resourceIds: [session.id] });
     invalidateMutationRecords({ resourceType: 'memory', resourceIds: assertionIds });
     for (const assertion of state.assertions.filter(item => assertionIds.includes(item.id))) {
@@ -1781,6 +1803,8 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       assertion.resourceRevision += 1;
     }
     state.currentStates = state.currentStates.map(item => item.sessionId === session.id ? { ...item, status: 'forgotten', updatedAt: nowIso(), resourceRevision: item.resourceRevision + 1 } : item);
+    redactVersionContent(versionIds);
+    redactRawEventContent(rawEventIds);
     state.profileSnapshotItems = state.profileSnapshotItems.filter(item => item.snapshotId !== session.profileSnapshotId);
     state.episodes = (state.episodes || []).map(episode => episode.sessionId === session.id ? { ...episode, status: 'invalidated', updatedAt: nowIso() } : episode);
     cleanDerivedForDeletion({ rawEventIds, assertionIds, versionIds, preserveRedactedOutbox: true });
@@ -1799,6 +1823,9 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     assertUserGovernanceActor(context);
     const relationshipAgentId = normalizeId(agentId, 'relationship_agent_id');
     const assertionIds = state.assertions.filter(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId && item.scopeType === 'relationship' && item.relationshipAgentId === relationshipAgentId).map(item => item.id);
+    // 普查发现：本路径只抹 version 正文，来源事件（rawEvents）从未处理
+    // ⇒ 关系记忆的原始对话仍可由 /api/export 读回。先取候选（保留行、故须排除自己）。
+    const candidateSourceEventIds = [...new Set(assertionIds.flatMap(sourceEventIdsForAssertion))];
     invalidateMutationRecords({ resourceType: 'relationship', resourceIds: [relationshipAgentId] });
     invalidateMutationRecords({ resourceType: 'memory', resourceIds: assertionIds });
     for (const assertion of state.assertions.filter(item => assertionIds.includes(item.id))) {
@@ -1807,11 +1834,15 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       assertion.resourceRevision += 1;
     }
     const versionIds = state.assertionVersions.filter(item => assertionIds.includes(item.assertionId)).map(item => item.id);
+    redactVersionContent(versionIds);
     state.profileSnapshotItems = state.profileSnapshotItems.filter(item => !assertionIds.includes(item.assertionId));
     state.profileProjections = (state.profileProjections || []).map(item => item.scopeType === 'relationship' && item.relationshipAgentId === relationshipAgentId ? { ...item, status: 'invalidated' } : item);
     state.indexDocuments = (state.indexDocuments || []).filter(item => !(item.scopeType === 'relationship' && item.relationshipAgentId === relationshipAgentId));
     cleanDerivedForDeletion({ assertionIds, versionIds, preserveRedactedOutbox: true });
     const epoch = bumpEpoch(context);
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { excludingAssertionIds: assertionIds })) {
+      state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
+    }
     const operation = { id: randomUUID(), tenantId: context.tenantId, subjectUserId: context.subjectUserId, targetType: 'relationship', targetId: relationshipAgentId, requestedScope: { relationshipAgentId }, action: 'forget', status: 'completed', requestedBy: context.actorId, requestedAt: nowIso(), canonicalHiddenAt: nowIso(), completedAt: nowIso(), redactionEpoch: epoch, resourceRevision: 1, lastErrorCode: null };
     state.deletionOperations.push(operation);
     state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'relationship', targetId: relationshipAgentId, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
@@ -1839,6 +1870,11 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     state.profileProjections = (state.profileProjections || []).map(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId ? { ...item, status: 'invalidated' } : item);
     state.indexDocuments = (state.indexDocuments || []).filter(item => !(item.tenantId === context.tenantId && item.userId === context.subjectUserId));
     state.episodes = (state.episodes || []).map(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId ? { ...item, status: 'invalidated' } : item);
+    // captain 复验发现的缺口：accountRawEventIds 早就算好、也传给了
+    // cleanDerivedForDeletion，但**从未抹正文**（后者只清派生结构）。
+    // 于是「注销账号」后原文仍能从 /api/export 读回 —— PIPL 删除权最直接的落点。
+    redactVersionContent(accountVersionIds);
+    redactRawEventContent(accountRawEventIds);
     cleanDerivedForDeletion({ rawEventIds: accountRawEventIds, assertionIds: accountAssertionIds, versionIds: accountVersionIds, preserveRedactedOutbox: true });
     const epoch = bumpEpoch(context);
     const operation = { id: randomUUID(), tenantId: context.tenantId, subjectUserId: context.subjectUserId, targetType: 'account', targetId: context.subjectUserId, requestedScope: { userId: context.subjectUserId }, action: 'forget', status: 'completed', requestedBy: context.actorId, requestedAt: nowIso(), canonicalHiddenAt: nowIso(), completedAt: nowIso(), redactionEpoch: epoch, resourceRevision: 1, lastErrorCode: null };
@@ -1854,6 +1890,92 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     await persist();
     return { deletionOperationId: operation.id, status: 'forgotten', redactionEpoch: epoch, consistencyToken: tokenFor(state, context) };
   };
+
+  // ==== P0 隐私修复（2026-10-07，T8 审计 + captain 复验）=================================
+  //
+  // 问题：治理动作只改「状态」和「派生结构」，**不抹正文字面量**。而
+  // server/index.js 的 /api/export 是整包 JSON dump `state.memoryModule`，
+  // 完全绕过 serializeAssertion() 的白名单 —— 于是「已遗忘/已撤销/已删除」的
+  // 原文仍能从导出文件里读回来，直接违背 PIPL 删除权。
+  //
+  // 为什么在**存储层**抹而不是在出口过滤：模块自己就有
+  // `const contentVisible = assertion.status === 'active';`（serializeAssertion），
+  // 即「非 active 的正文不可见」本就是模块的设计意图；泄漏是存储层与读视图
+  // 不一致。在出口兜只能挡住当前这一个出口，将来新增任何 dump 都会再漏一次。
+  //
+  // 三条互相正交的覆盖：assertion 本体（状态）、assertionVersions（正文所在）、
+  // rawEvents（来源对话原文）。派生结构由 cleanDerivedForDeletion 负责。
+
+  // 抹掉一批 assertionVersions 的正文（保留 id / 时间戳 / 策略位等元数据，
+  // 使「这条记忆存在过、何时被抹掉」仍可审计）。
+  const redactVersionContent = versionIds => {
+    const ids = new Set(versionIds);
+    if (!ids.size) return 0;
+    let redacted = 0;
+    for (const version of state.assertionVersions) {
+      if (!ids.has(version.id)) continue;
+      if (typeof version.content === 'string' && version.content.length) redacted += 1;
+      version.content = null;
+      // structuredData 是正文的另一半，同样可能含用户原文。
+      version.structuredData = {};
+      version.redactedAt = nowIso();
+    }
+    // 检索索引里存着正文派生的 text/embedding，一并移除。
+    state.indexDocuments = (state.indexDocuments || []).filter(document => !ids.has(document.sourceVersion));
+    return redacted;
+  };
+
+  // 按 assertion 批量抹正文。
+  const redactAssertionContent = assertionIds => {
+    const ids = new Set(assertionIds);
+    if (!ids.size) return 0;
+    return redactVersionContent(state.assertionVersions.filter(version => ids.has(version.assertionId)).map(version => version.id));
+  };
+
+  // 抹掉一批 rawEvents 的正文（保留 id / eventId / 时间戳 / retention 元数据）。
+  const redactRawEventContent = rawEventIds => {
+    const ids = new Set(rawEventIds);
+    if (!ids.size) return 0;
+    let redacted = 0;
+    for (const event of state.rawEvents) {
+      if (!ids.has(event.id)) continue;
+      if (typeof event.content === 'string' && event.content.length) redacted += 1;
+      event.content = null;
+      event.metadata = {};
+      event.redactedAt = nowIso();
+    }
+    return redacted;
+  };
+
+  // 取一条 assertion 引用过的原始事件 id（必须在裁剪 source 表之前调用）。
+  // 注意 sourceId 存的就是 rawEvents[].id（内部 UUID），不是 eventId ——
+  // 依据 createCandidate(): `rawEvents.find(event => event.id === sourceEventId)`。
+  const sourceEventIdsForAssertion = assertionId => [...new Set(state.assertionVersionSources
+    .filter(source => source.sourceType === 'raw_event'
+      && state.assertionVersions.some(version => version.id === source.versionId && version.assertionId === assertionId))
+    .map(source => source.sourceId))];
+
+  // 清除「因本次操作而失去全部引用者」的来源事件（裁决 A：forget / revoke / remove 共用）。
+  //
+  // 判据（防误伤）：一条 rawEvent 可能被多条记忆共用（一次对话产出多条记忆），
+  // 只有在它不再被任何**存活** assertion 引用时才清除。
+  //
+  // excludingAssertionIds 必须显式排除「本次正在抹掉的 assertion」：forget/revoke
+  // 只改状态、**保留** assertion 行与 source 行，所以不排除的话「仍被引用」恒为真，
+  // 清理永远不会发生。remove 走 physicallyRemoveAssertions 已删行，传不传都一样。
+  const purgeOrphanedSourceEvents = (candidateRawEventIds, { excludingAssertionIds = [] } = {}) => {
+    const excluding = new Set(excludingAssertionIds);
+    if (!candidateRawEventIds.length) return [];
+    const stillReferenced = new Set(state.assertionVersionSources
+      .filter(source => source.sourceType === 'raw_event')
+      .filter(source => !state.assertionVersions.some(version => version.id === source.versionId && excluding.has(version.assertionId)))
+      .map(source => source.sourceId));
+    const orphaned = candidateRawEventIds.filter(id => !stillReferenced.has(id));
+    if (!orphaned.length) return [];
+    physicallyRemoveSourceEvents(orphaned);
+    return orphaned;
+  };
+  // =====================================================================================
 
   const cleanDerivedForDeletion = ({ rawEventIds = [], assertionIds = [], versionIds = [], preserveRedactedOutbox = false } = {}) => {
     state.profileSnapshots ||= [];
@@ -2139,7 +2261,12 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     assertUserGovernanceActor(context);
     const relationshipAgentId = normalizeId(agentId, 'relationship_agent_id');
     const assertionIds = state.assertions.filter(item => item.tenantId === context.tenantId && item.userId === context.subjectUserId && item.scopeType === 'relationship' && item.relationshipAgentId === relationshipAgentId).map(item => item.id);
+    // 普查发现的第 4 条：deleteRelationship 只删 assertion，从不清来源事件
+    // ⇒ 被删关系记忆的原文仍留在 rawEvents 里、可由 /api/export 读回。
+    // 先取候选（裁剪前），删完再清"已无人引用"的那些。
+    const candidateSourceEventIds = [...new Set(assertionIds.flatMap(sourceEventIdsForAssertion))];
     const removed = physicallyRemoveAssertions(assertionIds);
+    purgeOrphanedSourceEvents(candidateSourceEventIds);
     const removedProjectionIds = new Set((state.profileProjections || []).filter(projection => projection.scopeType === 'relationship' && projection.relationshipAgentId === relationshipAgentId).map(projection => projection.id));
     state.profileProjections = (state.profileProjections || []).filter(projection => !removedProjectionIds.has(projection.id));
     state.profileProjectionItems = (state.profileProjectionItems || []).filter(item => state.profileProjections.some(projection => projection.id === item.projectionId));
@@ -2172,14 +2299,11 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     // P0 修复：先记下这条记忆引用过的来源事件（裁剪 source 表之前），
     // 删完 assertion 之后再判断哪些来源已无人引用、可以清除。
     // 顺序不能颠倒 —— 裁剪后就反查不出"这条记忆的来源"了。
-    const sourceEventIds = [...new Set(state.assertionVersionSources
-      .filter(source => source.sourceType === 'raw_event' && state.assertionVersions.some(version => version.id === source.versionId && version.assertionId === assertion.id))
-      .map(source => source.sourceId))];
+    const sourceEventIds = sourceEventIdsForAssertion(assertion.id);
     physicallyRemoveAssertions([assertion.id]);
     // 清掉不再被任何存活 assertion 引用的来源事件（复用既有的
     // physicallyRemoveSourceEvents —— 它会一并处理 orphans、派生数据与幂等记录）。
-    const orphanedSourceEventIds = collectOrphanedSourceEventIds(sourceEventIds);
-    if (orphanedSourceEventIds.length) physicallyRemoveSourceEvents(orphanedSourceEventIds);
+    const orphanedSourceEventIds = purgeOrphanedSourceEvents(sourceEventIds);
     operation.status = 'completed';
     operation.canonicalHiddenAt = nowIso();
     operation.completedAt = nowIso();

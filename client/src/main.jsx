@@ -746,7 +746,7 @@ function App() {
   const showFirstRunGuide = useMemo(() => shouldShowGuide({
     sessionCount: sessionsLoaded ? sessions.length : null,
     dismissed: guideDismissed || Boolean(workspacePreferences?.onboarding?.guideDismissed)
-  }), [sessionsLoaded, sessions.length, guideDismissed, workspacePreferences?.onboarding?.guideDismissed]);
+  }) && !memoryOpen, [sessionsLoaded, sessions.length, guideDismissed, workspacePreferences?.onboarding?.guideDismissed, memoryOpen]);
 
   const dismissGuide = () => {
     setGuideDismissed(true);

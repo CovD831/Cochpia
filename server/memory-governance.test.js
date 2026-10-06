@@ -691,3 +691,140 @@ test('sourceEventId is the raw event id, not the caller event id', async () => {
   assert.equal(state.rawEvents.length, 1, 'deleting an explicit_request memory must not remove unrelated events');
   assert.equal(state.rawEvents[0].eventId, 'evt-bystander');
 });
+
+// ---------------------------------------------------------------------------
+// 15. 表驱动：**每条**治理路径删除/遗忘后，export 都不得含原文
+// ---------------------------------------------------------------------------
+// 为什么表驱动：T8 审计标注这些路径「未逐个验证」，逐个手写必然漏。
+// 一张表列全部路径 + 统一判据（export 不含原文），任何一条退化都会红。
+//
+// 判据来源：server/index.js:556 的 /api/export 整包 dump state.memoryModule，
+// **完全不走** listItem() 白名单。所以仅仅让 list 干净是不够的 ——
+// 必须断言正文字面量在 state 里已不存在。
+const LEAK_MARKER = '绝密口令：豆豆的猫粮牌子';
+
+// 每个场景：造数（真实链路优先）→ 执行治理动作 → 返回 state
+const GOVERNANCE_ERASURE_PATHS = [
+  ['forget (单条记忆)', async (memory, state) => {
+    const held = await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0' });
+    await memory.forget(userContext(), held.memory.memoryId, { resource_revision: held.memory.resourceRevision });
+  }],
+  ['revoke (单条记忆)', async (memory, state) => {
+    const held = await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0' });
+    await memory.revoke(userContext(), held.memory.memoryId, { resource_revision: held.memory.resourceRevision });
+  }],
+  ['remove (单条记忆)', async (memory, state) => {
+    const held = await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0' });
+    await memory.remove(userContext(), held.memory.memoryId, { resource_revision: held.memory.resourceRevision });
+  }],
+  ['forgetSourceEvent', async (memory, state) => {
+    await memory.recordEvent(userContext(), { eventId: 'evt-t-forget', content: LEAK_MARKER, eventRole: 'user' });
+    const rawEventId = state.rawEvents[0].id;
+    await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0', sourceEventId: rawEventId });
+    await memory.forgetSourceEvent(userContext(), rawEventId, { resource_revision: 1 });
+  }],
+  ['deleteSourceEvent', async (memory, state) => {
+    await memory.recordEvent(userContext(), { eventId: 'evt-t-del', content: LEAK_MARKER, eventRole: 'user' });
+    await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+    await memory.deleteSourceEvent(userContext(), state.rawEvents[0].id, { resource_revision: 1 });
+  }],
+  ['forgetSession', async (memory, state) => {
+    const session = await memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 60000).toISOString() });
+    await memory.recordEvent({ ...userContext(), sessionId: session.id }, { eventId: 'evt-t-sess', sessionId: session.id, content: LEAK_MARKER, eventRole: 'user' });
+    await memory.hold({ ...userContext(), sessionId: session.id }, { content: LEAK_MARKER, sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+    await memory.forgetSession(userContext(), session.id, { resource_revision: 1 });
+  }],
+  ['deleteSession', async (memory, state) => {
+    const session = await memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 60000).toISOString() });
+    await memory.recordEvent({ ...userContext(), sessionId: session.id }, { eventId: 'evt-t-sess2', sessionId: session.id, content: LEAK_MARKER, eventRole: 'user' });
+    await memory.hold({ ...userContext(), sessionId: session.id }, { content: LEAK_MARKER, sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+    await memory.deleteSession(userContext(), session.id, { resource_revision: 1 });
+  }],
+  ['forgetRelationship', async (memory) => {
+    await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0', scopeType: 'relationship', relationshipAgentId: 'agent-rel' });
+    await memory.forgetRelationship(userContext(), 'agent-rel', {});
+  }],
+  ['deleteRelationship', async (memory) => {
+    await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0', scopeType: 'relationship', relationshipAgentId: 'agent-rel' });
+    await memory.deleteRelationship(userContext(), 'agent-rel', {});
+  }],
+  ['forgetAccount', async (memory) => {
+    await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0' });
+    await memory.forgetAccount(userContext(), {});
+  }],
+  ['deleteAccount', async (memory) => {
+    await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0' });
+    await memory.deleteAccount(userContext(), {});
+  }],
+  ['sweepRetention', async (memory, state) => {
+    await memory.recordEvent(userContext(), { eventId: 'evt-t-sweep', content: LEAK_MARKER, eventRole: 'user' });
+    await memory.hold(userContext(), { content: LEAK_MARKER, sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+    state.rawEvents.forEach(event => { event.deleteAfter = new Date(Date.now() - 1000).toISOString(); });
+    await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+  }]
+];
+
+for (const [label, run] of GOVERNANCE_ERASURE_PATHS) {
+  test(`erasure path leaves no plaintext in the export: ${label}`, async () => {
+    const { state, memory } = createHarness();
+    await run(memory, state);
+    // 造数成功的前提：正文确实进过库（否则"不含"是假阴性）。
+    // 用 assertions/rawEvents 的总和判断 —— 有些路径会把两者都清空。
+    const exported = JSON.stringify(state);
+    assert.equal(exported.includes(LEAK_MARKER), false, `${label}: 原文仍可从 export 读回`);
+    // 片段扫描，防止正文被部分保留。
+    assert.equal(exported.includes('豆豆的猫粮'), false, `${label}: 原文片段仍残留`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 16. 裁决 A：forget / revoke 也必须清「因此不再被引用的」来源事件
+// ---------------------------------------------------------------------------
+// 判据（captain 裁决）：任何用户可达出口都不该取回已 forget/revoke/delete 的原文。
+// 动词不同，但这三个动词在「正文不该被取回」上没有区别。
+test('forget and revoke purge their source events, not just the assertion content', async () => {
+  for (const action of ['forget', 'revoke', 'remove']) {
+    const { state, memory } = createHarness();
+    const SECRET = '裁决A验证用的原文';
+    await memory.recordEvent(userContext(), { eventId: `evt-a-${action}`, content: SECRET, eventRole: 'user' });
+    const rawEventId = state.rawEvents[0].id;
+    const held = await memory.hold(userContext(), { content: SECRET, sensitivity: 'S0', sourceEventId: rawEventId });
+    assert.equal(JSON.stringify(state).includes(SECRET), true, `${action}: precondition`);
+
+    await memory[action](userContext(), held.memory.memoryId, { resource_revision: held.memory.resourceRevision });
+
+    // 四个覆盖维度一起断言：assertion / versions / rawEvents / 整体导出。
+    assert.equal(state.rawEvents.some(event => event.content && event.content.includes(SECRET)), false,
+      `${action}: the source raw event must no longer carry the plaintext`);
+    assert.equal(state.assertionVersions.some(version => version.content && version.content.includes(SECRET)), false,
+      `${action}: no assertion version may carry the plaintext`);
+    assert.equal(JSON.stringify(state).includes(SECRET), false,
+      `${action}: nothing in the exported state may carry the plaintext`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 17. 共用保护：忘掉/撤销/删除其一，不得误伤另一条记忆的来源与可读性
+// ---------------------------------------------------------------------------
+test('forget/revoke/remove keep a source event shared with a surviving memory', async () => {
+  for (const action of ['forget', 'revoke', 'remove']) {
+    const { state, memory } = createHarness();
+    await memory.recordEvent(userContext(), { eventId: `evt-shared-${action}`, content: '两个人共用的原始对话', eventRole: 'user' });
+    const rawEventId = state.rawEvents[0].id;
+    const a = await memory.hold(userContext(), { content: '记忆 A', sensitivity: 'S0', sourceEventId: rawEventId });
+    const b = await memory.hold(userContext(), { content: '记忆 B', sensitivity: 'S0', sourceEventId: rawEventId });
+
+    await memory[action](userContext(), a.memory.memoryId, { resource_revision: a.memory.resourceRevision });
+
+    // A 被处理掉了，但 B 的来源、事件行、可读性都必须完好。
+    assert.equal(state.rawEvents.length, 1, `${action}: the shared event must survive while B still references it`);
+    assert.equal(state.assertionVersionSources.some(source => source.sourceId === rawEventId), true, `${action}: B must keep its source link`);
+    assert.equal(state.assertions.some(item => item.id === b.memory.memoryId), true, `${action}: memory B must survive`);
+    // B 的内容仍可经治理读视图取回 —— 误伤会在这里现形。
+    const listed = memory.list(userContext(), { purpose: 'governance' });
+    const survivor = listed.find(item => item.memoryId === b.memory.memoryId);
+    assert.ok(survivor, `${action}: memory B must still be listed`);
+    assert.equal(typeof survivor.content, 'string');
+    assert.equal(state.rawEvents[0].content, '两个人共用的原始对话', `${action}: the shared event must keep its content while referenced`);
+  }
+});
