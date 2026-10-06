@@ -25,6 +25,34 @@ import FeatherIcon from './icons/FeatherIcon';
 import { asArray, describeModelError, providerModelOptions, splitSegments, takeSegment, dateLabel } from './chat/message-utils.js';
 import { lifeTemplateLabel, lifeGeneratorLabel, isProactive, sortLifeEvents, groupLifeByDay, summarizeLife, safeFormatTime } from './life/life-utils.js';
 import { GrowthPanel, HistoryPanel, ProfilePanel } from './panels/DetailPanels.jsx';
+// 阶段 1「让护城河露出来」：记忆主权面板是**纯受控组件**，它自己不发任何 HTTP
+// （见 MemorySovereigntyPanel.jsx 文件头第 1 条）。全部网络动作经下面那几个
+// on* 回调回到本文件 —— 网络层只有一处，面板可测性也最好。
+import MemorySovereigntyPanel from './panels/MemorySovereigntyPanel.jsx';
+import FirstRunGuide from './onboarding/FirstRunGuide.jsx';
+import { emptyStateFor, shouldShowGuide } from './onboarding/empty-states.js';
+
+// 空状态的统一渲染出口。
+//
+// 为什么不让每个调用点自己写文案：本项目的空状态此前是散落的裸字符串
+// （「还没有记忆」「暂无数据」），既没有说清「为什么空」，也没给出下一步。
+// 文案现在唯一来源在 onboarding/empty-states.js，这里只负责把它渲染成
+// 有标题 + 有说明 + 可选动作的统一结构。未知 kind 由 emptyStateFor 兜底
+// （它永不抛异常），所以这里也不做存在性判断。
+function EmptyState({ kind, actionLabel, onAction }) {
+  const state = emptyStateFor(kind);
+  // actionLabel 允许调用方覆盖（例如「开始第一次对话」在会话页是 newSession，
+  // 但在引导里是另一件事）；文案表里的 null 表示「这个空状态没有可点的动作」，
+  // 此时即使调用方传了 onAction 也不渲染按钮 —— 不给假按钮。
+  const label = actionLabel === undefined ? state.actionLabel : actionLabel;
+  return (
+    <div className="empty-state unified-empty">
+      <h2>{state.title}</h2>
+      <p>{state.body}</p>
+      {label && onAction && <button type="button" className="select-model" onClick={onAction}>{label}</button>}
+    </div>
+  );
+}
 
 // Pure message helpers moved to ./chat/message-utils.js (R-020 stage 4 split).
 
@@ -118,9 +146,24 @@ function App() {
   const [authAction, setAuthAction] = useState('sign-in');
   const [authNotice, setAuthNotice] = useState('');
   const [sessions, setSessions] = useState([]);
+  // 会话列表是否**真的加载过**。首次引导的判定依赖它：refresh() 还没回来时
+  // sessions.length 是 0，那不是「一条会话都没有」，是「还不知道」。
+  // 把这两者混为一谈，引导就会在每个老用户打开页面的头几百毫秒里闪一下。
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [sessionId, setSessionId] = useState('welcome');
   const [messages, setMessages] = useState([]);
   const [memory, setMemory] = useState({ count: 0, memories: [] });
+  // 阶段 1「记忆主权」：记忆面板自己的**分页**列表，走 /api/memory/memories。
+  //
+  // 为什么不复用上面的 memory：memory 来自 /api/memory/overview，它是「共享/关系
+  // 视图」，被上游 token 预算裁剪（实测 100 条只回 6 条，见 server/index.js 的
+  // F7 注释），拿它做主权面板会让用户以为「我的记忆只有 6 条」。主权面板承诺的是
+  // 「看得见、翻得完、删得掉」，所以它必须走带 cursor 的分页接口。
+  //
+  // resourceRevision 随每条一起存（T1 的列表接口已带回）：所有写动作都必需这个
+  // 乐观锁版本号，缺失 400 / 过期 409。存在这里就不必在每次写之前先故意失败一次
+  // 去把版本号捞回来。
+  const [memoryPanel, setMemoryPanel] = useState({ items: [], nextCursor: null, loading: false, error: null });
   // R-021 V2①：Agent 内在面（生活事件）的专用列表，走 /api/memory/life。
   // 与 memory（共享/关系视图，被 token 预算裁剪到 8 条）分开存，因为它要能被翻完。
   // nextCursor 一并存：接口有分页上限，若还有下一页必须在界面上如实说明，
@@ -154,6 +197,11 @@ function App() {
   const [editingText, setEditingText] = useState('');
   const [growthOpen, setGrowthOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  // 首次引导：用户手动关掉后置 true 并写入 workspace 偏好（见 dismissGuide）。
+  // 只存「关过没关过」这一个事实，不做任何推断（见 empty-states.js 的
+  // shouldShowGuide 注释：猜错会让引导反复弹在老用户脸上）。
+  const [guideDismissed, setGuideDismissed] = useState(false);
   const [reviewingEvidence, setReviewingEvidence] = useState(null);
   const conversationRef = useRef(null);
   const nearBottomRef = useRef(true);
@@ -435,6 +483,119 @@ function App() {
     event.target.value = '';
   };
 
+  // ---------------------------------------------------------------------------
+  // 记忆主权面板的网络层（阶段 1）
+  // ---------------------------------------------------------------------------
+  // 全部写动作走 T1 的治理路由，且**都必须带 resource_revision**（乐观锁）。
+  // 实测（真实服务）：
+  //   不带     → 400 RESOURCE_REVISION_REQUIRED
+  //   带过期的 → 409 RESOURCE_REVISION_CONFLICT，且错误体给出 current_resource_revision
+  //   带对的   → 200
+  // 版本号来源就是列表接口（listItem 已带 resourceRevision），所以这里直接取
+  // 当前 items 里那条的版本号，不做任何猜测。
+  //
+  // ⚠️ 写完之后**必须重新拉列表**，不能靠本地合并：实测 forget/remove 的返回体是
+  //   {status, redactionEpoch, deletionOperationId, consistencyToken} —— **没有
+  //   memory 对象**（只有 pin/unpin/correct 才回 memory）。本地合并会让「遗忘」在
+  //   界面上看不出任何变化。重新拉列表还有个额外好处：每次写之后 revision 会自增
+  //   （实测 pin 后 1→2），重拉才能拿到新的版本号，否则第二次写必然 409。
+  const memoryItems = memoryPanel.items;
+
+  const loadMemoryPage = async ({ cursor } = {}) => {
+    const query = new URLSearchParams({ limit: '20' });
+    if (cursor) query.set('cursor', cursor);
+    return api(`/api/memory/memories?${query.toString()}`);
+  };
+
+  const openMemoryPanel = async () => {
+    setMemoryOpen(true);
+    setMemoryPanel(current => ({ ...current, loading: true, error: null }));
+    try {
+      const page = await loadMemoryPage({});
+      setMemoryPanel({ items: asArray(page?.items), nextCursor: page?.nextCursor || null, loading: false, error: null });
+    } catch (err) {
+      setMemoryPanel(current => ({ ...current, loading: false, error: err.message || '记忆加载失败' }));
+    }
+  };
+
+  // 「加载更多」：追加而不是替换（这是分页，不是刷新）。
+  const loadMoreMemories = async () => {
+    if (memoryPanel.loading || !memoryPanel.nextCursor) return;
+    setMemoryPanel(current => ({ ...current, loading: true, error: null }));
+    try {
+      const page = await loadMemoryPage({ cursor: memoryPanel.nextCursor });
+      setMemoryPanel(current => {
+        const seen = new Set(current.items.map(item => item.id));
+        const fresh = asArray(page?.items).filter(item => item && !seen.has(item.id));
+        return { items: [...current.items, ...fresh], nextCursor: page?.nextCursor || null, loading: false, error: null };
+      });
+    } catch (err) {
+      setMemoryPanel(current => ({ ...current, loading: false, error: err.message || '加载更多失败' }));
+    }
+  };
+
+  // 取某条的当前 revision。取不到就返回 null —— 由调用方决定怎么报错，
+  // **绝不**编一个数字（猜错会让写动作 409，看起来像后端坏了）。
+  const revisionOf = id => {
+    const item = memoryItems.find(entry => entry && entry.id === id);
+    const revision = item?.resourceRevision;
+    return Number.isFinite(Number(revision)) ? Number(revision) : null;
+  };
+
+  // 统一写动作：版本号缺失 / 冲突都给出**可解释**的提示，并自动用服务端返回的
+  // 最新版本重试一次（409 的语义就是「你手上的版本旧了」，此时服务端已经告诉
+  // 我们正确值了，再让用户手工刷新一遍是没有意义的）。
+  const runMemoryMutation = async (id, path, { method = 'POST', body = {} } = {}) => {
+    const attempt = async revision => api(`/api/memory/memories/${encodeURIComponent(id)}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, resource_revision: revision })
+    });
+
+    let revision = revisionOf(id);
+    if (revision === null) {
+      // 列表里没有这条（或它没带版本号）：重新拉一次列表再试，仍拿不到就如实报错。
+      await reloadMemoryList();
+      revision = revisionOf(id);
+      if (revision === null) throw new Error('这条记忆的版本号不可用，请刷新后重试');
+    }
+
+    try {
+      return await attempt(revision);
+    } catch (err) {
+      const current = err?.currentResourceRevision;
+      if (err?.code === 'RESOURCE_REVISION_CONFLICT' && Number.isFinite(Number(current))) {
+        return attempt(Number(current));
+      }
+      throw err;
+    }
+  };
+
+  // 写动作统一收尾：重新拉列表 + 同步 inspector 的共享记忆计数。
+  const reloadMemoryList = async () => {
+    const page = await loadMemoryPage({ cursor: null }).catch(() => null);
+    if (page) setMemoryPanel(current => ({ ...current, items: asArray(page.items), nextCursor: page.nextCursor || null, error: null }));
+    // 共享记忆那条只读视图也一起刷新，否则删掉一条后面板里没了、inspector 里还在。
+    await refresh().catch(() => {});
+    return page;
+  };
+
+  const mutateMemory = async (id, path, options) => {
+    setMemoryPanel(current => ({ ...current, error: null }));
+    try {
+      await runMemoryMutation(id, path, options);
+      await reloadMemoryList();
+    } catch (err) {
+      setMemoryPanel(current => ({ ...current, error: err.message || '操作失败' }));
+    }
+  };
+
+  const correctMemory = (id, nextSummary) => mutateMemory(id, '/correct', { body: { content: nextSummary } });
+  const pinMemory = (id, pinned) => mutateMemory(id, pinned ? '/pin' : '/unpin');
+  // 撤销 = 不再使用但保留审计；遗忘 = 内容消失。两者都不可逆，二次确认在面板里。
+  const revokeMemory = id => mutateMemory(id, '/revoke');
+  const forgetMemory = id => mutateMemory(id, '/forget');
+
   // AR-212 修复：8 个面板接口逐接口隔离。任一接口失败只影响自己的面板，
   // 不拖垮整批（旧实现用 Promise.all，单点 400 会整页 reject 导致静默空白）。
   // 调用方式 / 顺序 / 参数保持不变，仅把聚合从 all 改为 allSettled。
@@ -456,6 +617,9 @@ function App() {
 
     const safeSessions = asArray(nextSessions);
     setSessions(safeSessions);
+    // 只有会话接口**真的成功**才算「加载过」。它失败时 sessions 会保持空数组，
+    // 若就此算作已加载，引导会弹在一个数据没拉到、实际有会话的用户脸上。
+    if (sessionsR.status === 'fulfilled') setSessionsLoaded(true);
     setMemory({
       count: Number(nextMemory?.count) || 0,
       // 截断标志直接来自服务端（其真源是 contextBundle 的 token 预算裁剪结果）。
@@ -556,7 +720,29 @@ function App() {
     }).catch(err => setError(err.message));
   }, [authReady, user]);
 
-  const modalOpen = settingsOpen || profileOpen || growthOpen || historyOpen || Boolean(pendingApproval);
+  const modalOpen = settingsOpen || profileOpen || growthOpen || historyOpen || memoryOpen || Boolean(pendingApproval);
+
+  // 首次引导（阶段 1）。
+  //
+  // 判定完全交给纯函数 shouldShowGuide：只有「一条会话都没有」且「没关过」才显示。
+  // 不做注册天数/首次登录之类的推断 —— 猜错会把引导反复弹在老用户脸上。
+  // sessionCount 在数据未就绪时给 null（而不是 0）：0 会被读成「一条会话都没有」，
+  // 于是在别人的数据上弹出引导。
+  const showFirstRunGuide = useMemo(() => shouldShowGuide({
+    sessionCount: sessionsLoaded ? sessions.length : null,
+    dismissed: guideDismissed || Boolean(workspacePreferences?.onboarding?.guideDismissed)
+  }), [sessionsLoaded, sessions.length, guideDismissed, workspacePreferences?.onboarding?.guideDismissed]);
+
+  const dismissGuide = () => {
+    setGuideDismissed(true);
+    // 只写偏好，不发请求、不改判定以外的任何状态。
+    setWorkspaceSetting('onboarding', 'guideDismissed', true);
+  };
+
+  const startFirstChat = () => {
+    dismissGuide();
+    setPage('chat');
+  };
 
   useEffect(() => {
     if (!modalOpen) return undefined;
@@ -567,6 +753,7 @@ function App() {
       setProfileOpen(false);
       setGrowthOpen(false);
       setHistoryOpen(false);
+      setMemoryOpen(false);
     };
     document.body.classList.add('modal-open');
     window.addEventListener('keydown', closeOnEscape);
@@ -1042,9 +1229,9 @@ function App() {
     （被 .gitignore 忽略，版权未闭合），浏览器请求必然 404，等于首屏一直黑屏。
    .aube-splash 自带 background:var(--surface-canvas) 与 .aube-splash-veil 渐变，
    去掉 <video> 后视觉是完整的，只是少了视频层。 */}<span className="aube-splash-veil" aria-hidden="true" /><span className="aube-splash-center"><span className="aube-orb"><span className="aube-orb-core" /></span><span className="aube-word">Cochpia</span><span className="aube-tag">Still Blooming</span><span className="aube-divider"><i /><em>✦</em><i /></span><span className="aube-hint">轻触进入</span></span></button>}
-    {page !== 'splash' && <nav className="aube-nav"><button className={`aube-nav-item ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span className="aube-nav-dot">⌂</span><span className="aube-nav-lbl">Sanctum</span></button><button className={`aube-nav-item ${page === 'chat' ? 'active' : ''}`} onClick={() => setPage('chat')}><span className="aube-nav-dot">✎</span><span className="aube-nav-lbl">Chat</span></button><button className={`aube-nav-item ${page === 'arcana' ? 'active' : ''}`} onClick={() => setPage('arcana')}><span className="aube-nav-dot">⌗</span><span className="aube-nav-lbl">Arcana</span></button><button className={`aube-nav-item ${page === 'life' ? 'active' : ''}`} onClick={() => setPage('life')}><span className="aube-nav-dot">❋</span><span className="aube-nav-lbl">Life</span></button><button className="aube-nav-item" onClick={openMusic}><span className="aube-nav-dot">♫</span><span className="aube-nav-lbl">Music</span></button><button className="aube-nav-item" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><span className="aube-nav-dot">◐</span><span className="aube-nav-lbl">Veil</span></button><button className={`aube-nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => setPage('settings')}><span className="aube-nav-dot">⚙</span><span className="aube-nav-lbl">设置</span></button></nav>}
-    {page === 'settings' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card settings-page-card"><SettingsBody onClose={() => setPage('chat')} /></div></div></div>} {page === 'home' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card aube-profile"><div className="aube-pava">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</div><div><div className="aube-pname">{profile.name}<button type="button" className="text-button profile-edit" onClick={() => setProfileOpen(true)}>编辑档案</button></div><div className="aube-pquote">{personality?.summary || '温和、好奇，正在学习如何更准确地陪伴。'}</div><div className="aube-tags">{(personality?.traits || []).slice(0, 4).map(trait => <span key={trait.key}>{trait.label} {Math.round(trait.value * 100)}%</span>)}</div></div></div><div className="aube-duo"><div className="aube-card aube-mini" onClick={newSession}><span className="aube-mi"><FeatherIcon name="plus" size={18} /></span><h5>新的相遇</h5><small>{sessions.length} 个会话</small></div><div className="aube-card aube-mini" onClick={() => setPage('life')}><span className="aube-mi"><FeatherIcon name="layers" size={18} /></span><h5>它的近况</h5><small>{panelErrors.life ? '暂不可用' : `${lifeEvents.length} 条生活记录`}</small></div></div><div className="aube-sec">Sessions</div>{panelErrors.sessions && <PanelError message={panelErrors.sessions} />}<div className="aube-sessions">{sessions.map(session => <div key={session.id} className={`aube-session-row ${session.id === sessionId ? 'active' : ''}`}><button className="aube-session" onClick={() => { load(session.id); setPage('chat'); }}>{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话"><FeatherIcon name="x" size={16} /></button></div>)}</div><div className="aube-sec">Pulse</div>{panelErrors.personality && <PanelError message={panelErrors.personality} />}<div className="aube-card aube-pulse">{(personality?.traits || []).map(trait => <div className="aube-prow" key={trait.key}><span className="aube-pl">{trait.label}</span><div className="aube-pbar"><i style={{ width: `${trait.value * 100}%` }} /></div><span className="aube-pv">{Math.round(trait.value * 100)}</span></div>)}</div></div></div>}
-    {page === 'life' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-ptitle">Life</div><div className="aube-pquote">它自己的日子，与你无关地发生着。这里只记录它做过什么，不会主动打扰你。</div>{panelErrors.life && <PanelError message={panelErrors.life} />}{lifeSummary ? <div className="aube-card aube-life-head"><div><strong>{lifeSummary.total}</strong><span>条生活记录</span></div><div><strong>{lifeSummary.modelCount}</strong><span>由模型生成</span></div><div><strong>{lifeSummary.newest ? dateLabel(lifeSummary.newest) : '—'}</strong><span>最近一次</span></div></div> : null}{lifeGroups.length === 0 ? <p className="empty-detail">它还没有自己的生活记录。生活事件会按它自己的节奏生成，过一段时间再回来看看。</p> : lifeGroups.map(group => <div key={group.day}><div className="aube-sect">{group.day}</div><div className="timeline">{group.items.map(item => <article className="timeline-item" key={item.id}><div className="timeline-marker" /><div><div className="timeline-meta"><span>{lifeTemplateLabel(item.marker)}</span><time dateTime={item.createdAt || undefined}>{safeFormatTime(item.createdAt, formatTime)}</time></div><p>{item.summary}</p><small>{lifeGeneratorLabel(item.marker) || '生活记录'}{isProactive(item.marker) ? ' · 已主动提及' : ''}</small></div></article>)}</div></div>)}{lifeNextCursor ? <p className="empty-detail">仅显示最近 {lifeEvents.length} 条，更早的记录未在此列出。</p> : null}</div></div>}
+    {page !== 'splash' && <nav className="aube-nav"><button className={`aube-nav-item ${page === 'home' ? 'active' : ''}`} onClick={() => setPage('home')}><span className="aube-nav-dot">⌂</span><span className="aube-nav-lbl">Sanctum</span></button><button className={`aube-nav-item ${page === 'chat' ? 'active' : ''}`} onClick={() => setPage('chat')}><span className="aube-nav-dot">✎</span><span className="aube-nav-lbl">Chat</span></button><button className={`aube-nav-item ${page === 'arcana' ? 'active' : ''}`} onClick={() => setPage('arcana')}><span className="aube-nav-dot">⌗</span><span className="aube-nav-lbl">Arcana</span></button><button className={`aube-nav-item ${page === 'life' ? 'active' : ''}`} onClick={() => setPage('life')}><span className="aube-nav-dot">❋</span><span className="aube-nav-lbl">Life</span></button><button className={`aube-nav-item ${memoryOpen ? 'active' : ''}`} onClick={() => (memoryOpen ? setMemoryOpen(false) : openMemoryPanel())}><span className="aube-nav-dot">◈</span><span className="aube-nav-lbl">Memory</span></button><button className="aube-nav-item" onClick={openMusic}><span className="aube-nav-dot">♫</span><span className="aube-nav-lbl">Music</span></button><button className="aube-nav-item" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><span className="aube-nav-dot">◐</span><span className="aube-nav-lbl">Veil</span></button><button className={`aube-nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => setPage('settings')}><span className="aube-nav-dot">⚙</span><span className="aube-nav-lbl">设置</span></button></nav>}
+    {page === 'settings' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card settings-page-card"><SettingsBody onClose={() => setPage('chat')} /></div></div></div>} {page === 'home' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-card aube-profile"><div className="aube-pava">{profile.avatarImage ? <img src={profile.avatarImage} alt={profile.name} /> : profile.avatar}</div><div><div className="aube-pname">{profile.name}<button type="button" className="text-button profile-edit" onClick={() => setProfileOpen(true)}>编辑档案</button></div><div className="aube-pquote">{personality?.summary || '温和、好奇，正在学习如何更准确地陪伴。'}</div><div className="aube-tags">{(personality?.traits || []).slice(0, 4).map(trait => <span key={trait.key}>{trait.label} {Math.round(trait.value * 100)}%</span>)}</div></div></div><div className="aube-duo"><div className="aube-card aube-mini" onClick={newSession}><span className="aube-mi"><FeatherIcon name="plus" size={18} /></span><h5>新的相遇</h5><small>{sessions.length} 个会话</small></div><div className="aube-card aube-mini" onClick={() => setPage('life')}><span className="aube-mi"><FeatherIcon name="layers" size={18} /></span><h5>它的近况</h5><small>{panelErrors.life ? '暂不可用' : `${lifeEvents.length} 条生活记录`}</small></div></div><div className="aube-sec">Sessions</div>{panelErrors.sessions && <PanelError message={panelErrors.sessions} />}<div className="aube-sessions">{sessions.map(session => <div key={session.id} className={`aube-session-row ${session.id === sessionId ? 'active' : ''}`}><button className="aube-session" onClick={() => { load(session.id); setPage('chat'); }}>{session.title}</button><button type="button" className="session-delete" onClick={event => deleteSession(session.id, event)} title="删除会话"><FeatherIcon name="x" size={16} /></button></div>)}</div><div className="aube-sec">Growth</div>{panelErrors.growthEvidence && <PanelError message={panelErrors.growthEvidence} />}<div className="aube-card aube-growth"><div className="aube-growth-head"><div><strong>{growthEvidence.filter(item => item.status === 'confirmed').length}</strong><span>条已确认</span></div><div><strong>{growthEvidence.filter(item => item.status === 'draft' || !item.status).length}</strong><span>条待确认</span></div><div><strong>v{personality?.version || 1}</strong><span>当前人格</span></div></div>{growthEvidence.length === 0 ? <div className="aube-growth-empty">{emptyStateFor('evidence').body}</div> : <div className="aube-growth-list">{growthEvidence.slice(0, 3).map(item => <div className="aube-growth-row" key={item.id}><span className={`evidence-status evidence-${item.status || 'draft'}`}>{item.status === 'confirmed' ? '已确认' : item.status === 'rejected' ? '已驳回' : '待确认'}</span><p>{item.claim}</p></div>)}</div>}<button type="button" className="text-button" onClick={() => setGrowthOpen(true)}>查看成长时间线</button></div><div className="aube-sec">Pulse</div>{panelErrors.personality && <PanelError message={panelErrors.personality} />}<div className="aube-card aube-pulse">{(personality?.traits || []).map(trait => <div className="aube-prow" key={trait.key}><span className="aube-pl">{trait.label}</span><div className="aube-pbar"><i style={{ width: `${trait.value * 100}%` }} /></div><span className="aube-pv">{Math.round(trait.value * 100)}</span></div>)}</div></div></div>}
+    {page === 'life' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-ptitle">Life</div><div className="aube-pquote">它自己的日子，与你无关地发生着。这里只记录它做过什么，不会主动打扰你。</div>{panelErrors.life && <PanelError message={panelErrors.life} />}{lifeSummary ? <div className="aube-card aube-life-head"><div><strong>{lifeSummary.total}</strong><span>条生活记录</span></div><div><strong>{lifeSummary.modelCount}</strong><span>由模型生成</span></div><div><strong>{lifeSummary.newest ? dateLabel(lifeSummary.newest) : '—'}</strong><span>最近一次</span></div></div> : null}{lifeGroups.length === 0 ? <EmptyState kind="life" actionLabel={null} /> : lifeGroups.map(group => <div key={group.day}><div className="aube-sect">{group.day}</div><div className="timeline">{group.items.map(item => <article className="timeline-item" key={item.id}><div className="timeline-marker" /><div><div className="timeline-meta"><span>{lifeTemplateLabel(item.marker)}</span><time dateTime={item.createdAt || undefined}>{safeFormatTime(item.createdAt, formatTime)}</time></div><p>{item.summary}</p><small>{lifeGeneratorLabel(item.marker) || '生活记录'}{isProactive(item.marker) ? ' · 已主动提及' : ''}</small></div></article>)}</div></div>)}{lifeNextCursor ? <p className="empty-detail">仅显示最近 {lifeEvents.length} 条，更早的记录未在此列出。</p> : null}</div></div>}
 
     {page === 'arcana' && <div className="aube-page-overlay"><div className="aube-page-scroll"><div className="aube-ptitle">Arcana</div><div className="aube-sect">Persona · 人格</div><textarea className="persona-input" value={personaDraft} onChange={event => setPersonaDraft(event.target.value)} rows="4" placeholder="自定义本会话 Cochpia 的人格与语气,留空使用默认人格…" /><button className="select-model" style={{ marginTop: 10 }} onClick={savePersona}>保存人格</button><div className="aube-sect">Veil · 主题</div><div className="aube-veils">{[['sakura', '樱花'], ['ember', '余烬'], ['moss', '苔藓'], ['ink', '墨'], ['va11', '赛博']].map(([id, name]) => <button key={id} className={`aube-veil ${workspacePreferences.theme.themeId === id ? 'active' : ''}`} onClick={() => setWorkspaceSetting('theme', 'themeId', id)}>{name}</button>)}</div><div className="aube-sect">Atmosphere · 氛围</div>{panelErrors.atmospherePresets && <PanelError message={panelErrors.atmospherePresets} />}<select value={atmosphere} onChange={event => saveAtmosphere(event.target.value)}><option value="">默认</option>{atmospherePresets.map(preset => <option key={preset.id} value={preset.id}>{preset.name} · {preset.description}</option>)}</select><div className="aube-sect">Model · 模型</div><select value={selectedProvider} onChange={selectProvider}><option value="">选择供应商</option>{models.providers.map(provider => <option key={provider.provider} value={provider.provider} disabled={!provider.ready}>{provider.label}{provider.ready ? '' : ' · 未配置'}</option>)}</select><select value={selectedModel} onChange={selectModel} style={{ marginTop: 8 }}><option value="">选择模型</option>{providerModelOptions(selectedProviderInfo).map(model => <option key={model} value={model}>{model}</option>)}</select><div className="aube-sect" style={{ marginTop: 16 }}>Providers</div>{models.providers.map(provider => <div className="aube-row" key={provider.provider}><span>{provider.label}</span><span className="aube-row-rv">{provider.ready ? '已配置' : '未配置'}</span></div>)}<div className="aube-sect">Agents · 好友</div>{panelErrors.agents && <PanelError message={panelErrors.agents} />}{agents.length === 0 ? <div className="aube-row"><span style={{ color: 'var(--text-muted)' }}>还没有好友 Agent,添加一个试试</span></div> : agents.map(agent => <div className="aube-row" key={agent.id}><span>{agent.avatar} {agent.name}</span><span className="aube-row-rv">{agent.provider ? `${agent.provider}/${agent.model || '默认'}` : '默认模型'}</span><button type="button" className="text-button" onClick={() => removeAgent(agent.id)}>删</button></div>)}<form className="agent-form" onSubmit={createAgent}><input value={agentDraft.name} onChange={event => setAgentDraft(current => ({ ...current, name: event.target.value }))} placeholder="名称" /><input value={agentDraft.persona} onChange={event => setAgentDraft(current => ({ ...current, persona: event.target.value }))} placeholder="人格(可选)" /><select value={agentDraft.provider} onChange={event => setAgentDraft(current => ({ ...current, provider: event.target.value }))}><option value="">默认模型</option>{models.providers.filter(provider => provider.ready).map(provider => <option key={provider.provider} value={provider.provider}>{provider.label}</option>)}</select><input value={agentDraft.model} onChange={event => setAgentDraft(current => ({ ...current, model: event.target.value }))} placeholder="模型名" /><AvatarPicker value={agentDraft.avatar} onChange={avatar => setAgentDraft(current => ({ ...current, avatar }))} /><button type="submit">添加</button></form><button className="select-model" style={{ marginTop: 10, width: '100%' }} onClick={createGroupSession}>创建群聊(含全部好友)</button><div className="aube-sect">共同空间 · Shared state</div><button type="button" className="select-model" style={{ width: '100%' }} onClick={() => restoreWindow('inspector')}><FeatherIcon name="eye" size={15} /> 查看共同状态</button><div className="aube-sect">Data · 数据</div><div className="aube-row"><button className="text-button" onClick={exportData}>导出数据</button><label className="text-button" style={{ marginLeft: 16, cursor: 'pointer' }}>导入数据<input type="file" accept="application/json,.json" onChange={importData} hidden /></label></div></div></div>}
     <div className="model-dock">
@@ -1069,13 +1256,30 @@ function App() {
     <main className={`main-panel ${page !== 'chat' ? 'is-page-hidden' : ''}`}><header className="topbar"><div><p className="eyebrow">LIVE RELATIONSHIP LOG</p><h1>与你共同成长的空间</h1></div><div className="top-actions"><button className="icon-button" aria-label="切换主题" title="切换主题" onClick={() => setWorkspaceSetting('theme', 'themeId', workspacePreferences.theme.themeId === 'sakura' ? 'ink' : 'sakura')}><FeatherIcon name={workspacePreferences.theme.themeId === 'sakura' ? 'moon' : 'sun'} size={16} /></button><span className={`connection${serverReachable === false ? ' is-offline' : ''}`} title={serverReachable === null ? '尚未探测' : serverReachable ? '后端可达' : '后端不可达'}><span className="status-dot" /> {serverReachable === null ? '连接中…' : serverReachable ? '已连接' : '连接中断'}</span></div></header><div className="channel-bar">{page === 'chat' && <div className="chat-context-tools"><button type="button" className="text-button" aria-label="模型设置" title="模型设置" onClick={() => setSettingsOpen(true)}>模型设置</button><GroupChatIdentity session={currentSession} agents={agents} onOpen={() => setGroupPanelOpen(true)} /></div>}<div className="channel-tabs">{channels.map(item => <button type="button" key={item.name} className={item.name === channel ? 'channel-tab active' : 'channel-tab'} onClick={() => switchChannel(item.name)}>{item.name}<span className="channel-count">{item.count}</span></button>)}<button type="button" className="channel-tab channel-add" aria-label="新建频道" title="新建频道" onClick={addChannel}><FeatherIcon name="plus" size={16} /></button></div><input className="chat-search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="搜索聊天记录" /><button type="button" className={`mode-toggle ${mode}`} onClick={toggleMode} title={mode === 'companion' ? '当前陪伴模式，点击切换工作模式' : '当前工作模式，点击切回陪伴模式'}>{mode === 'companion' ? '陪伴' : '工作'}</button></div><div className="conversation" ref={conversationRef} onScroll={onConversationScroll}>{/* 切会话时各接口的失败就地可见（loadErrors → panelErrors）。
    注意：这几个键**必须在这里被渲染**，否则写进 panelErrors 也等于静默吞掉 ——
    本修复的第一版正是如此（写了状态没人读），自查时才发现。 */}
-{(panelErrors.channels || panelErrors.persona || panelErrors.atmosphere || panelErrors.mode) && <div className="load-errors">{panelErrors.channels && <PanelError message={panelErrors.channels} />}{panelErrors.persona && <PanelError message={panelErrors.persona} />}{panelErrors.atmosphere && <PanelError message={panelErrors.atmosphere} />}{panelErrors.mode && <PanelError message={panelErrors.mode} />}</div>}{messages.length === 0 && <div className="empty-state"><span className="empty-mark">01</span><h2>从一段真实的分享开始</h2><p>每次对话都会成为可审计的共同经历，只有重要的内容才会进入长记忆。</p></div>}{groupedMessages.map(item => item.type === 'date' ? <div key={item.key} className="date-sep"><span>{item.label}</span></div> : <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}><div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || (profile.avatarImage ? <img src={profile.avatarImage} alt="" /> : profile.avatar)) : '你'}</div><div className="message-content"><div className="message-meta">{item.role === 'assistant' ? (item.senderName || profile.name) : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>{editingMessageId === item.id && item.lastInGroup ? <div className="message-edit"><textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus /><div><button type="button" className="text-button" onClick={() => saveMessageEdit(item.id)}>保存</button><button type="button" className="text-button muted-button" onClick={cancelEditingMessage}>取消</button></div></div> : <><div className="bubble">{item.content || <span className="typing">正在形成回应<span>.</span><span>.</span><span>.</span></span>}{item.isStreaming && item.content ? <span className="typing-cursor" /> : null}</div>{item.lastInGroup && !('isStreaming' in item) && <div className="message-actions">{item.role === 'assistant' && ttsSupported && <button type="button" className="text-button" onClick={() => toggleSpeak(item)}>{speakingId === item.id ? '停止朗读' : '朗读'}</button>}<button type="button" className="text-button" onClick={() => startEditingMessage(item)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => removeMessage(item.id)}>删除</button></div>}</>}</div></article>)}{toolEvents.length > 0 && <div className="tool-log">{toolEvents.map((item, i) => <details key={i} className="tool-item" open={item.result === null}><summary>🔧 {item.name} {item.args?.path || item.args?.pattern || item.args?.name || item.args?.dir || ''}</summary>{item.result === null ? <span className="tool-pending">执行中…</span> : <pre className="tool-result">{item.result}</pre>}</details>)}</div>}{jumpToBottom && <button className="jump-bottom" onClick={() => { nearBottomRef.current = true; setJumpToBottom(false); scrollToBottom('smooth'); }} aria-label="回到底部" title="回到底部"><FeatherIcon name="chevronDown" size={18} /></button>}</div><form className="composer" onSubmit={sendMessage}><CompanionIntentBar mode={mode} intent={companionIntent} onChange={setCompanionIntent} /><button type="button" className="upload-button" onClick={() => fileRef.current?.click()} disabled={streaming} aria-label="上传文件" title="上传文件"><FeatherIcon name="paperclip" size={17} /></button><button type="button" className={`upload-button voice-button${listening ? ' listening' : ''}`} onClick={toggleListening} disabled={streaming || !recognitionSupported} aria-pressed={listening} aria-label={listening ? '停止语音输入' : '语音输入'} title={recognitionSupported ? (listening ? '点击停止说话' : '点击开始说话') : '当前浏览器不支持语音识别'}>{listening ? <FeatherIcon name="stopCircle" size={17} /> : <FeatherIcon name="mic" size={17} />}</button><button type="button" className={`upload-button auto-read${autoRead ? ' active' : ''}`} onClick={toggleAutoRead} disabled={!ttsSupported} aria-pressed={autoRead} aria-label="自动朗读回复" title={ttsSupported ? (autoRead ? '已开启自动朗读回复' : '开启自动朗读回复') : '当前浏览器不支持语音合成'}><FeatherIcon name="volume2" size={17} /></button><textarea value={listening ? `${input}${finalText}${interimText}` : input} onChange={event => setInput(event.target.value)} disabled={streaming} readOnly={listening} placeholder={listening ? '正在聆听…' : '写下此刻想分享的事…'} rows="1" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event); } }} /><input ref={fileRef} type="file" hidden onChange={uploadFile} />{streaming ? <button type="button" className="send-button stop-button" onClick={cancelGeneration} aria-label="停止生成" title="停止生成"><FeatherIcon name="stopCircle" size={18} /></button> : <button className="send-button" disabled={!input.trim()} aria-label="发送消息" title="发送消息"><FeatherIcon name="arrowUp" size={18} /></button>}<div className="composer-note">Enter 发送 · 🎤 语音输入 · 🔊 自动朗读</div></form></main>
+{(panelErrors.channels || panelErrors.persona || panelErrors.atmosphere || panelErrors.mode) && <div className="load-errors">{panelErrors.channels && <PanelError message={panelErrors.channels} />}{panelErrors.persona && <PanelError message={panelErrors.persona} />}{panelErrors.atmosphere && <PanelError message={panelErrors.atmosphere} />}{panelErrors.mode && <PanelError message={panelErrors.mode} />}</div>}{messages.length === 0 && <div className="empty-state"><span className="empty-mark">01</span>{(() => { const st = emptyStateFor('sessions'); return <><h2>{st.title}</h2><p>{st.body}</p></>; })()}</div>}{groupedMessages.map(item => item.type === 'date' ? <div key={item.key} className="date-sep"><span>{item.label}</span></div> : <article key={item.key} className={`message ${item.role}${item.grouped ? ' grouped' : ''}`}><div className="avatar">{item.role === 'assistant' ? (item.senderAvatar || (profile.avatarImage ? <img src={profile.avatarImage} alt="" /> : profile.avatar)) : '你'}</div><div className="message-content"><div className="message-meta">{item.role === 'assistant' ? (item.senderName || profile.name) : '你'}<time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></div>{editingMessageId === item.id && item.lastInGroup ? <div className="message-edit"><textarea value={editingText} onChange={event => setEditingText(event.target.value)} autoFocus /><div><button type="button" className="text-button" onClick={() => saveMessageEdit(item.id)}>保存</button><button type="button" className="text-button muted-button" onClick={cancelEditingMessage}>取消</button></div></div> : <><div className="bubble">{item.content || <span className="typing">正在形成回应<span>.</span><span>.</span><span>.</span></span>}{item.isStreaming && item.content ? <span className="typing-cursor" /> : null}</div>{item.lastInGroup && !('isStreaming' in item) && <div className="message-actions">{item.role === 'assistant' && ttsSupported && <button type="button" className="text-button" onClick={() => toggleSpeak(item)}>{speakingId === item.id ? '停止朗读' : '朗读'}</button>}<button type="button" className="text-button" onClick={() => startEditingMessage(item)}>编辑</button><button type="button" className="text-button danger-button" onClick={() => removeMessage(item.id)}>删除</button></div>}</>}</div></article>)}{toolEvents.length > 0 && <div className="tool-log">{toolEvents.map((item, i) => <details key={i} className="tool-item" open={item.result === null}><summary>🔧 {item.name} {item.args?.path || item.args?.pattern || item.args?.name || item.args?.dir || ''}</summary>{item.result === null ? <span className="tool-pending">执行中…</span> : <pre className="tool-result">{item.result}</pre>}</details>)}</div>}{jumpToBottom && <button className="jump-bottom" onClick={() => { nearBottomRef.current = true; setJumpToBottom(false); scrollToBottom('smooth'); }} aria-label="回到底部" title="回到底部"><FeatherIcon name="chevronDown" size={18} /></button>}</div><form className="composer" onSubmit={sendMessage}><CompanionIntentBar mode={mode} intent={companionIntent} onChange={setCompanionIntent} /><button type="button" className="upload-button" onClick={() => fileRef.current?.click()} disabled={streaming} aria-label="上传文件" title="上传文件"><FeatherIcon name="paperclip" size={17} /></button><button type="button" className={`upload-button voice-button${listening ? ' listening' : ''}`} onClick={toggleListening} disabled={streaming || !recognitionSupported} aria-pressed={listening} aria-label={listening ? '停止语音输入' : '语音输入'} title={recognitionSupported ? (listening ? '点击停止说话' : '点击开始说话') : '当前浏览器不支持语音识别'}>{listening ? <FeatherIcon name="stopCircle" size={17} /> : <FeatherIcon name="mic" size={17} />}</button><button type="button" className={`upload-button auto-read${autoRead ? ' active' : ''}`} onClick={toggleAutoRead} disabled={!ttsSupported} aria-pressed={autoRead} aria-label="自动朗读回复" title={ttsSupported ? (autoRead ? '已开启自动朗读回复' : '开启自动朗读回复') : '当前浏览器不支持语音合成'}><FeatherIcon name="volume2" size={17} /></button><textarea value={listening ? `${input}${finalText}${interimText}` : input} onChange={event => setInput(event.target.value)} disabled={streaming} readOnly={listening} placeholder={listening ? '正在聆听…' : '写下此刻想分享的事…'} rows="1" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event); } }} /><input ref={fileRef} type="file" hidden onChange={uploadFile} />{streaming ? <button type="button" className="send-button stop-button" onClick={cancelGeneration} aria-label="停止生成" title="停止生成"><FeatherIcon name="stopCircle" size={18} /></button> : <button className="send-button" disabled={!input.trim()} aria-label="发送消息" title="发送消息"><FeatherIcon name="arrowUp" size={18} /></button>}<div className="composer-note">Enter 发送 · 🎤 语音输入 · 🔊 自动朗读</div></form></main>
 
-    <div className="window-layer"><FloatingWindow id="inspector" title="共同状态"><aside className="inspector"><div className="inspector-head"><div><p className="eyebrow">COGNITIVE STATE</p><h2>共同状态</h2></div><span className="live-pill">LIVE</span></div><section className="state-card"><div className="state-card-top"><span className="state-icon">✦</span><div><strong>{relationshipState.label}</strong><span>{relationshipState.detail}</span></div></div><div className="state-line"><span>共享记忆</span><strong>{memory.count}</strong></div><div className="state-line"><span>人格版本</span><strong>v{personality?.version || 1}</strong></div></section><MaterialPreview /><section className="inspector-section"><div className="section-heading"><span>人格趋势</span><button type="button" className="text-button" onClick={() => setHistoryOpen(true)}>查看版本</button></div>{(personality?.traits || []).map(trait => <div className="trait" key={trait.key}><div><span>{trait.label}</span><b>{Math.round(trait.value * 100)}%</b></div><div className="progress"><i style={{ width: `${trait.value * 100}%` }} /></div></div>)}</section><section className="inspector-section">{panelErrors.memory && <PanelError message={panelErrors.memory} />}<div className="section-heading"><span>最近记忆</span><span className="count-label">{memory.truncated ? `仅显示最近 ${memory.count} 条` : `${memory.count} 条`}</span></div>{memory.memories.map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.type === 'relationship' ? '关系' : '事件'}</span><p>{item.summary}</p><small>{Math.round(item.confidence * 100)}% 确信 · {item.source}</small></div>)}</section><section className="inspector-section">{panelErrors.growthEvidence && <PanelError message={panelErrors.growthEvidence} />}<div className="section-heading"><span>成长证据</span><button type="button" className="text-button" onClick={() => setGrowthOpen(true)}>查看时间线</button></div>{growthEvidence.slice(0, 2).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.status || 'draft'}</span><p>{item.claim}</p><small>{item.evidence}</small></div>)}</section><section className="protocol-note"><span>◎</span><p><strong>可验证成长</strong>每次人格变化都保留证据和版本，随时可回滚。</p></section></aside></FloatingWindow></div>
+    <div className="window-layer"><FloatingWindow id="inspector" title="共同状态"><aside className="inspector"><div className="inspector-head"><div><p className="eyebrow">COGNITIVE STATE</p><h2>共同状态</h2></div><span className="live-pill">LIVE</span></div><section className="state-card"><div className="state-card-top"><span className="state-icon">✦</span><div><strong>{relationshipState.label}</strong><span>{relationshipState.detail}</span></div></div><div className="state-line"><span>共享记忆</span><strong>{memory.count}</strong></div><div className="state-line"><span>人格版本</span><strong>v{personality?.version || 1}</strong></div></section><MaterialPreview /><section className="inspector-section"><div className="section-heading"><span>人格趋势</span><button type="button" className="text-button" onClick={() => setHistoryOpen(true)}>查看版本</button></div>{(personality?.traits || []).map(trait => <div className="trait" key={trait.key}><div><span>{trait.label}</span><b>{Math.round(trait.value * 100)}%</b></div><div className="progress"><i style={{ width: `${trait.value * 100}%` }} /></div></div>)}</section><section className="inspector-section">{panelErrors.memory && <PanelError message={panelErrors.memory} />}<div className="section-heading"><span>最近记忆</span><span className="memory-heading-actions"><span className="count-label">{memory.truncated ? `仅显示最近 ${memory.count} 条` : `${memory.count} 条`}</span><button type="button" className="text-button" onClick={openMemoryPanel}>管理记忆</button></span></div>{memory.memories.length === 0 && !panelErrors.memory ? <EmptyState kind="memories" actionLabel={null} /> : memory.memories.map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.type === 'relationship' ? '关系' : '事件'}</span><p>{item.summary}</p><small>{Math.round(item.confidence * 100)}% 确信 · {item.source}</small></div>)}</section><section className="inspector-section">{panelErrors.growthEvidence && <PanelError message={panelErrors.growthEvidence} />}<div className="section-heading"><span>成长证据</span><button type="button" className="text-button" onClick={() => setGrowthOpen(true)}>查看时间线</button></div>{growthEvidence.slice(0, 2).map(item => <div className="memory-item" key={item.id}><span className="memory-type">{item.status || 'draft'}</span><p>{item.claim}</p><small>{item.evidence}</small></div>)}</section><section className="protocol-note"><span>◎</span><p><strong>可验证成长</strong>每次人格变化都保留证据和版本，随时可回滚。</p></section></aside></FloatingWindow></div>
 
+    {/* 记忆主权面板：受控组件，所有网络动作都是上面那组 memory* 回调。
+        双击/返回等关闭路径与 GrowthPanel 一致；Esc 在 modalOpen 的 effect 里处理。 */}
+    {memoryOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setMemoryOpen(false); }}><section className="settings-panel detail-panel memory-panel" role="dialog" aria-modal="true" aria-labelledby="memory-sovereignty-title"><header className="settings-header"><div><p className="eyebrow">YOUR MEMORY, YOUR CALL</p><h2>记忆主权</h2><p>它们全部属于你：可以改写、钉住、撤销或遗忘。</p></div><button className="icon-button" aria-label="关闭记忆面板" title="关闭记忆面板" onClick={() => setMemoryOpen(false)}><FeatherIcon name="x" size={16} /></button></header><div className="settings-content"><MemorySovereigntyPanel
+      memories={memoryPanel.items}
+      truncated={Boolean(memoryPanel.nextCursor)}
+      loading={memoryPanel.loading}
+      error={memoryPanel.error}
+      hasMore={Boolean(memoryPanel.nextCursor)}
+      onCorrect={correctMemory}
+      onPin={pinMemory}
+      onRevoke={revokeMemory}
+      onForget={forgetMemory}
+      onLoadMore={loadMoreMemories}
+    /></div></section></div>}
     {growthOpen && <GrowthPanel growthEvidence={growthEvidence} growthError={panelErrors.growthEvidence} reviewingEvidence={reviewingEvidence} reviewAllEvidence={reviewAllEvidence} reviewEvidence={reviewEvidence} traitLabel={traitLabel} onClose={() => setGrowthOpen(false)} />}
     {historyOpen && <HistoryPanel currentVersion={currentVersion} previousVersion={previousVersion} historyError={panelErrors.personalityHistory} versionChanges={versionChanges} traitLabel={traitLabel} onClose={() => setHistoryOpen(false)} />}
     {profileOpen && <ProfilePanel pendingApproval={pendingApproval} respondApproval={respondApproval} onClose={() => setProfileOpen(false)} />}
+    {/* 首次引导：只有「一条会话都没有」且「没关过」才出现（判定在 shouldShowGuide）。
+        它自带遮罩，不要再套一层 settings-backdrop。 */}
+    <FirstRunGuide visible={showFirstRunGuide && page !== 'splash'} onDismiss={dismissGuide} onStart={startFirstChat} />
     {pendingApproval && <div className="settings-backdrop" role="presentation" onClick={() => respondApproval(false)}><section className="settings-panel detail-panel" role="dialog" aria-modal="true" aria-labelledby="approval-title"><header className="settings-header"><div><p className="eyebrow">WORK MODE · 待确认修改</p><h2 id="approval-title">确认执行 {pendingApproval.name} 操作？</h2><p>该操作会修改文件，请确认内容无误。</p></div><button className="icon-button" onClick={() => respondApproval(false)}><FeatherIcon name="x" size={16} /></button></header><div className="approval-body"><div className="approval-path">📄 {String(pendingApproval.args?.path || '')}</div>{pendingApproval.name === 'edit' ? <div className="approval-diff"><div className="approval-old">− {String(pendingApproval.args?.oldText || '').slice(0, 500)}</div><div className="approval-new">+ {String(pendingApproval.args?.newText || '').slice(0, 500)}</div></div> : pendingApproval.name === 'bash' ? <pre className="approval-content">$ {String(pendingApproval.args?.command || '')}</pre> : <pre className="approval-content">{String(pendingApproval.args?.content || '').slice(0, 2000)}</pre>}<div className="approval-actions"><button type="button" className="select-model" onClick={() => respondApproval(true)}>确认执行</button><button type="button" className="text-button muted-button" onClick={() => respondApproval(false)}>拒绝</button></div></div></section></div>}
     {settingsOpen && <div className="settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}><section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-header"><div><p className="eyebrow">MODEL DIRECTORY</p><h2 id="settings-title">模型设置</h2><p>查看适用场景并测试服务端连接。密钥不会进入浏览器。</p></div><button className="icon-button" aria-label="关闭模型设置" title="关闭模型设置" onClick={() => setSettingsOpen(false)}><FeatherIcon name="x" size={16} /></button></header><div className="persona-panel"><div className="section-heading"><span>人格 Persona</span><button type="button" className="text-button" onClick={savePersona}>保存人格</button></div><textarea className="persona-input" value={personaDraft} onChange={event => setPersonaDraft(event.target.value)} placeholder="自定义本会话 Cochpia 的人格与语气,留空使用默认人格…" rows="4" /><div className="persona-hint">只影响当前会话,长度不超过 2000 字。</div></div><div className="settings-list">{models.providers.map(provider => { const test = tests[provider.provider]; return <article className={`provider-row ${provider.provider === selectedProvider ? 'selected' : ''}`} key={provider.provider}><div className="provider-main"><div><strong>{provider.label}</strong><span className={`provider-status ${provider.ready ? 'ready' : 'unready'}`}>{provider.ready ? '已配置' : '未配置'}</span></div><p>{provider.useCases}</p><small>{provider.protocol} · 建议：{provider.suggestedModels.join(' / ')}</small>{test?.state === 'success' && <small className="test-success">连接成功 · {test.result.latencyMs}ms</small>}{test?.state === 'error' && <small className="test-error">{test.message}</small>}</div><div className="provider-actions"><button className="text-button" disabled={!provider.ready || test?.state === 'testing'} onClick={() => testProvider(provider)}>{test?.state === 'testing' ? '测试中…' : '测试连接'}</button><button className="select-model" disabled={!provider.ready} onClick={() => { saveSelection(provider.provider, provider.model || provider.suggestedModels[0]); setSettingsOpen(false); }}>{provider.provider === selectedProvider ? '当前会话' : '用于本会话'}</button></div></article>; })}</div></section></div>}
     

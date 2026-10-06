@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getStorageStatus, loadState, loadUserState, saveState, storageProvider } from './store.js';
 import { createMemoryModuleRuntime } from './memory-module-runtime.js';
+import { createMemoryGovernanceRouter } from './memory-governance-routes.js';
 import { createLifeTickScheduler } from './life-tick-scheduler.js';
 import { createGrowthEvidenceService } from './growth-evidence.js';
 import { createModelProvider, listModelProviders, resolveModelConfig, resolveModelSelection } from './model-provider.js';
@@ -181,6 +182,16 @@ app.use(async (req, res, next) => {
   } catch (error) { return next(error); }
 });
 app.use('/v1', memoryRuntime.router());
+// 阶段 1：把 memory-module 已有的治理能力（list/correct/pin/unpin/revoke/
+// forget/remove/确认流/删除台账）接到用户面 /api/memory/*。上面 /v1 是 Memory
+// 服务的机器接口；这里是同一批能力、同一份请求级 context 的用户视图。
+// 挂载必须早于下面的 /api/memory/overview 只读路由（两者路径不重叠，
+// 这里顺序只为可读性），且**不改动** overview —— 它的 count/truncated 契约
+// 是 PR #10 刚修好的。
+app.use('/api/memory', createMemoryGovernanceRouter({
+  contextFromRequest: req => memoryRuntime.contextFromRequest(req),
+  memoryModuleForRequest: req => memoryRuntime.prepareForRequest(req)
+}));
 
 const send = (res, event, data, run) => {
   if (!run) return false;

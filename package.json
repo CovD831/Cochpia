@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently \"node server/index.js\" \"vite --host 0.0.0.0\"",
     "server": "node server/index.js",
-    "test": "node --test server/*.test.js client/src/chat/*.test.js client/src/life/*.test.js",
+    "test": "node --test server/*.test.js client/src/*/*.test.js",
     "build": "vite build",
     "start": "node server/index.js",
     "start:web": "node services/web-static.js",

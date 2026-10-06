@@ -638,9 +638,11 @@ h1, h2, .brand strong, .empty-state h2, .inspector h2, .settings-header h2, .bub
 .aube-nav-item:nth-child(2) .aube-nav-dot { --feather-mask:url('./icons/feather/edit-3.svg'); }
 .aube-nav-item:nth-child(3) .aube-nav-dot { --feather-mask:url('./icons/feather/hash.svg'); }
 .aube-nav-item:nth-child(4) .aube-nav-dot { --feather-mask:url('./icons/feather/layers.svg'); }
-.aube-nav-item:nth-child(5) .aube-nav-dot { --feather-mask:url('./icons/feather/music.svg'); }
-.aube-nav-item:nth-child(6) .aube-nav-dot { --feather-mask:url('./icons/feather/moon.svg'); }
-.aube-nav-item:nth-child(7) .aube-nav-dot { --feather-mask:url('./icons/feather/settings.svg'); }
+/* 记忆主权入口：eye = 「看得见」，正是这块面板存在的理由。 */
+.aube-nav-item:nth-child(5) .aube-nav-dot { --feather-mask:url('./icons/feather/eye.svg'); }
+.aube-nav-item:nth-child(6) .aube-nav-dot { --feather-mask:url('./icons/feather/music.svg'); }
+.aube-nav-item:nth-child(7) .aube-nav-dot { --feather-mask:url('./icons/feather/moon.svg'); }
+.aube-nav-item:nth-child(8) .aube-nav-dot { --feather-mask:url('./icons/feather/settings.svg'); }
 
 .aube-page-overlay { position:absolute; inset:0; z-index:20; background:var(--panel-surface, var(--surface-canvas)); overflow:hidden; }
 .aube-page-scroll { position:absolute; left:150px; top:88px; width:min(720px, calc(100% - 180px)); bottom:26px; overflow-y:auto; padding-right:8px; }
@@ -813,3 +815,53 @@ h1, h2, .brand strong, .empty-state h2, .inspector h2, .settings-header h2, .bub
 .tool-item, .approval-content, .typography-preview {
   background:var(--panel-surface, var(--surface-elevated));
 }
+
+/* ==================== 阶段 1：记忆主权 / 首次引导 / 首页成长证据 ====================
+   配色一律走既有 token（--action-primary / --text-muted / --state-* / --border-default
+   等），没有任何硬编码颜色 —— 因此自动跟随全部主题（dark/paper/blush/mist/night/…）。
+   面板组件内部自带的样式见 MemorySovereigntyPanel.jsx（它的写域不是本文件）。
+   ------------------------------------------------------------------------------ */
+
+/* 记忆面板：复用 .settings-panel/.detail-panel 的外壳，只放宽内容区滚动。 */
+.memory-panel { max-width:720px; }
+.memory-panel .settings-content { padding:0; }
+.memory-panel .memory-sovereignty { padding:18px 24px 24px; }
+
+/* 「最近记忆」标题行右侧的计数 + 入口，两个元素要一起靠右且不换行挤压。 */
+.memory-heading-actions { display:flex; align-items:center; gap:12px; }
+.memory-heading-actions .text-button { white-space:nowrap; }
+
+/* 统一空状态（onboarding/empty-states.js 的文案 + 这里的排版）。
+   与既有 .empty-state 同源，只补「动作按钮」与面板内的紧凑变体。 */
+.unified-empty .select-model { margin-top:14px; padding:8px 16px; }
+.inspector .unified-empty { padding:14px 0 4px; max-width:none; }
+.inspector .unified-empty h2 { font-size:13px; margin:0 0 6px; }
+.inspector .unified-empty p { font-size:11px; line-height:1.7; }
+
+/* 首页 Sanctum 的成长证据摘要卡。沿用 .aube-card 的底与圆角，只定义内部栅格 ——
+   与 .aube-life-head 同一套做法（三格摘要 + 列表 + 一个入口）。 */
+.aube-growth { padding:16px 22px 18px; display:grid; gap:12px; }
+.aube-growth-head { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; }
+.aube-growth-head > div { display:grid; gap:3px; }
+.aube-growth-head strong { font-family:var(--font-voice); font-size:20px; font-weight:400; color:var(--action-primary); }
+.aube-growth-head span { font-size:10px; color:var(--text-muted); }
+.aube-growth-empty { font-size:11px; color:var(--text-muted); line-height:1.7; }
+.aube-growth-list { display:grid; gap:8px; }
+.aube-growth-row { display:flex; align-items:baseline; gap:9px; }
+.aube-growth-row p { font-size:11px; color:var(--text-body); line-height:1.6; min-width:0; }
+.aube-growth-row .evidence-status { flex:0 0 auto; }
+.aube-growth .text-button { justify-self:start; }
+
+/* 首次引导：FirstRunGuide 不依赖本文件也能显示（它只用内联变量与既有类）。
+   这里只做「承诺清单」的呼吸感，让它在宽屏上不至于贴边。 */
+.first-run-guide .settings-content > ul { margin-top:2px; }
+.first-run-guide .settings-content > ul > li:first-child { border-top:0; padding-top:0; }
+
+@media (max-width: 620px) {
+  .memory-panel .memory-sovereignty { padding:14px 16px 20px; }
+  .aube-growth { padding:13px 16px; gap:9px; }
+  .aube-growth-head strong { font-size:17px; }
+  .aube-growth-head span { font-size:9px; }
+  .aube-growth-row { align-items:flex-start; flex-direction:column; gap:4px; }
+}
+
