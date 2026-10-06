@@ -728,6 +728,21 @@ function App() {
   // 不做注册天数/首次登录之类的推断 —— 猜错会把引导反复弹在老用户脸上。
   // sessionCount 在数据未就绪时给 null（而不是 0）：0 会被读成「一条会话都没有」，
   // 于是在别人的数据上弹出引导。
+  //
+  // ⚠️ 与记忆面板**互斥**（判据是下面那个 `!memoryOpen`，不是 z-index）。
+  //
+  // 为什么必须互斥、而不是单纯调层叠：两者都渲染 `.settings-backdrop`
+  // （styles.css:42，同为 z-index:20），后挂载者在最上层。干净环境实测
+  // （STORAGE_PROVIDER=json + 全新 DATA_DIR + 删掉自动建的 welcome 会话，
+  //  即真正的新用户处境）：引导出现后打开记忆面板 →
+  //     backdropCount = 2，
+  //     点「遗忘」报 "… settings-content … intercepts pointer events"
+  // ⇒ 新用户第一次要用「删掉这条记忆」时**按键点不动**，本阶段的核心功能
+  //   对他们完全不可用。（修复前的 e2e 报 12/12 是环境里已有会话、引导没出现，
+  //   属于环境侥幸 —— 干净环境下必挂。）
+  // 只改 z-index 会把「引导被面板盖住」变成另一种怪状态：两个模态同屏本身就
+  // 是 UI 问题，所以按「同时只有一个模态存在」解决。用户关掉引导后
+  // guideDismissed 置位，引导不会再回来，面板照常可用。
   const showFirstRunGuide = useMemo(() => shouldShowGuide({
     sessionCount: sessionsLoaded ? sessions.length : null,
     dismissed: guideDismissed || Boolean(workspacePreferences?.onboarding?.guideDismissed)

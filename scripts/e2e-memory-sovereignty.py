@@ -13,8 +13,10 @@ dist 比 client/src 旧时本脚本拒绝运行 —— 否则测的是上一轮�
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -111,12 +113,20 @@ def main():
         print(f"dist 比 client/src 旧 {newest_src - dist.stat().st_mtime:.0f}s —— 先跑 npm run build")
         return 1
 
+    tmpdir = tempfile.mkdtemp(prefix="cochpia-t6-e2e-")
     server = subprocess.Popen(
         ["node", "server/index.js"], cwd=REPO,
         # 本脚本每个 check 都要开新页面、并反复查列表/删会话，很容易撞上
         # 默认 120/分钟的接口限流（那会伪装成「引导没出现」这类假红）。
         # 放宽的是**测试进程**的限流，不是产品默认值。
-        env={**os.environ, "PORT": str(PORT), "NODE_OPTIONS": "", "API_RATE_LIMIT_MAX": "10000"},
+        #
+        # COCHPIA_DATA_DIR 指向一个**一次性目录**：本脚本会删记忆、删会话，
+        # 若共用仓库里 server/data/ 就会污染本机既有数据，也会让上一次运行的
+        # 残留（已遗忘的记忆等）影响这一次 —— 那种耦合会让结果不可复现。
+        # 顺带：每次运行都是真正的「干净环境」，这正是 P9 需要的处境。
+        env={**os.environ, "PORT": str(PORT), "NODE_OPTIONS": "",
+             "STORAGE_PROVIDER": "json", "COCHPIA_DATA_DIR": str(tmpdir),
+             "API_RATE_LIMIT_MAX": "10000"},
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     try:
@@ -227,6 +237,53 @@ def main():
             finally:
                 context.close()
 
+            # ---- P9: 引导与记忆面板互斥（P1 回归）------------------------------
+            #
+            # 这是本文件里**唯一能抓住 P1 的那个断言**。
+            #
+            # P1 的形态：引导与面板都渲染 .settings-backdrop（同为 z-index:20），
+            # 后挂载者在最上层 ⇒ 引导的遮罩吃掉面板全部按钮的点击。
+            # 上面 P1–P6 都跑不出它，因为它们执行时**环境里还有会话**、引导压根不显示
+            # —— 那正是「12/12 全绿但缺陷健在」的原因。所以这里必须现造新用户处境：
+            # 删掉全部会话（含 server 自动建的 welcome），让 shouldShowGuide 为 true。
+            #
+            # 断言分两步且都要过：
+            #   ① 遮罩只有一个 —— 两个模态同屏本身就是缺陷，用计数直接钉死；
+            #   ② 「遗忘」真的点得动并进入确认态 —— 只查计数会漏掉「引导让位了
+            #      但面板自己坏了」这一半。
+            context, page = fresh_page(browser)
+            try:
+                for s in http_json("/api/sessions"):
+                    http_json(f"/api/sessions/{s['id']}", "DELETE")
+                # 「新用户」必须同时满足两件事：没有会话，且**没关过引导**。
+                # P7 刚刚关过一次，服务端偏好和 localStorage 都记住了 —— 不把
+                # 这两处一起还原，P9 的前置就恒为假，检查会退化成永远绿的噪声。
+                http_json("/api/preferences", "PATCH", {"preferences": {"onboarding": {"guideDismissed": False}}})
+                page.evaluate("() => window.localStorage.clear()")
+                page.reload(wait_until="load")
+                time.sleep(1.2)
+                enter_app(page, settle=2.5)
+
+                guide_shown = page.locator(".first-run-guide").count() > 0
+                record("P9 前置：新用户处境下引导确实出现（否则本检查无判别力）", guide_shown)
+
+                page.locator(".aube-nav-item:has-text('Memory')").first.click(timeout=10000)
+                page.wait_for_selector(".memory-panel", timeout=10000)
+                time.sleep(0.8)
+
+                backdrops = page.locator(".settings-backdrop").count()
+                record("P9 引导与记忆面板互斥（同时只有一层遮罩）", backdrops == 1,
+                       f"backdropCount={backdrops}（修复前实测为 2）")
+
+                # 真正点下去：被遮罩拦截时 Playwright 会在此抛超时。
+                forget = page.locator(".memory-sovereignty-item button:has-text('遗忘')").first
+                forget.click(timeout=6000)
+                time.sleep(0.5)
+                record("P9 引导存在时「遗忘」仍可点（P1 核心）",
+                       page.locator(".memory-panel button:has-text('确认遗忘')").count() > 0)
+            finally:
+                context.close()
+
             # ---- P8: 空状态改成了统一文案 -----------------------------------
             context, page = fresh_page(browser)
             try:
@@ -245,6 +302,7 @@ def main():
             server.wait(timeout=10)
         except subprocess.TimeoutExpired:
             server.kill()
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
     passed = sum(1 for _, ok, _ in results if ok)
     print(f"\n{passed}/{len(results)} passed")

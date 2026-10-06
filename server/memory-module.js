@@ -1907,6 +1907,43 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return { assertionIds: [...memoryIds], versionIds: [...versionIds] };
   };
 
+  // P0 修复（2026-10-07，T8 审计发现）：删除记忆时必须一并处理**它的来源原始事件**。
+  //
+  // 缺陷：remove() 只调 physicallyRemoveAssertions()，那只过滤 state.assertions，
+  // 不碰 state.rawEvents。于是「面板上那条消失了、list/retrieve/contextBundle 都
+  // 干净」，但用户点「导出数据」仍能拿到被删那句话的原文 —— 直接违背 PIPL 删除权
+  // 与本阶段中心主张。state.rawEvents 的清理此前只存在于 session/account 删除路径，
+  // remove 走不到。
+  //
+  // 判据（关键）：一条 rawEvent 可能被**多条** assertion 共用（同一事件提取出多条
+  // 记忆）。直接抹掉会误伤仍存活的 assertion 的来源。因此只有在 rawEvent
+  // **不再被任何存活 assertion 引用**时才清除它。
+  //
+  // 调用时机：必须在 assertion / assertionVersions / assertionVersionSources 都已
+  // 被裁剪**之后**调用 —— 那时残留的 source 行只可能属于存活 assertion，判据自然成立。
+  //
+  // 范围：只看 candidateSourceIds（被删记忆自己引用过的来源）。绝不扫全表 ——
+  // 从未参与过提取的裸事件归 sweepRetention 管，不该被记忆级删除顺手抹掉。
+  //
+  // id 语义（实测确认，别再猜）：assertionVersionSources.sourceId 存的就是
+  // state.rawEvents[].id（内部 UUID），**不是** rawEvents[].eventId。
+  // 依据：createCandidate() 里 `state.rawEvents.find(event => event.id === sourceEventId)`
+  // （memory-module.js:1055）按 .id 查找；chart-memory.js 的 remember() 传的
+  // sourceEventId 也来自 recordEvent 返回的 rawEventId。
+  // 因此这里直接按 .id 比对，**不能再做 eventId→id 的二次转换**
+  // （先前那版转换让匹配恒为空，是 P0 修复没生效的直接原因）。
+  const collectOrphanedSourceEventIds = candidateRawEventIds => {
+    if (!candidateRawEventIds.length) return [];
+    // 裁剪后仍留在 source 表里的 raw_event 引用 = 仍被存活 assertion 引用。
+    const stillReferenced = new Set(
+      state.assertionVersionSources
+        .filter(source => source.sourceType === 'raw_event')
+        .map(source => source.sourceId)
+    );
+    // 无人引用 = 可清。sourceId 已是 rawEvents[].id，无需转换。
+    return candidateRawEventIds.filter(id => !stillReferenced.has(id));
+  };
+
   const physicallyRemoveSourceEvents = sourceEventIds => {
     const rawIds = new Set(sourceEventIds);
     const removedEventKeys = new Set(state.rawEvents
@@ -2132,13 +2169,26 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     if (!assertion) throw new MemoryModuleError('MEMORY_NOT_FOUND', 'Memory not found', { status: 404 });
     assertRevision(assertion, input);
     const operation = { id: randomUUID(), tenantId: context.tenantId, subjectUserId: context.subjectUserId, targetType: 'memory', targetId: assertion.id, requestedScope: { scopeType: assertion.scopeType }, action: 'delete', status: 'accepted', requestedBy: context.actorId, requestedAt: nowIso(), canonicalHiddenAt: null, completedAt: null, redactionEpoch: bumpEpoch(context), resourceRevision: 1, lastErrorCode: null };
+    // P0 修复：先记下这条记忆引用过的来源事件（裁剪 source 表之前），
+    // 删完 assertion 之后再判断哪些来源已无人引用、可以清除。
+    // 顺序不能颠倒 —— 裁剪后就反查不出"这条记忆的来源"了。
+    const sourceEventIds = [...new Set(state.assertionVersionSources
+      .filter(source => source.sourceType === 'raw_event' && state.assertionVersions.some(version => version.id === source.versionId && version.assertionId === assertion.id))
+      .map(source => source.sourceId))];
     physicallyRemoveAssertions([assertion.id]);
+    // 清掉不再被任何存活 assertion 引用的来源事件（复用既有的
+    // physicallyRemoveSourceEvents —— 它会一并处理 orphans、派生数据与幂等记录）。
+    const orphanedSourceEventIds = collectOrphanedSourceEventIds(sourceEventIds);
+    if (orphanedSourceEventIds.length) physicallyRemoveSourceEvents(orphanedSourceEventIds);
     operation.status = 'completed';
     operation.canonicalHiddenAt = nowIso();
     operation.completedAt = nowIso();
     state.deletionOperations.push(operation);
     state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'memory', targetId: assertion.id, action: 'delete', redactionEpoch: operation.redactionEpoch, createdAt: nowIso() });
-    audit(state, context, 'memory_deleted', { memoryId: assertion.id, deletionOperationId: operation.id });
+    for (const sourceEventId of orphanedSourceEventIds) {
+      state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'delete', redactionEpoch: operation.redactionEpoch, createdAt: nowIso() });
+    }
+    audit(state, context, 'memory_deleted', { memoryId: assertion.id, deletionOperationId: operation.id, removedSourceEventCount: orphanedSourceEventIds.length });
     bumpSequence();
     await persist();
     return { deletionOperationId: operation.id, status: operation.status, redactionEpoch: operation.redactionEpoch, consistencyToken: tokenFor(state, context) };

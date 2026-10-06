@@ -1,26 +1,10 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
 import { getTypographyFont } from './typographyRegistry';
 import { api, supabase } from '../api';
+import { defaults, mergeState } from './workspace-preferences-defaults.js';
 
 const STORAGE_KEY = 'cochpia.workspace-preferences.v1';
 
-const defaults = {
-  theme: { themeId: 'sakura', accentColor: '#B24A6E', transitionEnabled: true, customColors: { canvas: '#160A22', panel: '#1F1130', elevated: '#2A1A40', textStrong: '#F6EDFF', textBody: '#CBB9E2', textMuted: '#9381B0', border: '#3C2852', action: '#FF6FAE', actionHover: '#FF8FC4', onAction: '#2A0B1E' } },
-  background: { mode: 'color', color: '#fff6fa', imageUrl: '', gradient: 'radial-gradient(circle at 20% 10%, rgba(201,105,139,.12), transparent 38%)', blur: 0, brightness: 1, saturation: 1, opacity: 1, overlayOpacity: 0, animationEnabled: false },
-  typography: { fontFamily: 'system', fontScale: 1, fontWeight: 400, letterSpacing: 0, lineHeight: 1.55 },
-  motion: { enabled: false, reducedMotion: true, animationLevel: 'low', intensity: 0, durationScale: 1 },
-  sound: { musicVolume: 0.2, uiVolume: 0.08, aiVoiceVolume: 0.2, muted: false, uiSoundEnabled: false, musicEnabled: false, musicReactiveEnabled: false },
-  time: { clockFormat: '24h', showSeconds: false, showDate: true, timezoneMode: 'system', timezone: null, ambientModeEnabled: true },
-  language: { locale: 'zh-CN', fallbackLocale: 'zh-CN' },
-  accessibility: { highContrast: false, largeText: false, keyboardMode: false, focusVisible: true },
-  workspace: { layoutMode: 'freeform', snapEnabled: true, autoArrangeEnabled: false, dockVisible: true },
-  appearance: { cornerRadius: 24, panelOpacity: 1.0 }
-};
-
-const mergeState = value => Object.keys(defaults).reduce((result, key) => {
-  result[key] = { ...defaults[key], ...(value?.[key] || {}) };
-  return result;
-}, {});
 
 const readState = (storageKey = STORAGE_KEY, legacyKey = '') => {
   try {

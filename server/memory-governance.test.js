@@ -538,3 +538,156 @@ test('list exposes the resource revision so writes succeed on the first attempt'
   } finally { await server.close(); }
 });
 
+
+// ---------------------------------------------------------------------------
+// 12. P0：删除必须连来源原始事件一起清掉，否则「导出数据」仍能拿回原文
+// ---------------------------------------------------------------------------
+// 背景（T8 审计发现，P0）：remove() 原本只调 physicallyRemoveAssertions()，
+// 那只过滤 state.assertions，**不碰 state.rawEvents**。于是面板上那条消失了、
+// list/retrieve/contextBundle 都干净，但用户自己点「导出数据」仍能拿到
+// 被删那句话的原文 —— 直接违背 PIPL 删除权与本阶段的中心主张。
+//
+// 这条测试断言的就是那个缺失的守卫：**删除后 export 不含被删内容**。
+// 导出 = 把 state 序列化出去，所以直接对 JSON.stringify(state) 做原文扫描。
+test('a deleted memory leaves no trace in the exported state', async () => {
+  const { state, memory } = createHarness();
+  const SECRET = '我上周去了杭州西湖边的茶馆';
+  // **复刻真实生产链路**（不是 hold 造数）：
+  //   createSession → recordEvent（落 rawEvent）→ createCandidate（从事件提取 assertion）
+  // 生产怎么写见 chat-memory.js:151 recordTurn / :162 remember，以及
+  // memory-module.js:1055 `rawEvents.find(event => event.id === sourceEventId)`。
+  // 关键：传给 sourceEventId 的是 **rawEvent.id**（内部 UUID），不是 recordEvent 的
+  // eventId —— 先前测试传错 id，导致断言了一个生产里不成立的形状。
+  const session = await memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 60000).toISOString() });
+  await memory.recordEvent({ ...userContext(), sessionId: session.id }, { eventId: 'evt-export-1', sessionId: session.id, content: SECRET, eventRole: 'user' });
+  const rawEvent = state.rawEvents[0];
+  assert.ok(rawEvent, 'precondition: recordEvent must have stored a raw event');
+  const candidate = await memory.createCandidate({ ...userContext(), sessionId: session.id }, { content: SECRET, sourceEventId: rawEvent.id, memoryType: 'fact', sensitivity: 'S0' });
+  const assertion = state.assertions.find(item => item.id === candidate.memory.memoryId);
+  assert.ok(assertion, 'precondition: the extraction produced an assertion');
+
+  // 删之前：导出里**确实**含这段原文（否则下面的"不含"是假阴性）。
+  assert.equal(JSON.stringify(state).includes(SECRET), true, 'precondition: the content is exportable before deletion');
+
+  await memory.remove(userContext(), assertion.id, { resource_revision: assertion.resourceRevision });
+
+  // 核心断言：导出不再含原文 —— 三条读路径之外，这是最容易漏的一条。
+  const exported = JSON.stringify(state);
+  assert.equal(exported.includes(SECRET), false, 'the deleted content must not survive in an export');
+  assert.equal(exported.includes('杭州西湖'), false, 'no fragment of the deleted content may survive');
+  assert.equal(state.rawEvents.length, 0, 'the source raw event must be removed with the memory');
+  assert.equal(state.assertions.length, 0);
+  assert.equal(state.assertionVersions.length, 0);
+});
+
+test('deleting one memory does not destroy a source event shared with a surviving one', async () => {
+  const { state, memory } = createHarness();
+  const SHARED = '同一条原始对话，提取出了两条记忆';
+  await memory.recordEvent(userContext(), { eventId: 'evt-shared-1', content: SHARED, eventRole: 'user' });
+  const rawEventId = state.rawEvents[0].id;
+  // 两条 assertion 共用同一个 rawEvent —— 真实形态：一次对话产出多条记忆。
+  const a = await memory.hold(userContext(), { content: '记忆 A', sensitivity: 'S0', sourceEventId: rawEventId });
+  const b = await memory.hold(userContext(), { content: '记忆 B', sensitivity: 'S0', sourceEventId: rawEventId });
+  assert.equal(state.rawEvents.length, 1);
+
+  await memory.remove(userContext(), a.memory.memoryId, { resource_revision: a.memory.resourceRevision });
+
+  // 删 A 不能误伤 B 的来源。
+  assert.equal(state.rawEvents.length, 1, 'a raw event still referenced by a live memory must not be purged');
+  assert.equal(state.rawEvents[0].content, SHARED);
+  assert.equal(state.assertions.some(item => item.id === b.memory.memoryId), true, 'memory B must survive');
+  assert.equal(state.assertionVersionSources.some(source => source.sourceId === rawEventId), true, 'B must keep its source link');
+  // B 仍然可读 —— 误伤会在这里现形。
+  const listed = memory.list(userContext(), { purpose: 'governance' });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].content, '记忆 B');
+
+  // 再把 B 也删掉：此时该事件已无人引用，才应该被清掉。
+  await memory.remove(userContext(), b.memory.memoryId, { resource_revision: state.assertions[0].resourceRevision });
+  assert.equal(state.rawEvents.length, 0, 'once no live memory references it, the source event must go');
+  assert.equal(JSON.stringify(state).includes(SHARED), false, 'and its content must not remain exportable');
+});
+
+test('deleting a memory leaves unrelated raw events untouched', async () => {
+  const { state, memory } = createHarness();
+  // 一条从未参与过任何记忆提取的裸事件 —— 归保留策略管，不该被记忆级删除顺手抹掉。
+  await memory.recordEvent(userContext(), { eventId: 'evt-unrelated', content: '与任何记忆都无关的对话', eventRole: 'user' });
+  await memory.recordEvent(userContext(), { eventId: 'evt-linked', content: '会被删掉的记忆内容', eventRole: 'user' });
+  const linkedRawEventId = state.rawEvents.find(event => event.eventId === 'evt-linked').id;
+  const held = await memory.hold(userContext(), { content: '会被删掉的记忆内容', sensitivity: 'S0', sourceEventId: linkedRawEventId });
+
+  await memory.remove(userContext(), held.memory.memoryId, { resource_revision: held.memory.resourceRevision });
+
+  assert.equal(state.rawEvents.length, 1, 'only the linked source event may be removed');
+  assert.equal(state.rawEvents[0].eventId, 'evt-unrelated', 'the unrelated event must survive');
+  assert.equal(JSON.stringify(state).includes('与任何记忆都无关的对话'), true);
+  assert.equal(JSON.stringify(state).includes('会被删掉的记忆内容'), false);
+});
+
+// ---------------------------------------------------------------------------
+// 13. 判别力自证：把 P0 修复回退，上一组测试必须变红
+// ---------------------------------------------------------------------------
+// 本项目已多次出现空测试（断言了副本、或断言了恒真的东西）。这条测试不靠
+// 声称，而是**在测试里把缺陷形态复现出来**并断言它确实是有害的：
+//   「只删 assertion、不删其来源 rawEvent」⇒ 导出必然仍含原文。
+// 如果哪天有人把 remove 的来源清理去掉，测试 12 会红；这条则锁住原因。
+test('regression guard: removing only the assertion would still leak the source content', async () => {
+  const state = createMemoryModuleState();
+  const memory = createMemoryModule(state, async () => {});
+  const LEAKY = '这句话在仅删 assertion 时会残留';
+  await memory.recordEvent(userContext(), { eventId: 'evt-leak-1', content: LEAKY, eventRole: 'user' });
+  const held = await memory.hold(userContext(), { content: LEAKY, sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+
+  // 复现"旧实现"：只把 assertion 从状态里摘掉，完全不碰 rawEvents。
+  state.assertions = state.assertions.filter(item => item.id !== held.memory.memoryId);
+  assert.equal(state.assertions.length, 0);
+  assert.equal(state.rawEvents.length, 1);
+  // 这正是当初 P0 的形态：列表看不见了，导出却拿得到原文。
+  assert.equal(JSON.stringify(state).includes(LEAKY), true,
+    'this is exactly the leak the fix prevents — if this ever becomes false, the guard is meaningless');
+
+  // 对照：修复后的真实 remove 走完，同样的内容必须消失。
+  const state2 = createMemoryModuleState();
+  const memory2 = createMemoryModule(state2, async () => {});
+  await memory2.recordEvent(userContext(), { eventId: 'evt-leak-2', content: LEAKY, eventRole: 'user' });
+  const held2 = await memory2.hold(userContext(), { content: LEAKY, sensitivity: 'S0', sourceEventId: state2.rawEvents[0].id });
+  await memory2.remove(userContext(), held2.memory.memoryId, { resource_revision: held2.memory.resourceRevision });
+  assert.equal(JSON.stringify(state2).includes(LEAKY), false, 'the real remove must purge the source event');
+});
+
+// ---------------------------------------------------------------------------
+// 14. id 语义守卫：sourceEventId 收的是 rawEvent.id，不是 recordEvent 的 eventId
+// ---------------------------------------------------------------------------
+// 这条缺陷真实发生过两次：修复代码与测试都误把 eventId 当成 rawEvent 的键，
+// 导致「按 id 反查来源」恒为空 → P0 修复静默失效。这里把语义钉死。
+test('sourceEventId is the raw event id, not the caller event id', async () => {
+  const { state, memory } = createHarness();
+  await memory.recordEvent(userContext(), { eventId: 'evt-semantics', content: '语义验证', eventRole: 'user' });
+  const rawEvent = state.rawEvents[0];
+  // 两个 id 必须是不同的东西；若哪天它们合并了，这条会提醒我们重新审视所有
+  // 按 sourceId 反查的代码路径。
+  assert.notEqual(rawEvent.id, rawEvent.eventId);
+  assert.equal(rawEvent.eventId, 'evt-semantics');
+
+  // 用 rawEvent.id 建立来源 → 必须记为 raw_event（这才是有来源的记忆）。
+  const linked = await memory.hold(userContext(), { content: '有来源', sensitivity: 'S0', sourceEventId: rawEvent.id });
+  const linkedVersionIds = state.assertionVersions.filter(v => v.assertionId === linked.memory.memoryId).map(v => v.id);
+  const linkedSource = state.assertionVersionSources.find(s => linkedVersionIds.includes(s.versionId));
+  assert.equal(linkedSource.sourceType, 'raw_event', 'passing rawEvent.id must link to the raw event');
+  assert.equal(linkedSource.sourceId, rawEvent.id);
+  // 删它必须连 rawEvent 一起清掉。
+  await memory.remove(userContext(), linked.memory.memoryId, { resource_revision: state.assertions.find(a => a.id === linked.memory.memoryId).resourceRevision });
+  assert.equal(state.rawEvents.length, 0, 'a raw_event-linked memory must take its source event with it');
+
+  // 反过来：不传 sourceEventId（explicit_request）**不**指向任何 rawEvent，
+  // 因此删除它不该动任何事件 —— 这是「用户显式要求记住、没有对应原文」的语义。
+  await memory.recordEvent(userContext(), { eventId: 'evt-bystander', content: '旁观事件', eventRole: 'user' });
+  const explicit = await memory.hold(userContext(), { content: '无来源的偏好', sensitivity: 'S0' });
+  const explicitVersionIds = state.assertionVersions.filter(v => v.assertionId === explicit.memory.memoryId).map(v => v.id);
+  const explicitSource = state.assertionVersionSources.find(s => explicitVersionIds.includes(s.versionId));
+  assert.equal(explicitSource.sourceType, 'explicit_request');
+  assert.equal(state.rawEvents.some(event => event.id === explicitSource.sourceId), false, 'explicit_request must not point at a raw event');
+  await memory.remove(userContext(), explicit.memory.memoryId, { resource_revision: state.assertions.find(a => a.id === explicit.memory.memoryId).resourceRevision });
+  assert.equal(state.rawEvents.length, 1, 'deleting an explicit_request memory must not remove unrelated events');
+  assert.equal(state.rawEvents[0].eventId, 'evt-bystander');
+});

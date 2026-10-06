@@ -8,7 +8,13 @@ const sliceKeys = {
   language: ['locale', 'fallbackLocale'],
   accessibility: ['highContrast', 'largeText', 'keyboardMode', 'focusVisible'],
   workspace: ['layoutMode', 'snapEnabled', 'autoArrangeEnabled', 'dockVisible'],
-  appearance: ['cornerRadius', 'panelOpacity']
+  appearance: ['cornerRadius', 'panelOpacity'],
+  // 首次引导的「已关闭」标记（2026-10-06 修）。
+  // 此前这里没有 onboarding 段，sanitizeWorkspacePreferences 会**静默丢弃**它
+  // ⇒ 前端 PATCH 回来 200 但 onboarding 不在响应里，GET 也是 null
+  // ⇒ main.jsx 读不到 guideDismissed，引导每次刷新都重弹。
+  // 这是「看起来存了、其实没存」的假状态，比报错更糟：没有任何信号。
+  onboarding: ['guideDismissed']
 };
 
 const stringLimits = {
