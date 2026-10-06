@@ -124,9 +124,11 @@ function MemoryRow({ item, index, busy, confirming, draft, editing, onStartEdit,
           {/* 第一击只进入确认态，绝不直接调用 onForget/onRevoke */}
           {canRevoke(item) && <button type="button" className="text-button" disabled={busy} onClick={() => onAskConfirm(item.id, 'revoke')}>撤销</button>}
           {canForget(item) && <button type="button" className="text-button danger-button" disabled={busy} onClick={() => onAskConfirm(item.id, 'forget')}>遗忘</button>}
-          {/* 终态条目没有可用动作：说清楚为什么，而不是留一片空白按钮区 */}
+          {/* 终态条目没有可用动作：说清楚为什么，而不是留一片空白按钮区。
+              注意**不要**在这里拼「已」前缀 —— memoryStatusLabel 的返回值
+              本身已含「已」（已撤销 / 已遗忘），拼了会渲染出「已已遗忘」。 */}
           {!canCorrect(item) && !canPin(item) && !canRevoke(item) && !canForget(item) && (
-            <span className="memory-inert-note">已{memoryStatusLabel(item.status)}，不可再修改</span>
+            <span className="memory-inert-note">{memoryStatusLabel(item.status)}，不可再修改</span>
           )}
         </div>
       )}
@@ -249,10 +251,17 @@ export default function MemorySovereigntyPanel({
 
       {(phase === 'list' || phase === 'loading') && groups.map(group => (
         <div className="memory-group" key={group.scope}>
-          <div className="section-heading memory-group-heading">
-            <span>{group.label}</span>
-            <span className="count-label">{group.items.length} 条</span>
-          </div>
+          {/* 只在**真能区分**作用域时才渲染分组头。
+              治理路由出于安全裁决不发 scopeType（见 memory-panel-utils.js 的
+              groupMemoriesByScope 注释），此时所有条目同属一组，标签恒为
+              「作用范围未知」—— 一个永不变化的分组头是假信息，会让人以为
+              它在反映真实分类。所以这里退化为「不分组」，只列出条目。 */}
+          {group.distinguishable && (
+            <div className="section-heading memory-group-heading">
+              <span>{group.label}</span>
+              <span className="count-label">{group.items.length} 条</span>
+            </div>
+          )}
           {group.items.map((item, index) => {
             const id = memoryKey(item, index);
             return (

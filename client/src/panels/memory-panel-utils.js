@@ -22,14 +22,19 @@ const STATUS_LABELS = {
   forgotten: '已遗忘'
 };
 
-// 记忆类型 → 中文标签。沿用 main.jsx 既有 inspector 的既有措辞（关系/事件），
+// 记忆类型 → 中文标签。
+//
+// 键来自**实测**（跑真实 memory-module 的 hold + list 得到 memoryType 取值域），
+// 不是照字段名猜的：fact / preference / relationship / current_state /
+// life_event / medical。沿用 main.jsx 既有 inspector 的措辞（关系/事件），
 // 不新造词，避免同一份数据在两处显示成两个名字。
 const TYPE_LABELS = {
-  relationship: '关系',
-  event: '事件',
-  preference: '偏好',
   fact: '事实',
-  episode: '片段'
+  preference: '偏好',
+  relationship: '关系',
+  current_state: '当前状态',
+  life_event: '生活事件',
+  medical: '健康'
 };
 
 const asArray = value => (Array.isArray(value) ? value : []);
@@ -79,11 +84,21 @@ export function memoryStatusLabel(status) {
   return ownString(STATUS_LABELS, status) || '未知状态';
 }
 
-// 类型标签。item 本身可能是 null/undefined（后端数组里混进空槽），
-// 所以先自保再取字段。未知类型**原样透出**是可接受的（类型名来自后端数据，
-// 显示真名比显示「未知」更有用），但必须挡掉原型链键 —— 否则会透出一个函数。
+// 类型标签。
+//
+// **字段名必须是 `memoryType`**（不是 `type`）：治理路由
+// server/memory-governance-routes.js 的 `listItem()` 明确发的是
+// `memoryType: item.memoryType`，整个返回体里**没有** `type` 字段。
+// 曾经这里读 `item.type` ⇒ 永远取不到 ⇒ 一律落到「记忆」兜底，
+// 整张 TYPE_LABELS 沦为死代码（真实 UI 实测渲染出「记忆」而不是「事实」）。
+// 实测（跑真实 memory-module 的 hold + list）取值域为：
+//   fact / preference / relationship / current_state / life_event / medical
+// 下面表的键就是照这个实测集合写的，不是照旧的 `item.type` 猜的。
+//
+// 未知类型**原样透出**是可接受的（类型名来自后端，显示真名比显示「未知」有用），
+// 但必须挡掉原型链键 —— 否则会透出一个原生函数。
 export function memoryTypeLabel(item) {
-  const type = item && typeof item === 'object' ? item.type : null;
+  const type = item && typeof item === 'object' ? item.memoryType : null;
   if (typeof type !== 'string' || !type) return '记忆';
   return ownString(TYPE_LABELS, type) || type;
 }
@@ -197,25 +212,44 @@ const SCOPE_LABELS = {
   global: '全局'
 };
 
+// 无作用域信息时的占位哨兵。**不要**用 'relationship' 当默认值 ——
+// 那会把「拿不到 scopeType」伪装成「这条属于这段关系」，是凭空捏造的分类。
+export const UNKNOWN_SCOPE = '__unknown__';
+
 export function memoryScopeLabel(scopeType) {
-  if (typeof scopeType !== 'string' || !scopeType) return '这段关系';
+  if (scopeType === UNKNOWN_SCOPE) return '作用范围未知';
+  if (typeof scopeType !== 'string' || !scopeType) return '作用范围未知';
   // 同 memoryStatusLabel：必须查「自有」键，否则 'constructor' 会透出一个函数。
   return ownString(SCOPE_LABELS, scopeType) || scopeType;
 }
 
-// 按作用域分组。返回 [{scope, label, items}]，组内已排序，组间按
-// 「有内容的组优先 + 名称稳定」排序，保证同样输入永远同样输出。
+// 按作用域分组。返回 [{scope, label, items, distinguishable}]，组内已排序，
+// 组间按「有内容的组优先 + 名称稳定」排序，保证同样输入永远同样输出。
+//
+// **`distinguishable` 是给界面用的诚实标记。**
+// 背景：治理路由出于安全裁决**故意不发** `scopeType`（它会带出
+// relationshipAgentId，属跨主体内部字段 —— 见 server/memory-governance-routes.js
+// 的 listItem 注释）。于是所有条目都落到 UNKNOWN_SCOPE。
+//
+// 此时**绝不能渲染一个恒为「这段关系」的分组头**：一个永远不变的分组标签是
+// **假信息**，比不分组更糟 —— 用户会以为它在反映真实分类，进而误判「我的记忆
+// 只属于这段关系」。所以当所有条目都无作用域信息时，调用方应退化为不分组
+// （distinguishable=false），把「分类未知」如实呈现为「没有分类」。
+//
+// 只有当**至少两个互不相同的**作用域同时出现时，分组头才携带信息量。
 export function groupMemoriesByScope(items) {
   const sorted = sortMemories(items);
   const buckets = new Map();
   sorted.forEach(item => {
-    const scope = typeof item.scopeType === 'string' && item.scopeType ? item.scopeType : 'relationship';
+    const scope = typeof item.scopeType === 'string' && item.scopeType ? item.scopeType : UNKNOWN_SCOPE;
     if (!buckets.has(scope)) buckets.set(scope, []);
     buckets.get(scope).push(item);
   });
-  return [...buckets.entries()]
-    .map(([scope, groupItems]) => ({ scope, label: memoryScopeLabel(scope), items: groupItems }))
+  const groups = [...buckets.entries()]
+    .map(([scope, groupItems]) => ({ scope, label: memoryScopeLabel(scope === UNKNOWN_SCOPE ? '' : scope), items: groupItems }))
     .sort((a, b) => (b.items.length - a.items.length) || (a.scope < b.scope ? -1 : a.scope > b.scope ? 1 : 0));
+  const distinguishable = groups.length > 1;
+  return groups.map(group => ({ ...group, distinguishable }));
 }
 
 // 可见性摘要，给 section-heading 用：诚实反映「被截断了多少」。

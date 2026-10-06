@@ -25,10 +25,11 @@ import {
   isPinned,
   validateSummaryDraft,
   formatMemoryTime,
-  panelPhase
+  panelPhase,
+  UNKNOWN_SCOPE
 } from './memory-panel-utils.js';
 
-const memory = (over = {}) => ({ id: 'm1', summary: '一起看过落日', status: 'active', confidence: 0.8, createdAt: '2026-01-02T03:04:05.000Z', source: '对话', scopeType: 'relationship', type: 'event', ...over });
+const memory = (over = {}) => ({ id: 'm1', summary: '一起看过落日', status: 'active', confidence: 0.8, createdAt: '2026-01-02T03:04:05.000Z', source: '对话', scopeType: 'relationship', memoryType: 'fact', ...over });
 
 // ---------------------------------------------------------------- 空数组 / 缺失
 
@@ -56,10 +57,10 @@ test('groupMemoriesByScope：空数组返回空分组', () => {
 // ---------------------------------------------------------------- 缺字段
 
 test('缺字段的条目不会崩，且每个取值函数都返回降级值', () => {
-  const bare = { id: 'bare' }; // 没有 status / confidence / type / scopeType / createdAt
+  const bare = { id: 'bare' }; // 没有 status / confidence / memoryType / scopeType / createdAt
   assert.equal(memoryStatusLabel(bare.status), '未知状态');
   assert.equal(memoryTypeLabel(bare), '记忆');
-  assert.equal(memoryScopeLabel(bare.scopeType), '这段关系');
+  assert.equal(memoryScopeLabel(bare.scopeType), '作用范围未知');
   assert.equal(confidencePercent(bare), null);
   assert.equal(formatMemoryTime(bare.createdAt), '时间未知');
   assert.equal(normalizeStatus(bare.status), 'active');
@@ -174,11 +175,14 @@ test('groupMemoriesByScope：按作用域分组，组内已排序，组间按数
   assert.equal(groups[1].label, '只属于我');
 });
 
-test('groupMemoriesByScope：缺 scopeType 归入默认组，未知 scopeType 原样成组', () => {
+test('groupMemoriesByScope：缺 scopeType 归入「作用范围未知」组，未知 scopeType 原样成组', () => {
+  // 注意：缺 scopeType 曾归入 'relationship' 默认组 —— 那是**假信息**（把「不知道」
+  // 伪装成「属于这段关系」），已改为显式的 UNKNOWN_SCOPE 哨兵。
   const groups = groupMemoriesByScope([memory({ id: 'a', scopeType: undefined }), memory({ id: 'b', scopeType: 'custom-scope' })]);
   const scopes = groups.map(g => g.scope).sort();
-  assert.deepEqual(scopes, ['custom-scope', 'relationship']);
+  assert.deepEqual(scopes, [UNKNOWN_SCOPE, 'custom-scope']);
   assert.equal(groups.find(g => g.scope === 'custom-scope').label, 'custom-scope');
+  assert.equal(groups.find(g => g.scope === UNKNOWN_SCOPE).label, '作用范围未知');
 });
 
 test('groupMemoriesByScope：相同输入永远得到相同输出（组间顺序稳定）', () => {
@@ -345,12 +349,12 @@ test('【增量】三个标签函数的返回值永远是可渲染的字符串�
 test('【增量】正常标签未被上面的加固破坏（防过度修复）', () => {
   assert.equal(memoryStatusLabel('active'), '生效中');
   assert.equal(memoryStatusLabel('pinned'), '已钉住');
-  assert.equal(memoryTypeLabel({ type: 'relationship' }), '关系');
-  assert.equal(memoryTypeLabel({ type: 'event' }), '事件');
+  assert.equal(memoryTypeLabel({ memoryType: 'relationship' }), '关系');
+  assert.equal(memoryTypeLabel({ memoryType: 'fact' }), '事实');
   assert.equal(memoryScopeLabel('user'), '只属于我');
   assert.equal(memoryScopeLabel('relationship'), '这段关系');
   // 未知但**合法**的字符串仍应原样透出（类型名来自后端，显示真名比显示「未知」有用）
-  assert.equal(memoryTypeLabel({ type: 'custom-xyz' }), 'custom-xyz');
+  assert.equal(memoryTypeLabel({ memoryType: 'custom-xyz' }), 'custom-xyz');
   assert.equal(memoryScopeLabel('custom-abc'), 'custom-abc');
 });
 
@@ -376,4 +380,85 @@ test('【增量】validateSummaryDraft：maxLength 为脏值时不得静默放�
   }
   assert.equal(validateSummaryDraft('abc', 5).ok, true);
   assert.equal(validateSummaryDraft('abcdef', 5).ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// T6 回归防线（integrator 真实浏览器实测发现，captain 独立复现确认）
+//
+// 这两条断言的作用是**回归时立刻变红**：修好前必须红、修好后必须绿。
+// 它们守护的是两个会直接显示给用户的缺陷，不是内部实现细节。
+// ---------------------------------------------------------------------------
+
+test('【回归】memoryTypeLabel 必须读 memoryType 字段（治理路由的字段名）', () => {
+  // 缺陷：曾读 `item.type`，而 server/memory-governance-routes.js 的 listItem()
+  // 发的是 `memoryType`，返回体里根本没有 `type` 字段 ⇒ 一律落到「记忆」兜底，
+  // 整张 TYPE_LABELS 沦为死代码。真实浏览器实测渲染出「记忆」而不是「事实」。
+  //
+  // 取值域是**实测**得来的（跑真实 memory-module 的 hold + list），不是猜的。
+  const actual = memoryTypeLabel({ memoryType: 'fact' });
+  assert.equal(actual, '事实', '读不到 memoryType 就会退化成「记忆」——这正是原缺陷');
+
+  // 全值域必须命中中文标签（任何一个落到原始英文名都说明表漏了键）
+  const expected = {
+    fact: '事实',
+    preference: '偏好',
+    relationship: '关系',
+    current_state: '当前状态',
+    life_event: '生活事件',
+    medical: '健康'
+  };
+  for (const [type, label] of Object.entries(expected)) {
+    assert.equal(memoryTypeLabel({ memoryType: type }), label, `memoryType=${type} 应显示「${label}」`);
+  }
+
+  // 反向自检：确认真的在读 memoryType 而不是碰巧读到了别的字段。
+  // 若实现退回 item.type，下面这条会失败 —— 这就是回归点。
+  assert.equal(memoryTypeLabel({ type: 'fact' }), '记忆', '不应再从 type 字段取值');
+  assert.notEqual(memoryTypeLabel({ memoryType: 'fact' }), '记忆');
+});
+
+test('【回归】终态说明不得渲染出「已已遗忘」/「已已撤销」', () => {
+  // 缺陷：组件里写了 `已{memoryStatusLabel(status)}`，而 memoryStatusLabel
+  // 的返回值本身已含「已」⇒ 拼接结果「已已遗忘」（revoked 同理）。
+  // 这里断言拼接规则本身：标签已经含「已」，调用方不得再加前缀。
+  for (const [status, label] of [['forgotten', '已遗忘'], ['revoked', '已撤销']]) {
+    const rendered = `${memoryStatusLabel(status)}，不可再修改`;
+    assert.equal(rendered, `${label}，不可再修改`);
+    assert.ok(!rendered.includes('已已'), `不得出现「已已」重复前缀：${rendered}`);
+  }
+  // 正向：原缺陷的渲染结果就是这个字符串。写死它，回归时会立刻变红。
+  assert.equal(`已${memoryStatusLabel('forgotten')}`, '已已遗忘', '这是原缺陷的渲染结果，不得回归');
+});
+
+test('【回归】缺少 scopeType 时分组头不得伪造「这段关系」', () => {
+  // 背景：治理路由**故意不发** scopeType（会带出 relationshipAgentId，属跨主体
+  // 内部字段）。原实现把缺失值默认成 'relationship' ⇒ 分组头恒为「这段关系」，
+  // 是一个永不变化的**假信息**，会让用户误判记忆的归属范围。
+  const noScope = [
+    { id: 'a', memoryType: 'fact', status: 'active', createdAt: '2026-01-01T00:00:00Z' },
+    { id: 'b', memoryType: 'fact', status: 'active', createdAt: '2026-01-02T00:00:00Z' }
+  ];
+  const groups = groupMemoriesByScope(noScope);
+  assert.equal(groups.length, 1, '无作用域信息时只应有一组');
+  assert.equal(groups[0].distinguishable, false, '无法区分时必须标记为不可区分 ⇒ 界面不渲染分组头');
+  assert.notEqual(groups[0].label, '这段关系', '不得伪造「这段关系」');
+
+  // 真能区分时才允许渲染分组头
+  const withScope = groupMemoriesByScope([
+    { ...noScope[0], scopeType: 'user' },
+    { ...noScope[1], scopeType: 'relationship' }
+  ]);
+  assert.equal(withScope.length, 2);
+  assert.ok(withScope.every(g => g.distinguishable === true), '两个不同作用域 ⇒ 可区分');
+});
+
+test('【回归】memoryScopeLabel 对缺失作用域返回「作用范围未知」而非默认归属', () => {
+  assert.equal(memoryScopeLabel(undefined), '作用范围未知');
+  assert.equal(memoryScopeLabel(null), '作用范围未知');
+  assert.equal(memoryScopeLabel(''), '作用范围未知');
+  assert.notEqual(memoryScopeLabel(''), '这段关系');
+  // 已知作用域仍正常
+  assert.equal(memoryScopeLabel('user'), '只属于我');
+  assert.equal(memoryScopeLabel('relationship'), '这段关系');
+  assert.equal(memoryScopeLabel(UNKNOWN_SCOPE), '作用范围未知');
 });
