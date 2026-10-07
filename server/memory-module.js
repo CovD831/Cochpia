@@ -1707,7 +1707,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const revokeEpoch = state.redactionEpochs[userKey(context)] || 0;
     redactAssertionContent([assertion.id]);
     state.indexDocuments = (state.indexDocuments || []).filter(document => document.sourceId !== assertion.id);
-    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds)) {
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { keepAssertionIds: [assertion.id] })) {
       state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'revoke', redactionEpoch: revokeEpoch, createdAt: nowIso() });
     }
     audit(state, context, 'memory_revoked', { memoryId: assertion.id });
@@ -1733,7 +1733,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const versionIds = state.assertionVersions.filter(item => item.assertionId === assertion.id).map(item => item.id);
     cleanDerivedForDeletion({ assertionIds: [assertion.id], versionIds, preserveRedactedOutbox: true });
     invalidateMutationRecords({ resourceType: 'memory', resourceIds: [assertion.id] });
-    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds)) {
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { keepAssertionIds: [assertion.id] })) {
       state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
     }
     state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'memory', targetId: assertion.id, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
@@ -1840,7 +1840,7 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     state.indexDocuments = (state.indexDocuments || []).filter(item => !(item.scopeType === 'relationship' && item.relationshipAgentId === relationshipAgentId));
     cleanDerivedForDeletion({ assertionIds, versionIds, preserveRedactedOutbox: true });
     const epoch = bumpEpoch(context);
-    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds)) {
+    for (const sourceEventId of purgeOrphanedSourceEvents(candidateSourceEventIds, { keepAssertionIds: assertionIds })) {
       state.tombstones.push({ id: randomUUID(), tenantId: context.tenantId, userId: context.subjectUserId, targetType: 'source_event', targetId: sourceEventId, action: 'forget', redactionEpoch: epoch, createdAt: nowIso() });
     }
     const operation = { id: randomUUID(), tenantId: context.tenantId, subjectUserId: context.subjectUserId, targetType: 'relationship', targetId: relationshipAgentId, requestedScope: { relationshipAgentId }, action: 'forget', status: 'completed', requestedBy: context.actorId, requestedAt: nowIso(), canonicalHiddenAt: nowIso(), completedAt: nowIso(), redactionEpoch: epoch, resourceRevision: 1, lastErrorCode: null };
@@ -1947,6 +1947,46 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return redacted;
   };
 
+  // 抹掉一批 currentStates 的正文（`value` 是 S1 会话态的原文）。
+  //
+  // 同族缺口（第四轮）：sweepRetention 把 currentState 置 expired 时只改状态、
+  // 不抹 value ⇒ /api/export 仍可读回。判据与其它 redaction 一致：
+  // **只有终结态才抹**；active 的 currentState 正文必须保留。
+  // 调用方负责只传已终结的 id（见 sweepRetention），本函数不做状态判断，
+  // 以免出现"两处各判一次、判据漂移"。
+  const redactCurrentStateContent = currentStateIds => {
+    const ids = new Set(currentStateIds);
+    if (!ids.size) return 0;
+    let redacted = 0;
+    for (const current of state.currentStates) {
+      if (!ids.has(current.id)) continue;
+      if (typeof current.value === 'string' && current.value.length) redacted += 1;
+      current.value = null;
+      current.redactedAt = nowIso();
+    }
+    return redacted;
+  };
+
+  // 抹掉一批 confirmations 的正文（`proposedContent` 是待确认的原文）。
+  //
+  // 同族缺口（第四轮）：sweepRetention / reject 把 confirmation 置 expired /
+  // rejected 时只改状态、不抹正文 ⇒ export 仍可读回。
+  // 同样只由调用方传已终结的 id；pending 的 confirmation 正文必须保留。
+  const redactConfirmationContent = confirmationIds => {
+    const ids = new Set(confirmationIds);
+    if (!ids.size) return 0;
+    let redacted = 0;
+    for (const confirmation of state.confirmations) {
+      if (!ids.has(confirmation.id)) continue;
+      if (typeof confirmation.proposedContent === 'string' && confirmation.proposedContent.length) redacted += 1;
+      confirmation.proposedContent = null;
+      // structuredData 是正文的另一半（与 assertionVersions 的处理一致）。
+      confirmation.structuredData = {};
+      confirmation.redactedAt = nowIso();
+    }
+    return redacted;
+  };
+
   // 取一条 assertion 引用过的原始事件 id（必须在裁剪 source 表之前调用）。
   // 注意 sourceId 存的就是 rawEvents[].id（内部 UUID），不是 eventId ——
   // 依据 createCandidate(): `rawEvents.find(event => event.id === sourceEventId)`。
@@ -1969,26 +2009,32 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   // ── 终结态判据（第三轮审计 · 两处修复共用的同一定义的两面）────────────────────
   //
   // MEMORY_STATUSES 有 8 个取值（candidate / pending_confirmation / active /
-  // rejected / superseded / expired / revoked / forgotten），必须分两类看：
+  // rejected / superseded / expired / revoked / forgotten），分为两类：
   //
-  //   终结态（正文不该再可见，用户也不该再看到它）：
-  //     forgotten / revoked / expired / rejected / superseded
+  //   终结态（正文不该再可见）：
+  //     forgotten / revoked / expired / rejected
   //   未终结态（用户仍应看到它，正文仍应可读）：
-  //     candidate / pending_confirmation / active
+  //     candidate / pending_confirmation / active / superseded
+  //
+  // ⚠️ `superseded` 属**未终结**（第四轮 captain 裁决 B，2026-10-07）：
+  //   它的语义是「**被改写**」而不是「被删除」—— 依据三处代码事实：
+  //     · correct 的入口就要求 `assertion.status === 'active'`（:1606）⇒ 它是更新操作；
+  //     · correct 专门为旧版本保留时间区间 `oldVersion.validTo = ...`（:1645）⇒ R-009 的改写历史；
+  //     · 读视图 get() 只返回 currentVersionId（:348）⇒ 旧版本本就不干扰用户看到的当前值。
+  //   用户从未表达"删掉旧值"的意图，抹掉它**破坏历史却换不来隐私收益**。
+  //
+  // 移出 TERMINAL 的**双向后果**（两处判据都要看，别只改一处）：
+  //   · 清理判据（本文件各处 redaction）：superseded 不再被抹正文 ✅ 符合裁决 B；
+  //   · 引用判据（purgeOrphanedSourceEvents）：superseded 仍算"持有者"
+  //     ⇒ 其来源事件不会被清 ✅ 可接受：旧版本的来源理应随历史一起保留。
   //
   // 用"终结态集合"表达而**不是**把未终结态写成白名单 —— 后者在将来新增状态时
   // 会默认把新状态当成"已终结"而误删；前者默认保守（新状态视为未终结=保留）。
-  //
-  // ⚠️ 这一个定义供**两处方向相反**的判据共用，改动时必须同时考虑两侧：
-  //   · purgeOrphanedSourceEvents 的 stillReferenced —— 「事件是否还有未终结的持有者」
-  //     ⇒ 未终结（含 candidate）仍算持有 ⇒ 事件**不清**（P1-B：防误删候选的来源）
-  //   · sweepRetention 的清理 —— 「过期后正文是否必须抹掉」
-  //     ⇒ 终结态（含 expired）必须抹 ⇒ 用 !isTerminalStatus 判断"到期即转终结"
-  // 两侧恰好是同一条线的两边；只改一处必然打破另一处。
-  const TERMINAL_STATUSES = Object.freeze(['forgotten', 'revoked', 'expired', 'rejected', 'superseded']);
+  const TERMINAL_STATUSES = Object.freeze(['forgotten', 'revoked', 'expired', 'rejected']);
   const isTerminalStatus = status => TERMINAL_STATUSES.includes(status);
 
-  const purgeOrphanedSourceEvents = candidateRawEventIds => {
+
+  const purgeOrphanedSourceEvents = (candidateRawEventIds, { keepAssertionIds = [] } = {}) => {
     if (!candidateRawEventIds.length) return [];
     // 只统计"还有未终结持有者"的 raw_event 引用。candidate 属未终结 ⇒ 算持有。
     const stillReferenced = new Set(state.assertionVersionSources
@@ -2004,7 +2050,9 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       .map(source => source.sourceId));
     const orphaned = candidateRawEventIds.filter(id => !stillReferenced.has(id));
     if (!orphaned.length) return [];
-    physicallyRemoveSourceEvents(orphaned);
+    // 关键：把调用方要保住的行透传下去。forget/revoke 刚把那条 assertion 翻成终结态，
+    // 于是它不再"持有"该事件 ⇒ 事件成孤儿 ⇒ 若不保住，级联会把**它自己**删掉。
+    physicallyRemoveSourceEvents(orphaned, { keepAssertionIds });
     return orphaned;
   };
   // =====================================================================================
@@ -2100,18 +2148,6 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
 
   // 物理删除来源事件。
   //
-  // cascadeUnterminal（默认 false）：是否连带删除**未终结**的 orphan assertion
-  // （candidate / pending_confirmation / active）。
-  //
-  // 两种调用方语义不同，必须显式区分（P1-B 的教训）：
-  //   · 显式物理删除（deleteSourceEvent / deleteSession）：用户就是在删这条事件，
-  //     级联删掉挂在它上面的记忆是**预期行为** ⇒ 传 cascadeUnterminal: true。
-  //   · 顺带清理（forget/revoke/sweepRetention 清孤儿事件）：只是"没人再引用了"，
-  //     此时若把未终结的 candidate 一起抹掉，治理列表会凭空少行 ⇒ 默认 false。
-  // 之前把级联无条件改成"只删终结态"，直接破坏了 deleteSourceEvent 的既有契约
-  // （memory-module.test.js 断言它必须清空 source-linked versions），已回退为显式参数。
-  // 物理删除来源事件。
-  //
   // cascadeUnterminal（默认 false）：是否连带删除**未终结**的 orphan assertion。
   //
   // 三种调用方语义不同，必须显式区分（P1-B 的教训）：
@@ -2128,8 +2164,40 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   const PENDING_STATUSES = Object.freeze(['candidate', 'pending_confirmation']);
   const isPendingStatus = status => PENDING_STATUSES.includes(status);
 
-  const physicallyRemoveSourceEvents = (sourceEventIds, { cascadeUnterminal = false } = {}) => {
+  // 「用户的决定痕迹」——由用户**显式** forget / revoke 产生的 assertion 行。
+  //
+  // 为什么要单独识别（P1-B 第二轮，captain 裁决 ii）：
+  // 第一版修法只保护"当前正在处理的那一条"（调用方传 keepAssertionIds），
+  // 但多条记忆**共用同一来源事件**时，forget 最后一条会让事件变孤儿，
+  // 级联把**先前所有已遗忘的墓碑行**一起清掉 —— 3 行塌成 1 行。
+  // 根因是"靠调用方每次正确传 keep 列表"这种约定太脆；改用**语义判据**：
+  // 用户显式做过的决定，不该被"清理来源事件"这个附带动作抹掉。
+  //
+  // 判据来源是模块自己的记录：forget/revoke 都会写 `tombstones`
+  // （targetType:'memory' + action:'forget'|'revoke'），这正是"用户决定"的
+  // 权威日志 —— 复用它而不是新造一套标记。
+  //
+  // ⚠️ 只认 forget/revoke（用户动作）。delete 的墓碑不在此列：物理删除本就
+  // 不该留行；自动过期（expired）也不写 memory 墓碑，故不受保护。
+  const userDecisionTombstoneMemoryIds = () => new Set(state.tombstones
+    .filter(tombstone => tombstone.targetType === 'memory' && (tombstone.action === 'forget' || tombstone.action === 'revoke'))
+    .map(tombstone => tombstone.targetId));
+
+  // keepAssertionIds：这些 assertion **即使已成终结态也不得被级联删除**。
+  //
+  // 为什么需要（第四轮 P1-B，机制比报告的更一般）：
+  // forget/revoke 把 assertion 翻成终结态后，它自己就不再"持有"来源事件 ⇒ 事件成孤儿
+  // ⇒ 调用 physicallyRemoveSourceEvents ⇒ 级联规则看到"终结态 orphan" ⇒ **把它自己删掉**。
+  // 结果是用户对一条**唯一持有者的记忆**执行 forget 时，整行凭空消失（rows=0），
+  // 面板既看不到墓碑行、也无从知道"我做过这个决定" —— 与"保留状态痕迹"的语义矛盾。
+  //
+  // ⚠️ 这不是 candidate 专属：实测 active 同样中招（只要它是该事件的唯一持有者）。
+  // 调用方必须把自己刚翻转的那条 assertion 传进来，保住它的墓碑行。
+  const physicallyRemoveSourceEvents = (sourceEventIds, { cascadeUnterminal = false, keepAssertionIds = [] } = {}) => {
     const rawIds = new Set(sourceEventIds);
+    const keep = new Set(keepAssertionIds);
+    // 用户的决定痕迹（forget/revoke 墓碑）—— 语义保护，见 userDecisionTombstoneMemoryIds。
+    const decisionTombstoneIds = userDecisionTombstoneMemoryIds();
     const removedEventKeys = new Set(state.rawEvents
       .filter(event => rawIds.has(event.id))
       .map(event => `${event.eventId}:${event.sourceRevision}`));
@@ -2149,10 +2217,16 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       .filter(version => orphanVersionIds.has(version.id))
       .map(version => version.assertionId)
       .filter(assertionId => {
+        // ① 调用方点名要保住的行（forget/revoke 刚翻转的那条）永不被级联删除。
+        if (keep.has(assertionId)) return false;
         const assertion = state.assertions.find(item => item.id === assertionId);
         // 找不到宿主行 ⇒ 视为已终结（行都没了，无内容可言）。
         if (!assertion) return true;
-        // 待决态永远不级联删除 —— 用户尚未决定，不能因其来源事件到期而消失。
+        // ② 用户的决定痕迹永不被级联删除 —— 这是**语义判据**，不依赖调用方传参。
+        //    多条记忆共用来源事件时，forget 最后一条会使事件成孤儿，若不在这里
+        //    拦住，先前所有墓碑行会被一起清掉（3 行塌 1 行）。
+        if (decisionTombstoneIds.has(assertionId)) return false;
+        // ③ 待决态永远不级联删除 —— 用户尚未决定，不能因其来源事件到期而消失。
         if (isPendingStatus(assertion.status)) return false;
         if (cascadeUnterminal) return true;
         return isTerminalStatus(assertion.status);
@@ -2238,6 +2312,11 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       const assertion = state.assertions.find(item => item.id === confirmation.candidateAssertionId);
       if (assertion && assertion.status === 'pending_confirmation') expirationAssertionIds.add(assertion.id);
     }
+    // 同族缺口（第四轮）：confirmation 置 expired 属**终结态**，其 proposedContent
+    // 必须一并抹掉，否则 /api/export 仍可读回待确认原文。
+    // 只传已过期的那些 id —— pending 的 confirmation 正文仍须保留。
+    // 注意：这里必须**包含**因过期而终结的全部 confirmation，故用 expiredConfirmations。
+    redactConfirmationContent(expiredConfirmations.map(item => item.id));
     invalidateMutationRecords({ resourceType: 'confirmation', resourceIds: expiredConfirmations.map(item => item.id) });
     for (const assertion of state.assertions.filter(item => expirationAssertionIds.has(item.id) && item.status === 'pending_confirmation')) {
       assertion.status = 'expired';
@@ -2278,6 +2357,10 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       current.updatedAt = at;
       stats.currentStates += 1;
     }
+    // 同族缺口（第四轮）：currentState 置 expired 属**终结态**，其 value（S1 会话
+    // 态原文）必须一并抹掉，否则 /api/export 仍可读回。
+    // 只传刚过期的这些 id —— 仍 active 的 currentState 正文必须保留。
+    redactCurrentStateContent([...expiredCurrentStateIds]);
 
     const beforeMentionCooldownCount = state.mentionCooldowns.length;
     state.mentionCooldowns = state.mentionCooldowns.filter(record => !record.cooldownUntil || new Date(record.cooldownUntil).getTime() > timestamp);
@@ -2477,6 +2560,12 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       assertion.updatedAt = nowIso();
       bumpSequence();
     }
+    // 同族缺口（第四轮普查）：confirmation 一旦离开 pending 就是终结态，
+    // 其 proposedContent 必须抹掉 —— 否则用户**明确拒绝**过的内容仍能从
+    // /api/export 读回。confirm 与 reject 两条分支都要处理。
+    redactConfirmationContent([confirmation.id]);
+    // reject 时被否决的候选版本也不该保留正文（用户拒绝了它）。
+    if (decision !== 'confirm') redactVersionContent([candidateVersion.id]);
     audit(state, context, `memory_${decision}d`, { memoryId: assertion.id, confirmationId: confirmation.id, directQueryPolicy: assertion.directQueryPolicy });
     projectActiveAssertion(context, assertion);
     await persist();

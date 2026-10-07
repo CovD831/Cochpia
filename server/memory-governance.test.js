@@ -1048,3 +1048,325 @@ test('a pending candidate does not block its orphaned source event from being cl
   assert.equal(state.rawEvents.length, 0, 'the event must still be cleared');
   assert.equal(JSON.stringify(state).includes('孤儿事件正文'), false, 'and its plaintext must not remain');
 });
+
+// ---------------------------------------------------------------------------
+// 25. 同族缺口普查（第四轮）：**置终结态就必须抹正文** —— 全部字段 × 全部状态变更点
+// ---------------------------------------------------------------------------
+// 本阶段同一形态出现了 5 次（改状态、不抹正文）。逐个报修必然漏，
+// 所以这里做成**表驱动穷尽**：每条会置终结态的路径 × 它携带的正文字段。
+//
+// 已知正文字段：assertionVersions[].content / rawEvents[].content /
+//               currentStates[].value / confirmations[].proposedContent
+// 判据与 isTerminalStatus 同一区分：终态 ⇒ 抹；未终结 ⇒ 必须保留（第 26 条反向验证）。
+
+const TERMINAL_ERASURE_CASES = [
+  ['forget → assertion', async (memory, state) => {
+    const held = await memory.hold(userContext(), { content: '终态原文-forget', sensitivity: 'S0' });
+    await memory.forget(userContext(), held.memory.memoryId, { resource_revision: 1 });
+  }, '终态原文-forget'],
+  ['revoke → assertion', async (memory, state) => {
+    const held = await memory.hold(userContext(), { content: '终态原文-revoke', sensitivity: 'S0' });
+    await memory.revoke(userContext(), held.memory.memoryId, { resource_revision: 1 });
+  }, '终态原文-revoke'],
+  ['remove → assertion', async (memory, state) => {
+    const held = await memory.hold(userContext(), { content: '终态原文-remove', sensitivity: 'S0' });
+    await memory.remove(userContext(), held.memory.memoryId, { resource_revision: 1 });
+  }, '终态原文-remove'],
+  ['reject → rejected (confirmation + version)', async (memory, state) => {
+    await memory.hold(userContext(), { content: '终态原文-reject', sensitivity: 'S2' });
+    const confirmation = state.confirmations[0];
+    await memory.reject(userContext(), confirmation.id, { resource_revision: confirmation.resourceRevision });
+  }, '终态原文-reject'],
+  ['sweep → expired (assertion)', async (memory, state) => {
+    const held = await memory.hold(userContext(), { content: '终态原文-expire-assertion', sensitivity: 'S0' });
+    state.assertions.find(item => item.id === held.memory.memoryId).expiresAt = new Date(Date.now() - 1000).toISOString();
+    await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+  }, '终态原文-expire-assertion'],
+  ['sweep → expired (currentState)', async (memory, state) => {
+    const session = await memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 600000).toISOString() });
+    await memory.writeCurrentState({ ...userContext(), sessionId: session.id }, { value: '终态原文-cstate', expires_at: new Date(Date.now() + 60000).toISOString() });
+    state.currentStates[0].expiresAt = new Date(Date.now() - 1000).toISOString();
+    await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+  }, '终态原文-cstate'],
+  ['sweep → expired (confirmation)', async (memory, state) => {
+    await memory.hold(userContext(), { content: '终态原文-conf', sensitivity: 'S2' });
+    state.confirmations[0].expiresAt = new Date(Date.now() - 1000).toISOString();
+    await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+  }, '终态原文-conf'],
+  ['sweep → expired (rawEvent)', async (memory, state) => {
+    await memory.recordEvent(userContext(), { eventId: 'evt-terminal-raw', content: '终态原文-rawevent', eventRole: 'user' });
+    state.rawEvents[0].deleteAfter = new Date(Date.now() - 1000).toISOString();
+    await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+  }, '终态原文-rawevent']
+];
+
+for (const [label, run, marker] of TERMINAL_ERASURE_CASES) {
+  test(`terminal state erases its plaintext: ${label}`, async () => {
+    const { state, memory } = createHarness();
+    await run(memory, state);
+    assert.equal(JSON.stringify(state).includes(marker), false, `${label}: 置终结态后正文仍可从 export 读回`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 26. 反向：未终结态的正文必须保留（防"无脑抹"）
+// ---------------------------------------------------------------------------
+test('unterminal records keep their plaintext', async () => {
+  // active assertion
+  const a = createHarness();
+  await a.memory.hold(userContext(), { content: '存活原文-active', sensitivity: 'S0' });
+  assert.equal(JSON.stringify(a.state).includes('存活原文-active'), true, 'an active assertion must keep its content');
+
+  // pending confirmation
+  const b = createHarness();
+  await b.memory.hold(userContext(), { content: '存活原文-pending', sensitivity: 'S2' });
+  assert.equal(b.state.confirmations[0].status, 'pending');
+  assert.equal(JSON.stringify(b.state).includes('存活原文-pending'), true, 'a pending confirmation must keep its proposed content');
+
+  // active currentState
+  const c = createHarness();
+  const session = await c.memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 600000).toISOString() });
+  await c.memory.writeCurrentState({ ...userContext(), sessionId: session.id }, { value: '存活原文-cstate', expires_at: new Date(Date.now() + 600000).toISOString() });
+  assert.equal(c.state.currentStates[0].status, 'active');
+  assert.equal(JSON.stringify(c.state).includes('存活原文-cstate'), true, 'an active current state must keep its value');
+
+  // 改写后的新版本正文必须保留
+  const d = createHarness();
+  const held = await d.memory.hold(userContext(), { content: '旧版本', sensitivity: 'S0' });
+  await d.memory.correct(userContext(), held.memory.memoryId, { content: '新版本正文', resource_revision: 1 });
+  assert.equal(JSON.stringify(d.state).includes('新版本正文'), true, 'the replacement version must keep its content');
+});
+
+// ---------------------------------------------------------------------------
+// 27. 终结态五成员逐个有断言（审计要求：rejected / superseded 此前未单独验过）
+// ---------------------------------------------------------------------------
+// 五成员：forgotten / revoked / expired / rejected / superseded
+// 前三个已由 25 号覆盖（forget / revoke / sweep-expired）。
+// 这里补 rejected（走 confirmation reject）与 superseded（走 correct）。
+test('the rejected terminal state erases the refused plaintext', async () => {
+  const { state, memory } = createHarness();
+  await memory.hold(userContext(), { content: '被拒绝的敏感内容', sensitivity: 'S2' });
+  const confirmation = state.confirmations[0];
+  await memory.reject(userContext(), confirmation.id, { resource_revision: confirmation.resourceRevision });
+
+  assert.equal(state.assertions.some(item => item.status === 'rejected'), true, 'the assertion must reach the rejected state');
+  assert.equal(JSON.stringify(state).includes('被拒绝的敏感内容'), false, 'a refused confirmation must not remain exportable');
+  assert.equal(state.confirmations[0].proposedContent, null, 'the confirmation record must drop its proposed content');
+});
+
+test('the superseded version keeps lineage but the live version stays readable', async () => {
+  // superseded 与其它终结态**语义不同**：它是"被改写"的历史版本，不是"被删掉"，
+  // 模块用 validFrom/validTo 明确为它保留了时间区间（R-009），且读视图只暴露
+  // current 版本。故这里断言的是「现役版本可读、历史版本不干扰读视图」，
+  // 而非「历史正文必须消失」—— 后者是待 captain 裁决的语义问题（见报告）。
+  const { state, memory } = createHarness();
+  const held = await memory.hold(userContext(), { content: '旧版本内容', sensitivity: 'S0' });
+  await memory.correct(userContext(), held.memory.memoryId, { content: '现役版本内容', resource_revision: 1 });
+
+  assert.equal(state.assertionVersions.some(version => version.versionStatus === 'superseded'), true, 'the old version must be marked superseded');
+  assert.equal(memory.get(userContext(), held.memory.memoryId).content, '现役版本内容', 'the read view must expose only the live version');
+  assert.equal(JSON.stringify(state).includes('现役版本内容'), true, 'the live content must remain');
+});
+
+// ---------------------------------------------------------------------------
+// 28. 裁决 B：`superseded` 是「被改写」而非「被删除」—— 正文保留、读视图只回 current
+// ---------------------------------------------------------------------------
+// captain 裁决（第四轮）：把 superseded 从 TERMINAL_STATUSES 移出。依据三处代码事实：
+//   · correct 入口要求 status==='active'（是更新操作，不是删除）
+//   · correct 专门为旧版本保留 validTo 时间区间（R-009 改写历史）
+//   · 读视图 get() 只返回 currentVersionId（旧版本本就不干扰当前值）
+// ⇒ 抹掉旧版本会破坏改写历史却换不来隐私收益。
+test('a superseded version keeps its content: rewriting is not deletion', async () => {
+  const { state, memory } = createHarness();
+  const held = await memory.hold(userContext(), { content: '旧版本正文', sensitivity: 'S0' });
+  await memory.correct(userContext(), held.memory.memoryId, { content: '现役版本正文', resource_revision: held.memory.resourceRevision });
+
+  const superseded = state.assertionVersions.find(version => version.versionStatus === 'superseded');
+  assert.ok(superseded, 'the previous version must be marked superseded');
+  // 裁决 B 的核心断言：旧版本正文**保留**（它是改写历史，不是被删内容）。
+  assert.equal(superseded.content, '旧版本正文', 'a superseded version must keep its content (ruling B)');
+  assert.equal(JSON.stringify(state).includes('旧版本正文'), true, 'the old value must remain exportable as rewrite history');
+  // ⚠️ 重要的域区分（实测）：`superseded` 只作 **versionStatus** 出现，
+  // assertion.status 在 correct 之后仍是 'active'（代码里从未把 assertion 置 superseded）。
+  // 因此 TERMINAL_STATUSES 的成员变动**不改变任何可观察行为** —— 这次移出是
+  // 「让判据名实相符」的正确性整理，而非行为修复。这里把该事实钉住，
+  // 避免后人误以为它影响清理/引用判据。
+  assert.equal(state.assertions.find(item => item.id === held.memory.memoryId).status, 'active',
+    'a rewritten assertion stays active: superseded is a version status, not an assertion status');
+  assert.equal(state.assertions.some(item => item.status === 'superseded'), false,
+    'no assertion ever reaches status=superseded, so the terminal-set change is behaviour-neutral');
+  // 读视图只暴露现役版本 —— 旧版本不会干扰用户看到的当前值。
+  assert.equal(memory.get(userContext(), held.memory.memoryId).content, '现役版本正文', 'the read view must expose only the live version');
+});
+
+// ---------------------------------------------------------------------------
+// 29. P1-B：forget / revoke 必须留下墓碑行 —— candidate 与 active 行为一致
+// ---------------------------------------------------------------------------
+// 第四轮审计：forget 一条**唯一持有其来源事件**的记忆时，整行会消失（rows=0）。
+// 机制（比报告的更一般）：forget 先翻转 status → 它不再"持有"该事件 → 事件成孤儿
+// → 级联规则看到"终结态 orphan" → **把它自己删掉**（自删）。
+// 实测这不是 candidate 专属：active 同样中招。
+//
+// 要求：两种状态的**行数行为必须一致** —— 都保留一行状态痕迹（面板文案已备好）。
+const TOMBSTONE_ACTIONS = [
+  ['forget', (memory, id, revision) => memory.forget(userContext(), id, { resource_revision: revision }), 'forgotten'],
+  ['revoke', (memory, id, revision) => memory.revoke(userContext(), id, { resource_revision: revision }), 'revoked']
+];
+
+for (const [action, run, expectedStatus] of TOMBSTONE_ACTIONS) {
+  test(`${action} keeps a tombstone row for the sole holder of its source event`, async () => {
+    const { state, memory } = createHarness();
+    await memory.recordEvent(userContext(), { eventId: `evt-tomb-${action}`, content: '唯一持有者的原文', eventRole: 'user' });
+    const held = await memory.hold(userContext(), { content: '唯一持有者的原文', sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+    await run(memory, held.memory.memoryId, held.memory.resourceRevision);
+
+    const rows = memory.list(userContext(), { purpose: 'governance' });
+    assert.equal(rows.length, 1, `${action}: the row must not vanish — the user must see the decision they made`);
+    assert.equal(rows[0].memoryId, held.memory.memoryId);
+    assert.equal(rows[0].status, expectedStatus, `${action}: the tombstone must carry the terminal status`);
+    // 正文仍必须抹掉（这与"保留墓碑行"不矛盾：留行不留文）。
+    assert.equal(JSON.stringify(state).includes('唯一持有者的原文'), false, `${action}: the plaintext must still be erased`);
+  });
+
+  test(`${action} treats a candidate exactly like an active memory`, async () => {
+    // active
+    const active = createHarness();
+    await active.memory.recordEvent(userContext(), { eventId: `evt-parity-active-${action}`, content: 'A', eventRole: 'user' });
+    const activeHeld = await active.memory.hold(userContext(), { content: 'A', sensitivity: 'S0', sourceEventId: active.state.rawEvents[0].id });
+    await run(active.memory, activeHeld.memory.memoryId, activeHeld.memory.resourceRevision);
+    const activeRows = active.memory.list(userContext(), { purpose: 'governance' });
+
+    // candidate
+    const cand = createHarness();
+    const session = await cand.memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 600000).toISOString() });
+    await cand.memory.recordEvent({ ...userContext(), sessionId: session.id }, { eventId: `evt-parity-cand-${action}`, sessionId: session.id, content: 'B', eventRole: 'user' });
+    const candidate = await cand.memory.createCandidate({ ...userContext(), sessionId: session.id }, { content: 'B', sourceEventId: cand.state.rawEvents[0].id, memoryType: 'fact', sensitivity: 'S0' });
+    const candRevision = cand.state.assertions.find(item => item.id === candidate.memory.memoryId).resourceRevision;
+    await run(cand.memory, candidate.memory.memoryId, candRevision);
+    const candRows = cand.memory.list(userContext(), { purpose: 'governance' });
+
+    // 核心：两种状态的行数行为一致（都保留墓碑行）。
+    assert.equal(candRows.length, activeRows.length, `${action}: candidate and active must behave identically (got ${candRows.length} vs ${activeRows.length})`);
+    assert.equal(candRows.length, 1, `${action}: the candidate row must survive as a tombstone`);
+    assert.equal(candRows[0].status, expectedStatus);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 30. 既有级联契约不受上述修复影响
+// ---------------------------------------------------------------------------
+test('explicit source-event deletion still cascades exactly as before', async () => {
+  const { state, memory } = createHarness();
+  const event = await memory.recordEvent(userContext(), { eventId: 'evt-contract', content: '显式删除的原文', eventRole: 'user' });
+  await memory.hold(userContext(), { content: '来源记忆', sourceEventId: event.rawEventId, sensitivity: 'S0' });
+
+  await memory.deleteSourceEvent(userContext(), event.rawEventId, { resourceRevision: 1 });
+
+  // 显式删事件 = 级联清掉其上的记忆（既有契约，未被 keepAssertionIds 波及）。
+  assert.equal(state.rawEvents.length, 0);
+  assert.equal(state.assertions.length, 0, 'explicit source-event deletion must still cascade');
+  assert.equal(state.assertionVersions.length, 0);
+  assert.equal(JSON.stringify(state).includes('显式删除的原文'), false);
+});
+
+// ---------------------------------------------------------------------------
+// 31. P1-B 第二轮：**多持有者**共用来源事件时，行数不得塌陷
+// ---------------------------------------------------------------------------
+// 第一版修法（keepAssertionIds）只保护"当前这一条"，所以：
+//   三条记忆共用事件、逐个 forget → 前两次正常，**第三次（最后一条持有者）**
+//   让事件成孤儿 ⇒ 级联把先前所有墓碑行一起清掉 ⇒ 3 行塌成 1 行。
+// 这正是"靠调用方每次正确传 keep 列表"这种约定的脆弱之处，故改为**语义判据**：
+// 用户显式 forget/revoke 产生的墓碑行（state.tombstones: targetType='memory'）
+// 永不被"清理来源事件"这个附带动作抹掉。
+//
+// 注意区分两类"共享"：
+//   · 多条记忆各自持有**不同**事件 → 每条都是 n=1（旧用例覆盖，一直是绿的）
+//   · 多条记忆共用**同一**事件   → 本组用例覆盖（此前是漏的）
+
+async function seedSharedSource(memory, state, count, tag) {
+  await memory.recordEvent(userContext(), { eventId: `evt-shared-${tag}`, content: `共享原文-${tag}`, eventRole: 'user' });
+  const rawEventId = state.rawEvents[0].id;
+  const held = [];
+  for (let index = 0; index < count; index += 1) {
+    held.push(await memory.hold(userContext(), { content: `记忆${index}-${tag}`, sensitivity: 'S0', sourceEventId: rawEventId }));
+  }
+  return { rawEventId, held };
+}
+
+const terminate = async (memory, state, assertionId, action) => {
+  const current = state.assertions.find(item => item.id === assertionId);
+  await memory[action](userContext(), assertionId, { resource_revision: current.resourceRevision });
+};
+
+for (const n of [1, 2, 3]) {
+  test(`all ${n} sharer(s) of one source event keep their tombstone rows`, async () => {
+    const { state, memory } = createHarness();
+    const { held } = await seedSharedSource(memory, state, n, `rows-${n}`);
+    assert.equal(memory.list(userContext(), { purpose: 'governance' }).length, n, 'precondition: all sharers listed');
+
+    for (const item of held) await terminate(memory, state, item.memory.memoryId, 'forget');
+
+    // 核心：行数不得塌陷 —— 每一行都是用户做过的决定。
+    const rows = memory.list(userContext(), { purpose: 'governance' });
+    assert.equal(rows.length, n, `n=${n}: every forgotten memory must keep a tombstone row`);
+    assert.equal(rows.every(row => row.status === 'forgotten'), true, `n=${n}: all rows must carry the forgotten status`);
+    // 行保留 ≠ 正文保留：来源事件与正文仍必须被清除。
+    assert.equal(state.rawEvents.length, 0, `n=${n}: the orphaned source event must still be cleared`);
+    assert.equal(JSON.stringify(state).includes(`共享原文-rows-${n}`), false, `n=${n}: the plaintext must still be erased`);
+  });
+}
+
+test('the order of forgetting does not matter', async () => {
+  const { state, memory } = createHarness();
+  const { held } = await seedSharedSource(memory, state, 3, 'order');
+  // 故意反序：先中间、再第一条、最后第三条。
+  for (const index of [1, 0, 2]) await terminate(memory, state, held[index].memory.memoryId, 'forget');
+  assert.equal(memory.list(userContext(), { purpose: 'governance' }).length, 3, 'order must not change the outcome');
+  assert.equal(state.assertions.length, 3);
+});
+
+test('a mixed forget/revoke sequence keeps every row', async () => {
+  const { state, memory } = createHarness();
+  const { held } = await seedSharedSource(memory, state, 3, 'mixed');
+  await terminate(memory, state, held[0].memory.memoryId, 'forget');
+  await terminate(memory, state, held[1].memory.memoryId, 'forget');
+  await terminate(memory, state, held[2].memory.memoryId, 'revoke');
+
+  const rows = memory.list(userContext(), { purpose: 'governance' });
+  assert.equal(rows.length, 3, 'a mixed terminal sequence must keep all three rows');
+  const statuses = state.assertions.map(item => item.status).sort();
+  assert.deepEqual(statuses, ['forgotten', 'forgotten', 'revoked']);
+});
+
+test('while any sharer stays active the source event and its content survive', async () => {
+  const { state, memory } = createHarness();
+  const { rawEventId, held } = await seedSharedSource(memory, state, 2, 'survive');
+  await terminate(memory, state, held[0].memory.memoryId, 'forget');
+
+  assert.equal(memory.list(userContext(), { purpose: 'governance' }).length, 2, 'both rows remain');
+  assert.equal(state.rawEvents.length, 1, 'a still-active sharer keeps the event alive');
+  assert.equal(state.rawEvents[0].content, '共享原文-survive', 'and the event keeps its content');
+  assert.equal(state.assertionVersionSources.some(source => source.sourceId === rawEventId), true, 'the survivor keeps its source link');
+});
+
+// ---------------------------------------------------------------------------
+// 32. 既有级联契约：显式清除来源 / 保留策略到期，语义不变
+// ---------------------------------------------------------------------------
+test('explicit deletion and retention still cascade regardless of tombstones', async () => {
+  // deleteSourceEvent：显式删除 → 级联清空（墓碑不阻止它）
+  const a = createHarness();
+  const event = await a.memory.recordEvent(userContext(), { eventId: 'evt-contract-del', content: '显式删除', eventRole: 'user' });
+  await a.memory.hold(userContext(), { content: '来源记忆', sourceEventId: event.rawEventId, sensitivity: 'S0' });
+  await a.memory.deleteSourceEvent(userContext(), event.rawEventId, { resourceRevision: 1 });
+  assert.equal(a.state.rawEvents.length, 0);
+  assert.equal(a.state.assertions.length, 0, 'explicit source deletion must still cascade');
+
+  // sweepRetention：来源事件到期 → 其 active 记忆随之消失
+  const b = createHarness();
+  await b.memory.recordEvent(userContext(), { eventId: 'evt-contract-sweep', content: '到期删除', eventRole: 'user' });
+  const swept = await b.memory.hold(userContext(), { content: '到期记忆', sourceEventId: b.state.rawEvents[0].id, sensitivity: 'S0' });
+  b.state.rawEvents[0].deleteAfter = new Date(Date.now() - 1000).toISOString();
+  await b.memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+  assert.equal(b.state.rawEvents.length, 0);
+  assert.equal(b.state.assertions.some(item => item.id === swept.memory.memoryId), false, 'retention cascade must be unchanged');
+});
