@@ -35,7 +35,7 @@ import {
   memoryTypeLabel,
   memoryScopeLabel,
   confidencePercent,
-  normalizeStatus,
+  isKnownStatus,
   canForget,
   canRevoke,
   canCorrect,
@@ -70,15 +70,18 @@ const CONFIRM_ACTIONS = {
 // 受控输入行：key 由父级用「记忆 id」控制，React 会在换条目时重挂，
 // 因此不需要把 props 同步进 state 的 useEffect（那是最容易出 bug 的一处）。
 function MemoryRow({ item, index, busy, confirming, draft, editing, onStartEdit, onDraftChange, onCancelEdit, onSubmitEdit, onPin, onAskConfirm, onConfirm, onCancelConfirm }) {
-  const status = normalizeStatus(item.status);
+  // CSS 类名用**已知**状态（未知值统一走 is-unknown），避免把后端原始枚举
+  // 直接拼进 class 名污染样式；标签则用 memoryStatusLabel 如实展示（未知→「状态未知」）。
+  const status = isKnownStatus(item.status) ? item.status : 'unknown';
   const percent = confidencePercent(item);
   const pinned = isPinned(item);
 
   return (
-    <article className={`memory-item memory-sovereignty-item is-${status}`} data-status={status}>
+    <article className={`memory-item memory-sovereignty-item is-${status}`} data-status={status} data-pinned={pinned ? 'true' : 'false'}>
       <div className="memory-item-meta">
         <span className="memory-type">{memoryTypeLabel(item)}</span>
         <span className={`memory-status memory-status-${status}`}>{memoryStatusLabel(item.status)}</span>
+        {pinned && <span className="memory-pin-flag" title="这条记忆已钉住">已钉住</span>}
         <span className="memory-scope" title="这条记忆的作用范围">{memoryScopeLabel(item.scopeType)}</span>
       </div>
 
@@ -329,13 +332,21 @@ if (typeof document !== 'undefined' && !document.getElementById('memory-sovereig
 .memory-group-heading span:first-child { color:var(--text-body); font-size:10px; letter-spacing:.06em; }
 .memory-sovereignty-item { display:block; }
 .memory-sovereignty-item.is-forgotten, .memory-sovereignty-item.is-revoked { opacity:.62; }
+.memory-sovereignty-item.is-rejected, .memory-sovereignty-item.is-superseded, .memory-sovereignty-item.is-expired { opacity:.78; }
 .memory-item-meta { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .memory-item-meta .memory-type { margin-bottom:0; }
 .memory-status { font-size:9px; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:2px 5px; color:var(--text-muted); }
 .memory-status-active { color:var(--action-primary); border-color:color-mix(in srgb, var(--action-primary) 27%, transparent); }
-.memory-status-pinned { color:var(--state-warning); border-color:color-mix(in srgb, var(--state-warning) 35%, transparent); }
+/* 尚未生效的两种状态：用 state-warning 提示「等你处理」，与「生效中」明显区分 */
+.memory-status-candidate, .memory-status-pending_confirmation { color:var(--state-warning); border-color:color-mix(in srgb, var(--state-warning) 35%, transparent); }
+/* 三种出局方式：各自可辨，但都弱化于「生效中」 */
+.memory-status-rejected { color:var(--state-danger); border-color:color-mix(in srgb, var(--state-danger) 27%, transparent); }
+.memory-status-superseded { color:var(--text-muted); }
+.memory-status-expired { color:var(--text-muted); }
 .memory-status-revoked { color:var(--text-muted); }
 .memory-status-forgotten { color:var(--state-danger); border-color:color-mix(in srgb, var(--state-danger) 27%, transparent); }
+.memory-status-unknown { color:var(--text-muted); border-style:dashed; }
+.memory-pin-flag { font-size:9px; color:var(--state-warning); border:1px solid color-mix(in srgb, var(--state-warning) 35%, transparent); border-radius:var(--radius-sm); padding:2px 5px; }
 .memory-scope { font-size:9px; color:var(--text-muted); }
 .memory-summary { margin-top:7px; }
 /* 占位文案（正文已被清除 / 缺失）：弱化 + 斜体，明确区分于真实记忆内容，

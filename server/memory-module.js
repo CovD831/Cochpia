@@ -1966,16 +1966,31 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
   // 导出仍吐原文。remove 之所以看起来对，只是因为它物理删行、天然不残留引用。
   // 面板用户能按到的正是 forget/revoke，所以漏的恰是主路径。
   //
-  // 复用模块**自己**对可见性的定义（serializeAssertion 的 contentVisible 与
-  // canSee 的 !['active'].includes(...) 同一语义）：status === 'active' 才算可见。
-  // 绝不硬编码 ['forgotten','revoked'] —— MEMORY_STATUSES 有 5 个取值
-  // （active/expired/forgotten/revoked/rejected），硬编码会漏掉 expired/rejected，
-  // 将来新增状态还会再漏一次。
-  const isContentVisible = assertion => assertion.status === 'active';
+  // ── 终结态判据（第三轮审计 · 两处修复共用的同一定义的两面）────────────────────
+  //
+  // MEMORY_STATUSES 有 8 个取值（candidate / pending_confirmation / active /
+  // rejected / superseded / expired / revoked / forgotten），必须分两类看：
+  //
+  //   终结态（正文不该再可见，用户也不该再看到它）：
+  //     forgotten / revoked / expired / rejected / superseded
+  //   未终结态（用户仍应看到它，正文仍应可读）：
+  //     candidate / pending_confirmation / active
+  //
+  // 用"终结态集合"表达而**不是**把未终结态写成白名单 —— 后者在将来新增状态时
+  // 会默认把新状态当成"已终结"而误删；前者默认保守（新状态视为未终结=保留）。
+  //
+  // ⚠️ 这一个定义供**两处方向相反**的判据共用，改动时必须同时考虑两侧：
+  //   · purgeOrphanedSourceEvents 的 stillReferenced —— 「事件是否还有未终结的持有者」
+  //     ⇒ 未终结（含 candidate）仍算持有 ⇒ 事件**不清**（P1-B：防误删候选的来源）
+  //   · sweepRetention 的清理 —— 「过期后正文是否必须抹掉」
+  //     ⇒ 终结态（含 expired）必须抹 ⇒ 用 !isTerminalStatus 判断"到期即转终结"
+  // 两侧恰好是同一条线的两边；只改一处必然打破另一处。
+  const TERMINAL_STATUSES = Object.freeze(['forgotten', 'revoked', 'expired', 'rejected', 'superseded']);
+  const isTerminalStatus = status => TERMINAL_STATUSES.includes(status);
 
   const purgeOrphanedSourceEvents = candidateRawEventIds => {
     if (!candidateRawEventIds.length) return [];
-    // 只统计"正文仍可见"的 assertion 所持有的 raw_event 引用。
+    // 只统计"还有未终结持有者"的 raw_event 引用。candidate 属未终结 ⇒ 算持有。
     const stillReferenced = new Set(state.assertionVersionSources
       .filter(source => source.sourceType === 'raw_event')
       .filter(source => {
@@ -1983,8 +1998,8 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
           .filter(version => version.id === source.versionId)
           .map(version => state.assertions.find(assertion => assertion.id === version.assertionId))
           .find(Boolean);
-        // 找不到宿主（行已被物理删除）⇒ 不算引用。
-        return Boolean(owningAssertion) && isContentVisible(owningAssertion);
+        // 找不到宿主（行已被物理删除）⇒ 不算持有。
+        return Boolean(owningAssertion) && !isTerminalStatus(owningAssertion.status);
       })
       .map(source => source.sourceId));
     const orphaned = candidateRawEventIds.filter(id => !stillReferenced.has(id));
@@ -2083,7 +2098,37 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     return candidateRawEventIds.filter(id => !stillReferenced.has(id));
   };
 
-  const physicallyRemoveSourceEvents = sourceEventIds => {
+  // 物理删除来源事件。
+  //
+  // cascadeUnterminal（默认 false）：是否连带删除**未终结**的 orphan assertion
+  // （candidate / pending_confirmation / active）。
+  //
+  // 两种调用方语义不同，必须显式区分（P1-B 的教训）：
+  //   · 显式物理删除（deleteSourceEvent / deleteSession）：用户就是在删这条事件，
+  //     级联删掉挂在它上面的记忆是**预期行为** ⇒ 传 cascadeUnterminal: true。
+  //   · 顺带清理（forget/revoke/sweepRetention 清孤儿事件）：只是"没人再引用了"，
+  //     此时若把未终结的 candidate 一起抹掉，治理列表会凭空少行 ⇒ 默认 false。
+  // 之前把级联无条件改成"只删终结态"，直接破坏了 deleteSourceEvent 的既有契约
+  // （memory-module.test.js 断言它必须清空 source-linked versions），已回退为显式参数。
+  // 物理删除来源事件。
+  //
+  // cascadeUnterminal（默认 false）：是否连带删除**未终结**的 orphan assertion。
+  //
+  // 三种调用方语义不同，必须显式区分（P1-B 的教训）：
+  //   · 显式物理删除（deleteSourceEvent / deleteSession）：用户就是在删这条事件，
+  //     级联清掉挂在它上面的记忆是**预期行为** ⇒ cascadeUnterminal: true。
+  //   · 保留策略到期（sweepRetention 的 rawEvent 分支）：既有契约要求级联
+  //     （memory-module.test.js「retention sweep...」断言 active 来源记忆必须随之消失）
+  //     ⇒ 也传 true，但**不得波及待决态**（见下）。
+  //   · 顺带清理（forget/revoke 清孤儿事件）：只是"没人再引用了" ⇒ 默认 false。
+  //
+  // 无论哪种调用，`candidate` / `pending_confirmation` 这类**待决**记忆都不得被
+  // 级联删除：用户还没对它们做出决定，凭空消失会让线索断掉（P1-B 现象）。
+  // 这与 isTerminalStatus 是同一区分的延伸：待决态比 active 更"未终结"。
+  const PENDING_STATUSES = Object.freeze(['candidate', 'pending_confirmation']);
+  const isPendingStatus = status => PENDING_STATUSES.includes(status);
+
+  const physicallyRemoveSourceEvents = (sourceEventIds, { cascadeUnterminal = false } = {}) => {
     const rawIds = new Set(sourceEventIds);
     const removedEventKeys = new Set(state.rawEvents
       .filter(event => rawIds.has(event.id))
@@ -2092,12 +2137,33 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const affectedVersionIds = new Set(sourceRows.map(source => source.versionId));
     const affectedAssertionIds = new Set(state.assertionVersions.filter(version => affectedVersionIds.has(version.id)).map(version => version.assertionId));
     state.assertionVersionSources = state.assertionVersionSources.filter(source => !(source.sourceType === 'raw_event' && rawIds.has(source.sourceId)));
+    // orphanVersion = 因来源事件被清而失去全部 source 行的 version。
     const orphanVersionIds = new Set(state.assertionVersions
       .filter(version => affectedVersionIds.has(version.id) && !state.assertionVersionSources.some(source => source.versionId === version.id))
       .map(version => version.id));
-    const orphanAssertionIds = new Set(state.assertionVersions.filter(version => orphanVersionIds.has(version.id)).map(version => version.assertionId));
-    state.assertionVersions = state.assertionVersions.filter(version => !orphanVersionIds.has(version.id));
-    state.assertionVersionSources = state.assertionVersionSources.filter(source => !orphanVersionIds.has(source.versionId));
+    // P1-B 修复（第三轮审计）：只有**已终结**的 assertion 才允许被级联删除。
+    // candidate / pending_confirmation 仍持有用户应看到的内容（canSee 对
+    // 治理视图放行非 active），不能因为"来源事件被清了"就被连带抹掉 ——
+    // 那会让治理列表的行数凭空减少（实测 2 条 → 0 条）。
+    const orphanAssertionIds = new Set(state.assertionVersions
+      .filter(version => orphanVersionIds.has(version.id))
+      .map(version => version.assertionId)
+      .filter(assertionId => {
+        const assertion = state.assertions.find(item => item.id === assertionId);
+        // 找不到宿主行 ⇒ 视为已终结（行都没了，无内容可言）。
+        if (!assertion) return true;
+        // 待决态永远不级联删除 —— 用户尚未决定，不能因其来源事件到期而消失。
+        if (isPendingStatus(assertion.status)) return false;
+        if (cascadeUnterminal) return true;
+        return isTerminalStatus(assertion.status);
+      }));
+    // 未终结的 orphan（如 candidate）必须**连版本行一起保留**，否则会变成
+    // "有 assertion 行、没有正文"的空壳。因此只删真正被判死的那些版本。
+    const doomedVersionIds = new Set(state.assertionVersions
+      .filter(version => orphanVersionIds.has(version.id) && orphanAssertionIds.has(version.assertionId))
+      .map(version => version.id));
+    state.assertionVersions = state.assertionVersions.filter(version => !doomedVersionIds.has(version.id));
+    state.assertionVersionSources = state.assertionVersionSources.filter(source => !doomedVersionIds.has(source.versionId));
     for (const assertion of state.assertions.filter(item => affectedAssertionIds.has(item.id) && !orphanAssertionIds.has(item.id))) {
       const remaining = state.assertionVersions.filter(version => version.assertionId === assertion.id).sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
       assertion.currentVersionId = remaining[0]?.id || null;
@@ -2105,11 +2171,13 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     }
     state.assertions = state.assertions.filter(assertion => !orphanAssertionIds.has(assertion.id));
     state.rawEvents = state.rawEvents.filter(event => !rawIds.has(event.id));
-    cleanDerivedForDeletion({ rawEventIds: [...rawIds], assertionIds: [...affectedAssertionIds], versionIds: [...orphanVersionIds] });
+    // 传给派生清理的必须是**真正被判死**的 id：未终结的 orphan（candidate 等）
+    // 仍要保留其投影/索引等派生数据，否则候选会在治理视图里变成空壳。
+    cleanDerivedForDeletion({ rawEventIds: [...rawIds], assertionIds: [...orphanAssertionIds], versionIds: [...doomedVersionIds] });
     invalidateMutationRecords({ resourceType: 'source_event', resourceIds: [...rawIds] });
-    invalidateMutationRecords({ resourceType: 'memory', resourceIds: [...affectedAssertionIds] });
+    invalidateMutationRecords({ resourceType: 'memory', resourceIds: [...orphanAssertionIds] });
     state.idempotencyRecords = state.idempotencyRecords.filter(record => mutationNamespaceOf(record) !== 'event' || !removedEventKeys.has(record.key));
-    return { rawEventIds: [...rawIds], assertionIds: [...affectedAssertionIds], versionIds: [...orphanVersionIds] };
+    return { rawEventIds: [...rawIds], assertionIds: [...orphanAssertionIds], versionIds: [...doomedVersionIds] };
   };
 
   const sweepRetention = async (rawContext, input = {}) => {
@@ -2122,7 +2190,9 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       .filter(event => event.tenantId === context.tenantId && event.userId === context.subjectUserId && event.deleteAfter && new Date(event.deleteAfter).getTime() <= timestamp)
       .slice(0, limit);
     if (expiredRawEvents.length) {
-      const removed = physicallyRemoveSourceEvents(expiredRawEvents.map(event => event.id));
+      // 保留策略到期 = 显式物理删除该事件，级联清掉落在其上的记忆是既有契约
+      // （memory-module.test.js「retention sweep expires TTL data...」要求如此）。
+      const removed = physicallyRemoveSourceEvents(expiredRawEvents.map(event => event.id), { cascadeUnterminal: true });
       stats.rawEvents = removed.rawEventIds.length;
     }
 
@@ -2143,6 +2213,8 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
         && ((assertion.expiresAt && new Date(assertion.expiresAt).getTime() <= timestamp) || expiredSessionIds.has(assertion.sessionId)))
       .slice(0, limit)
       .map(assertion => assertion.id));
+    // 过期前先记下这些 assertion 的来源事件候选（抹除后再反查就取不到了）。
+    const expirationSourceEventIds = [...new Set([...expirationAssertionIds].flatMap(sourceEventIdsForAssertion))];
     const expirationVersionIds = new Set();
     for (const assertion of state.assertions.filter(item => expirationAssertionIds.has(item.id))) {
       assertion.status = 'expired';
@@ -2178,6 +2250,22 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
       }
       stats.assertions += 1;
     }
+
+    // P1-A 修复（第三轮审计）：assertion 过期后 status='expired' 属**终结态**，
+    // 正文不该再可见 —— 但此前只改了状态、没抹 content，于是 /api/export 仍吐原文。
+    // 这里对两条过期分支累积到的版本统一抹除（含 pending_confirmation 转 expired 的那批）。
+    // 判据与 purgeOrphanedSourceEvents 共用同一个「终结态」定义（见 isTerminalStatus
+    // 处注释）：那边是"未终结仍算持有"，这边是"已成终结即须抹除"。
+    if (expirationVersionIds.size) {
+      redactVersionContent([...expirationVersionIds]);
+      // 同时抹掉这些 assertion 的全部版本正文，避免非 current 的历史版本残留原文。
+      redactAssertionContent([...expirationAssertionIds]);
+    }
+    // 过期后这些 assertion 已成终结态 ⇒ 其来源事件若不再被任何未终结 assertion
+    // 持有，就该按同一判据清除（否则 rawEvents 仍带原文，export 照样泄漏）。
+    // 注意此刻 assertion 已置 expired，purgeOrphanedSourceEvents 内部按终结态判断，
+    // 会把它们视为"不再持有"。
+    purgeOrphanedSourceEvents(expirationSourceEventIds);
 
     const expiredCurrentStateIds = new Set(state.currentStates
       .filter(current => current.tenantId === context.tenantId && current.userId === context.subjectUserId && current.status === 'active'
@@ -2240,7 +2328,8 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     const event = state.rawEvents.find(item => item.id === sourceEventId && item.tenantId === context.tenantId && item.userId === context.subjectUserId);
     if (!event) throw new MemoryModuleError('SOURCE_EVENT_NOT_FOUND', 'Source event not found', { status: 404 });
     assertRevision({ resourceRevision: event.resourceRevision || 1 }, input);
-    const removed = physicallyRemoveSourceEvents([sourceEventId]);
+    // 显式物理删除：用户就是要删这条事件，级联清掉落在其上的记忆是预期行为。
+    const removed = physicallyRemoveSourceEvents([sourceEventId], { cascadeUnterminal: true });
     state.idempotencyRecords = state.idempotencyRecords.filter(record => mutationNamespaceOf(record) !== 'event' || record.key !== `${event.eventId}:${event.sourceRevision}`);
     const operation = newDeletionOperation(context, 'source_event', sourceEventId, { sourceEventId });
     bumpSequence();
@@ -2257,7 +2346,8 @@ export function createMemoryModule(state = createMemoryModuleState(), persistNow
     if (!session) throw new MemoryModuleError('SESSION_NOT_FOUND', 'Session not found', { status: 404 });
     assertRevision(session, input);
     const rawEvents = state.rawEvents.filter(event => event.sessionId === sessionId);
-    const removedSources = physicallyRemoveSourceEvents(rawEvents.map(event => event.id));
+    // 显式物理删除会话内事件：级联清掉其上的记忆是预期行为。
+    const removedSources = physicallyRemoveSourceEvents(rawEvents.map(event => event.id), { cascadeUnterminal: true });
     const sessionAssertions = state.assertions.filter(assertion => assertion.sessionId === sessionId).map(assertion => assertion.id);
     const removedAssertions = physicallyRemoveAssertions(sessionAssertions);
     state.currentStates = state.currentStates.filter(item => item.sessionId !== sessionId);

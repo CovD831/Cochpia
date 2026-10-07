@@ -901,3 +901,150 @@ test('a shared source event survives while any sharer keeps visible content', as
     assert.equal(listed.content, '保留下来的记忆', `${action}: the survivor must remain readable`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 20. P1-A：sweepRetention 的**两条**分支都不得留下正文
+// ---------------------------------------------------------------------------
+// 第三轮审计：既有测试（memory-module.test.js「retention sweep...」）只造了
+// rawEvent 过期分支，**从未造 assertion 过期分支** ⇒ 后者把 status 改成 expired
+// 却从不抹 content，导出仍吐原文。
+//
+// 判据两侧共用同一个「终结态」定义：
+//   expired 属终结态 ⇒ 正文必须抹（本测试）
+//   而未终结态（candidate 等）仍算"持有" ⇒ 其来源事件不得被清（第 21 条）
+const SWEEP_SECRET = 'EXPIRESECRET-9911';
+
+test('sweepRetention redacts content when an assertion itself expires', async () => {
+  const { state, memory } = createHarness();
+  await memory.recordEvent(userContext(), { eventId: 'evt-sweep-assert', content: SWEEP_SECRET, eventRole: 'user' });
+  const held = await memory.hold(userContext(), { content: SWEEP_SECRET, sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+
+  // 只让 **assertion** 过期；事件本身不许过期，确保命中的是 assertion 分支。
+  state.assertions.find(item => item.id === held.memory.memoryId).expiresAt = new Date(Date.now() - 1000).toISOString();
+  for (const event of state.rawEvents) event.deleteAfter = new Date(Date.now() + 999_999_999).toISOString();
+
+  assert.equal(JSON.stringify(state).includes(SWEEP_SECRET), true, 'precondition: plaintext present before the sweep');
+  await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+
+  assert.equal(JSON.stringify(state).includes(SWEEP_SECRET), false, 'expired content must be redacted from the export');
+  assert.equal(state.assertionVersions.some(version => version.content && version.content.includes(SWEEP_SECRET)), false, 'no version may keep the text');
+  assert.equal(state.rawEvents.some(event => event.content && event.content.includes(SWEEP_SECRET)), false, 'the source raw event must not keep the text either');
+});
+
+test('sweepRetention redacts content when a source event expires', async () => {
+  const { state, memory } = createHarness();
+  await memory.recordEvent(userContext(), { eventId: 'evt-sweep-raw', content: SWEEP_SECRET, eventRole: 'user' });
+  await memory.hold(userContext(), { content: SWEEP_SECRET, sensitivity: 'S0', sourceEventId: state.rawEvents[0].id });
+  state.rawEvents.forEach(event => { event.deleteAfter = new Date(Date.now() - 1000).toISOString(); });
+
+  await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+
+  assert.equal(state.rawEvents.length, 0, 'an expired source event must be physically removed');
+  assert.equal(JSON.stringify(state).includes(SWEEP_SECRET), false, 'the raw-event branch must not leave plaintext');
+});
+
+// ---------------------------------------------------------------------------
+// 21. P1-B：终结一条记忆，不得级联删掉仍存活的 candidate
+// ---------------------------------------------------------------------------
+// 第三轮审计：createCandidate 先建、hold 后建（共用同一来源事件），
+// forget 那条 active 之后，判据把 candidate 的引用也算成"孤儿"，
+// 于是一条 2 行的治理列表变成 0 行 —— 候选被连带删除。
+//
+// 判据修正：candidate / pending_confirmation 属**未终结态** ⇒ 仍算持有来源
+// ⇒ 事件不算孤儿 ⇒ 候选及其来源都保留。
+test('forgetting a memory does not cascade-delete a surviving candidate', async () => {
+  const { state, memory } = createHarness();
+  const session = await memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 600000).toISOString() });
+  await memory.recordEvent({ ...userContext(), sessionId: session.id }, { eventId: 'evt-cascade', sessionId: session.id, content: '共享的来源对话', eventRole: 'user' });
+  const rawEventId = state.rawEvents[0].id;
+
+  const candidate = await memory.createCandidate({ ...userContext(), sessionId: session.id }, { content: '候选记忆', sourceEventId: rawEventId, memoryType: 'fact', sensitivity: 'S0' });
+  const held = await memory.hold(userContext(), { content: '正式的 active 记忆', sensitivity: 'S0', sourceEventId: rawEventId });
+
+  const before = memory.list(userContext(), { purpose: 'governance' }).length;
+  assert.equal(before, 2, 'precondition: candidate + active are both listed');
+
+  await memory.forget(userContext(), held.memory.memoryId, { resource_revision: held.memory.resourceRevision });
+
+  // 面板行数不得减少：终结 active 不能把候选也带走。
+  // 注意 forgotten 那条在治理视图下**仍然可见**（canSee 对 purpose='governance'
+  // 放行非 active）——这正是「用户能看见自己删过什么」的设计，所以期望 2 行而非 1 行。
+  const after = memory.list(userContext(), { purpose: 'governance' });
+  assert.equal(after.length, 2, 'the row count must not shrink: the candidate and the forgotten row both remain listed');
+  assert.equal(state.assertions.some(item => item.id === candidate.memory.memoryId), true, 'the candidate must survive the cascade');
+  assert.equal(state.assertions.find(item => item.id === candidate.memory.memoryId).status, 'candidate');
+  // 关键：candidate 的**版本行**也必须还在（否则会变成有壳无正文的空壳）。
+  assert.equal(state.assertionVersions.some(version => version.assertionId === candidate.memory.memoryId), true, 'the candidate must keep its version row');
+  // 候选的正文仍在 state 里（治理视图的渲染问题属面板 P3，不在本层）。
+  assert.equal(JSON.stringify(state.assertionVersions).includes('候选记忆'), true, 'the candidate must keep its content');
+});
+
+// ---------------------------------------------------------------------------
+// 22. 双向自洽：同一条"终结态"判据的两面必须同时成立
+// ---------------------------------------------------------------------------
+test('terminal vs unterminal share one predicate and stay self-consistent', async () => {
+  // 面一：全部终结 ⇒ 来源事件被清
+  const a = createHarness();
+  await a.memory.recordEvent(userContext(), { eventId: 'evt-two-1', content: '两面判据', eventRole: 'user' });
+  const sharedId = a.state.rawEvents[0].id;
+  const first = await a.memory.hold(userContext(), { content: '甲', sensitivity: 'S0', sourceEventId: sharedId });
+  const second = await a.memory.hold(userContext(), { content: '乙', sensitivity: 'S0', sourceEventId: sharedId });
+  await a.memory.forget(userContext(), first.memory.memoryId, { resource_revision: first.memory.resourceRevision });
+  await a.memory.revoke(userContext(), second.memory.memoryId, { resource_revision: a.state.assertions.find(item => item.id === second.memory.memoryId).resourceRevision });
+  assert.equal(a.state.rawEvents.length, 0, 'all references terminal ⇒ the event goes');
+
+  // 面二：还有一条未终结 ⇒ 来源事件必须留
+  const b = createHarness();
+  await b.memory.recordEvent(userContext(), { eventId: 'evt-two-2', content: '两面判据', eventRole: 'user' });
+  const keepId = b.state.rawEvents[0].id;
+  const gone = await b.memory.hold(userContext(), { content: '会被忘掉的', sensitivity: 'S0', sourceEventId: keepId });
+  await b.memory.hold(userContext(), { content: '还活着的', sensitivity: 'S0', sourceEventId: keepId });
+  await b.memory.forget(userContext(), gone.memory.memoryId, { resource_revision: gone.memory.resourceRevision });
+  assert.equal(b.state.rawEvents.length, 1, 'a live reference remains ⇒ the event stays');
+  assert.equal(b.state.rawEvents[0].content, '两面判据', 'and it keeps its content');
+});
+
+// ---------------------------------------------------------------------------
+// 23. P1-B 的真实触发路径：来源事件被**物理清除**时，待决候选必须存活
+// ---------------------------------------------------------------------------
+// 第 21 条只覆盖了 forget（那时 candidate 仍持有事件，级联代码根本不会走到）。
+// 真正会触发级联的是**事件被物理清除**的路径：sweepRetention 到期。
+// 此时既有契约要求 `active` 的来源记忆随之消失，但 `candidate` 必须留下 ——
+// 用户还没对它做出决定，凭空消失会让治理列表断线索。
+test('a pending candidate survives when its source event is physically removed', async () => {
+  const { state, memory } = createHarness();
+  const session = await memory.createSession(userContext(), { callerAgentId: 'agent-a', expiresAt: new Date(Date.now() + 600000).toISOString() });
+  await memory.recordEvent({ ...userContext(), sessionId: session.id }, { eventId: 'evt-pending', sessionId: session.id, content: '共享的来源', eventRole: 'user' });
+  const rawEventId = state.rawEvents[0].id;
+
+  const candidate = await memory.createCandidate({ ...userContext(), sessionId: session.id }, { content: '待决候选', sourceEventId: rawEventId, memoryType: 'fact', sensitivity: 'S0' });
+  const live = await memory.hold(userContext(), { content: '正式记忆', sensitivity: 'S0', sourceEventId: rawEventId });
+
+  // 让**事件**到期 → 走物理清除分支。
+  state.rawEvents[0].deleteAfter = new Date(Date.now() - 1000).toISOString();
+  await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+
+  assert.equal(state.rawEvents.length, 0, 'the expired event must be physically removed');
+  // 既有契约：active 的来源记忆随事件消失。
+  assert.equal(state.assertions.some(item => item.id === live.memory.memoryId), false, 'the active memory must cascade away with its event');
+  // P1-B：待决候选不得被连带删除，且必须保住版本行（否则成空壳）。
+  assert.equal(state.assertions.some(item => item.id === candidate.memory.memoryId), true, 'the pending candidate must NOT be cascade-deleted');
+  assert.equal(state.assertionVersions.some(version => version.assertionId === candidate.memory.memoryId), true, 'the candidate must keep its version row');
+  assert.equal(memory.list(userContext(), { purpose: 'governance' }).some(item => item.memoryId === candidate.memory.memoryId), true, 'the candidate must still be listed');
+});
+
+// ---------------------------------------------------------------------------
+// 24. 待决态不得阻止事件被清理（反向）
+// ---------------------------------------------------------------------------
+test('a pending candidate does not block its orphaned source event from being cleared', async () => {
+  const { state, memory } = createHarness();
+  await memory.recordEvent(userContext(), { eventId: 'evt-orphan-pending', content: '孤儿事件正文', eventRole: 'user' });
+  const rawEventId = state.rawEvents[0].id;
+  await memory.createCandidate(userContext(), { content: '待决候选', sourceEventId: rawEventId, memoryType: 'fact', sensitivity: 'S0' });
+  state.rawEvents[0].deleteAfter = new Date(Date.now() - 1000).toISOString();
+
+  await memory.sweepRetention(userContext(), { now: new Date().toISOString() });
+
+  assert.equal(state.rawEvents.length, 0, 'the event must still be cleared');
+  assert.equal(JSON.stringify(state).includes('孤儿事件正文'), false, 'and its plaintext must not remain');
+});

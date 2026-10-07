@@ -9,15 +9,37 @@
 // 本文件的第一原则：**永不抛异常**。任何输入（undefined / null / 字符串 /
 // 缺字段 / 未知 status / 非法时间）都必须返回一个可渲染的降级值。
 
-// 记忆治理状态。未知状态一律降级为 'active'，绝不原样透出——
-// 否则 CSS 类名会被后端字段污染，且 UI 会显示一个用户看不懂的原始枚举。
-export const MEMORY_STATUSES = ['active', 'pinned', 'revoked', 'forgotten'];
+// 记忆治理状态。**必须与服务端 MEMORY_STATUSES 对齐**
+// （server/memory-module.js:12，共 8 个）。曾经这里只有 4 个，导致
+// candidate / pending_confirmation / rejected / superseded / expired
+// 五个状态全部落进「未知 → active」的兜底，在面板上显示成「生效中」——
+// 一条**尚未生效的候选记忆**被宣称「生效中」，是直接的信息错误。
+export const MEMORY_STATUSES = Object.freeze([
+  'candidate',
+  'pending_confirmation',
+  'active',
+  'rejected',
+  'superseded',
+  'expired',
+  'revoked',
+  'forgotten'
+]);
 
-// 状态 → 中文标签。未知状态不显示原始枚举（可能泄露内部实现细节），
-// 显示「未知状态」而不是崩掉或留空。
+// 状态 → 中文标签。
+//
+// 判据（captain 定的）：**用户只看标签就能知道这条记忆现在是什么处境**。
+// 所以每个状态的说法都要如实反映它在生命周期里的位置：
+//   - candidate / pending_confirmation 是**尚未生效**的，绝不能说「生效中」；
+//   - rejected / superseded / expired 是**已经出局**的三种不同方式，
+//     分别说清是「被拒」「被取代」「已过期」，而不是笼统合并。
+// 未知状态 → 「状态未知」，**不再冒充 active**（见 normalizeStatus 的注释）。
 const STATUS_LABELS = {
+  candidate: '候选待晋升',
+  pending_confirmation: '待你确认',
   active: '生效中',
-  pinned: '已钉住',
+  rejected: '已拒绝',
+  superseded: '已被取代',
+  expired: '已过期',
   revoked: '已撤销',
   forgotten: '已遗忘'
 };
@@ -58,9 +80,25 @@ const ts = value => {
 
 export const toTimestamp = ts;
 
-// 安全的归一化状态：任何非字符串/未知值 → 'active'。
+// 该状态是否是**已知**的治理状态（即服务端 8 个之一）。
+// 展示层与判定层都要先问这个，避免把未知值当成正常状态。
+export function isKnownStatus(status) {
+  return typeof status === 'string' && Object.prototype.hasOwnProperty.call(STATUS_LABELS, status);
+}
+
+// **判定用的**归一化：把未知/脏状态当作 'active' 处理。
+//
+// ⚠️ 这个函数**只用于「允许做什么」的判定**（canForget/canRevoke/...），
+// 它的语义是「拿不准时按保守放行处理，让按钮可用、由服务端最终裁决」。
+// 它**绝不能**用于展示 —— 把未知值折成 'active' 会让界面宣称一条来历不明的
+// 记忆「生效中」（这正是 P3 缺陷的根因：5 个真实状态被折成 active）。
+// 展示请用 memoryStatusLabel()，它对未知值返回「状态未知」。
+//
+// 为什么判定与展示要分开而不是共用一个兜底：两者对「未知」的正确反应本来就
+// 相反 —— 判定要**不过度阻止**用户（宁可让他点，服务端会拒绝），展示要
+// **不过度断言**事实（不知道就别说得像知道）。一个函数同时满足两者是不可能的。
 export function normalizeStatus(status) {
-  return typeof status === 'string' && Object.prototype.hasOwnProperty.call(STATUS_LABELS, status) ? status : 'active';
+  return isKnownStatus(status) ? status : 'active';
 }
 
 // 查表读一个「自有」键的字符串值。
@@ -81,7 +119,10 @@ const ownString = (table, key) => {
 };
 
 export function memoryStatusLabel(status) {
-  return ownString(STATUS_LABELS, status) || '未知状态';
+  // 未知状态 → 「状态未知」，**不再冒充「生效中」**。
+  // P3 缺陷正是这里：5 个真实状态（candidate/pending_confirmation/rejected/
+  // superseded/expired）因表里没有键而落到兜底，被展示成「生效中」。
+  return ownString(STATUS_LABELS, status) || '状态未知';
 }
 
 // 类型标签。
@@ -125,9 +166,23 @@ export function memorySummaryText(item) {
   const text = typeof raw === 'string' ? raw.trim() : '';
   if (text) return text;
   const status = normalizeStatus(item?.status);
+
+  // 服务端 `serializeAssertion` 的 contentVisible = (status === 'active')
+  // （server/memory-module.js:431）⇒ **除 active 外一律返回 content:null**。
+  // 这是服务端有意的保守策略（未经确认/已出局的内容不外泄），前端**不得绕过**
+  // （不去别处取正文）。但「为什么空」必须因状态而异，否则用户会把
+  // 「还没被确认」误读成「已经被删掉了」：
   if (status === 'forgotten') return '内容已清除';
   if (status === 'revoked') return '内容已撤销，不再使用';
-  // 非终态却拿不到正文：如实说缺失，不要伪装成「已清除」。
+  if (status === 'candidate' || status === 'pending_confirmation') {
+    // 尚未生效 ⇒ 正文按服务端策略不外发。如实说明它在等待处理。
+    return '尚未确认，正文暂不显示';
+  }
+  if (status === 'rejected') return '已拒绝，内容不再保留';
+  if (status === 'superseded') return '已被新版本取代，正文不再显示';
+  if (status === 'expired') return '已过期，正文不再显示';
+  // 已知的 active 却拿不到正文 = **异常**（数据缺失/上游 bug）。
+  // 绝不能与上面任何一种共用文案 —— 那会把 bug 伪装成正常状态。
   return '内容缺失';
 }
 
@@ -176,38 +231,59 @@ export function formatMemoryTime(value, fallback = '时间未知') {
   }
 }
 
-// 遗忘的判据：只有「还在生效」的记忆才谈得上遗忘。
-// 已遗忘/已撤销的记忆再点遗忘是无意义请求，必须在 UI 层就挡掉。
+// 哪些状态允许「治理动作」（改写/钉住/撤销/遗忘）。
+//
+// ⚠️ **'pinned' 不是状态**。实测确认：服务端 MEMORY_STATUSES 里没有 'pinned'，
+// 钉住是**独立的布尔字段** `item.pinned`（路由 `pinned: Boolean(item.pinned)`），
+// 钉住前后 `status` 都不变。此前这里写 `status === 'active' || status === 'pinned'`，
+// 后半句**永远不可能成立**（死条件）。
+//
+// 另一个关键修正：能动手的范围**不限于 active**。一条 candidate（候选待晋升）
+// 同样需要用户处理 —— 它有候选，但当前判据会把它整个锁死，用户看不到任何可用
+// 动作，只看到「候选待晋升」。现在把**非终态**都放行（candidate /
+// pending_confirmation / active），终态（rejected / superseded / expired /
+// revoked / forgotten）才拒绝 —— 那些再操作没有语义。
+//
+// 方向仍是保守的：宁可不阻止（让按钮可用、由服务端最终裁决），
+// 也不要替用户决定「你不需要处理这条」。未知状态由 normalizeStatus 折成
+// active ⇒ 放行，理由同上。
+const ACTIONABLE_STATUSES = ['candidate', 'pending_confirmation', 'active'];
+
+const isActionable = item => {
+  if (!item || typeof item !== 'object') return false;
+  return ACTIONABLE_STATUSES.includes(normalizeStatus(item.status));
+};
+
+// 遗忘的判据：非终态的记忆才谈得上遗忘。
+// 已遗忘/已撤销/已拒绝/已被取代/已过期的再点遗忘是无意义请求，在 UI 层就挡掉。
 export function canForget(item) {
-  if (!item || typeof item !== 'object') return false;
-  const status = normalizeStatus(item.status);
-  return status === 'active' || status === 'pinned';
+  return isActionable(item);
 }
 
-// 撤销的判据：撤销 = 「不再使用，但保留审计」。已被撤销/遗忘的没有可撤销的语义。
+// 撤销的判据：撤销 = 「不再使用，但保留审计」。已出局的没有可撤销的语义。
 export function canRevoke(item) {
-  if (!item || typeof item !== 'object') return false;
-  const status = normalizeStatus(item.status);
-  return status === 'active' || status === 'pinned';
+  return isActionable(item);
 }
 
-// 改写的判据：撤销/遗忘是终态，不允许再改内容（改了也读不回来，只会造成
+// 改写的判据：出局的状态不允许再改内容（改了也读不回来，只会造成
 // 「我明明改过」的错觉）。这与后端 correct 的语义一致。
 export function canCorrect(item) {
-  if (!item || typeof item !== 'object') return false;
-  const status = normalizeStatus(item.status);
-  return status === 'active' || status === 'pinned';
+  return isActionable(item);
 }
 
-// 钉住/取消钉住。撤销/遗忘是终态，不可再钉。
+// 钉住/取消钉住。出局的状态不可再钉。
 export function canPin(item) {
-  if (!item || typeof item !== 'object') return false;
-  const status = normalizeStatus(item.status);
-  return status === 'active' || status === 'pinned';
+  return isActionable(item);
 }
 
+// 是否已钉住。读**布尔字段** `item.pinned`，不是 status。
+//
+// 实测确认：服务端 MEMORY_STATUSES 无 'pinned'；pin/unpin 只翻转 `pinned`
+// 布尔值而不改 status。此前写成 `normalizeStatus(status) === 'pinned'`
+// ⇒ **永远返回 false**，于是「已钉住」的条目在界面上仍显示「钉住」，
+// 用户点下去只是把它再钉一次（幂等，看不出任何变化）。
 export function isPinned(item) {
-  return normalizeStatus(item?.status) === 'pinned';
+  return Boolean(item && typeof item === 'object' && item.pinned);
 }
 
 // 改写提交前的校验。返回 {ok, value} 或 {ok:false, reason}。

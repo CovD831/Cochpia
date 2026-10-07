@@ -28,7 +28,9 @@ import {
   panelPhase,
   UNKNOWN_SCOPE,
   memorySummaryText,
-  isSummaryPlaceholder
+  isSummaryPlaceholder,
+  isKnownStatus,
+  MEMORY_STATUSES
 } from './memory-panel-utils.js';
 
 const memory = (over = {}) => ({ id: 'm1', summary: '一起看过落日', status: 'active', confidence: 0.8, createdAt: '2026-01-02T03:04:05.000Z', source: '对话', scopeType: 'relationship', memoryType: 'fact', ...over });
@@ -60,7 +62,7 @@ test('groupMemoriesByScope：空数组返回空分组', () => {
 
 test('缺字段的条目不会崩，且每个取值函数都返回降级值', () => {
   const bare = { id: 'bare' }; // 没有 status / confidence / memoryType / scopeType / createdAt
-  assert.equal(memoryStatusLabel(bare.status), '未知状态');
+  assert.equal(memoryStatusLabel(bare.status), '状态未知');
   assert.equal(memoryTypeLabel(bare), '记忆');
   assert.equal(memoryScopeLabel(bare.scopeType), '作用范围未知');
   assert.equal(confidencePercent(bare), null);
@@ -97,22 +99,28 @@ test('confidencePercent：越界值被夹到 0..100，脏值返回 null 而不�
 
 test('未知 / 非法 status 不崩，且降级为 active 而不是原样透出', () => {
   for (const bad of ['bogus', '', 'ACTIVE', 'deleted', null, undefined, 42, {}]) {
-    assert.equal(normalizeStatus(bad), 'active', `status=${JSON.stringify(bad)} 应降级为 active`);
+    assert.equal(normalizeStatus(bad), 'active', `status=${JSON.stringify(bad)} 判定层应降级为 active`);
   }
 });
 
-test('未知 status 显示「未知状态」，不泄露原始枚举', () => {
-  assert.equal(memoryStatusLabel('bogus'), '未知状态');
-  assert.equal(memoryStatusLabel(null), '未知状态');
-  assert.equal(memoryStatusLabel(undefined), '未知状态');
-  assert.equal(memoryStatusLabel(42), '未知状态');
+test('未知 status 显示「状态未知」，不泄露原始枚举', () => {
+  assert.equal(memoryStatusLabel('bogus'), '状态未知');
+  assert.equal(memoryStatusLabel(null), '状态未知');
+  assert.equal(memoryStatusLabel(undefined), '状态未知');
+  assert.equal(memoryStatusLabel(42), '状态未知');
 });
 
 test('已知 status 显示中文标签', () => {
+  assert.equal(memoryStatusLabel('candidate'), '候选待晋升');
+  assert.equal(memoryStatusLabel('pending_confirmation'), '待你确认');
   assert.equal(memoryStatusLabel('active'), '生效中');
-  assert.equal(memoryStatusLabel('pinned'), '已钉住');
+  assert.equal(memoryStatusLabel('rejected'), '已拒绝');
+  assert.equal(memoryStatusLabel('superseded'), '已被取代');
+  assert.equal(memoryStatusLabel('expired'), '已过期');
   assert.equal(memoryStatusLabel('revoked'), '已撤销');
   assert.equal(memoryStatusLabel('forgotten'), '已遗忘');
+  // 'pinned' 不是服务端状态（钉住是布尔字段）⇒ 应显示「状态未知」而不是伪装成状态
+  assert.equal(memoryStatusLabel('pinned'), '状态未知');
 });
 
 test('未知 status 的条目仍可被渲染与判定（不崩），且按 active 对待', () => {
@@ -219,10 +227,12 @@ test('canCorrect / canPin：终态不可改写、不可再钉', () => {
   }
 });
 
-test('isPinned：只有 pinned 为真', () => {
-  assert.equal(isPinned(memory({ status: 'pinned' })), true);
+test('isPinned：读布尔字段 item.pinned，而不是 status', () => {
+  // 实测确认：服务端没有 'pinned' 这个 status；pin/unpin 只翻转布尔字段。
+  assert.equal(isPinned(memory({ pinned: true })), true);
+  assert.equal(isPinned(memory({ pinned: false })), false);
   assert.equal(isPinned(memory({ status: 'active' })), false);
-  assert.equal(isPinned(memory({ status: 'forgotten' })), false);
+  assert.equal(isPinned(memory({ status: 'pinned' })), false, "'pinned' 不是状态，不该被判为已钉住");
 });
 
 // ---------------------------------------------------------------- 改写校验
@@ -309,11 +319,11 @@ test('memoryKey：id 缺失/非法时退回下标，避免重复 key', () => {
 // 原型链上会被继承的键。任何走「表查键 + || 兜底」的写法都必须在这些键上自证。
 const PROTO_KEYS = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__', 'prototype', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString'];
 
-test('【增量】memoryStatusLabel：原型链键必须回落为「未知状态」，不得透出原生函数', () => {
+test('【增量】memoryStatusLabel：原型链键必须回落为「状态未知」，不得透出原生函数', () => {
   for (const key of PROTO_KEYS) {
     const label = memoryStatusLabel(key);
     assert.equal(typeof label, 'string', `${key} 必须返回字符串，实际 ${typeof label}`);
-    assert.equal(label, '未知状态', `${key} 应回落为「未知状态」`);
+    assert.equal(label, '状态未知', `${key} 应回落为「状态未知」`);
   }
 });
 
@@ -350,7 +360,7 @@ test('【增量】三个标签函数的返回值永远是可渲染的字符串�
 
 test('【增量】正常标签未被上面的加固破坏（防过度修复）', () => {
   assert.equal(memoryStatusLabel('active'), '生效中');
-  assert.equal(memoryStatusLabel('pinned'), '已钉住');
+  assert.equal(memoryStatusLabel('candidate'), '候选待晋升');
   assert.equal(memoryTypeLabel({ memoryType: 'relationship' }), '关系');
   assert.equal(memoryTypeLabel({ memoryType: 'fact' }), '事实');
   assert.equal(memoryScopeLabel('user'), '只属于我');
@@ -576,4 +586,89 @@ test('回归：不得出现「内容将不再返回」这类覆盖全部出口�
   const m = panelSource.match(/forget:\s*\{\s*verb:\s*'遗忘',\s*note:\s*'([^']+)'/);
   const note = m ? m[1] : '';
   assert.ok(!/内容将不再返回/.test(note), '回到了会误导用户的旧措辞');
+});
+
+// ---------------------------------------------------------------------------
+// P3 回归防线（第三轮审计发现，captain 独立复现确认）
+//
+// 缺陷：STATUS_LABELS 只有 4 个键，而服务端 MEMORY_STATUSES 有 8 个。
+// `normalizeStatus` 对未知值一律回落 'active' ⇒ candidate / pending_confirmation
+// / rejected / superseded / expired **共 5 个状态全部渲染成「生效中」**。
+//
+// 后果具体到用户：一条 candidate（尚未晋升的候选记忆，等待晋升）在面板上显示
+// 「生效中 | 内容缺失」—— 用户看到「生效中」却内容是空的，而它其实**尚未生效**。
+// 这是直接的信息错误，与本项目「不说假话」的原则相冲。
+// ---------------------------------------------------------------------------
+
+test('【回归 P3】8 个服务端状态各有不同标签，没有任何两个塌成同一个', () => {
+  // 这正是本次缺陷的判据：5 个状态塌成 1 个（全变「生效中」）。
+  // 若将来有人往 STATUS_LABELS 里加重复文案，这条会立刻红。
+  const labels = MEMORY_STATUSES.map(s => memoryStatusLabel(s));
+  const unique = new Set(labels);
+  assert.equal(labels.length, 8, '服务端有 8 个状态');
+  assert.equal(unique.size, 8, `8 个状态必须有 8 个不同标签，实际塌成 ${unique.size} 个：${labels.join(' / ')}`);
+  for (const label of labels) {
+    assert.notEqual(label, '状态未知', `已知状态 ${label} 不该走到未知兜底`);
+    assert.notEqual(label, '', '标签不得为空');
+  }
+});
+
+test('【回归 P3】尚未生效的候选状态绝不得显示为「生效中」', () => {
+  // 这是本缺陷最直接的错误陈述。
+  for (const status of ['candidate', 'pending_confirmation']) {
+    const label = memoryStatusLabel(status);
+    assert.notEqual(label, '生效中', `${status} 尚未生效，不能显示「生效中」`);
+    assert.ok(/候选|待|确认/.test(label), `${status} 的措辞应体现「等待处理」，实际：${label}`);
+  }
+  // 三种「出局」方式也必须彼此可辨，不能笼统合并
+  const out = ['rejected', 'superseded', 'expired'].map(s => memoryStatusLabel(s));
+  assert.equal(new Set(out).size, 3, `rejected/superseded/expired 应各有不同文案：${out.join(' / ')}`);
+  for (const label of out) assert.notEqual(label, '生效中');
+});
+
+test('【回归 P3】未知/脏值状态不得显示为「生效中」', () => {
+  // 「未知值 → active」是把未知**伪装成正常**。展示层必须如实说「状态未知」。
+  const dirty = ['bogus', 'ACTIVE', 'Active', 'pending', '', '  ', 'deleted', null, undefined, 42, {}, [], true];
+  for (const bad of dirty) {
+    const label = memoryStatusLabel(bad);
+    assert.notEqual(label, '生效中', `status=${JSON.stringify(bad)} 不得显示「生效中」`);
+    assert.equal(label, '状态未知', `status=${JSON.stringify(bad)} 应显示「状态未知」`);
+  }
+});
+
+test('【回归 P3】判定层与展示层对「未知」的反应必须相反且各自正确', () => {
+  // 这是本次修法的核心：两者对未知的正确反应本来就相反 ——
+  // 判定层要「不过度阻止」（宁可放行、由服务端裁决）；展示层要「不过度断言」。
+  const unknown = memory({ status: 'bogus-enum' });
+  assert.equal(normalizeStatus('bogus-enum'), 'active', '判定层：未知折成 active ⇒ 动作可用');
+  assert.equal(memoryStatusLabel('bogus-enum'), '状态未知', '展示层：未知如实说不知道');
+  assert.equal(canForget(unknown), true, '未知状态不阻止用户处置');
+  assert.notEqual(memoryStatusLabel('bogus-enum'), '生效中');
+});
+
+test('【回归 P3】isKnownStatus 与展示/判定的一致口径', () => {
+  for (const s of MEMORY_STATUSES) assert.equal(isKnownStatus(s), true, `${s} 应被认作已知`);
+  for (const s of ['pinned', 'bogus', '', null, undefined, 42, {}]) {
+    assert.equal(isKnownStatus(s), false, `${String(s)} 不该被认作已知状态`);
+  }
+  // 已知性 ⇔ 不落到「状态未知」兜底
+  for (const s of MEMORY_STATUSES) assert.notEqual(memoryStatusLabel(s), '状态未知');
+});
+
+test('【回归 P3】候选/待确认条目的空正文应说明「尚未确认」，不得说成「已清除」', () => {
+  // 服务端 contentVisible = (status === 'active')，非 active 一律 content:null。
+  // 但「为什么空」必须因状态而异 —— 否则用户会把「还没被确认」误读成「已经被删了」。
+  const candidate = memorySummaryText(memory({ status: 'candidate', summary: '' }));
+  const pending = memorySummaryText(memory({ status: 'pending_confirmation', summary: '' }));
+  const forgotten = memorySummaryText(memory({ status: 'forgotten', summary: '' }));
+  assert.notEqual(candidate, forgotten, '候选未确认 ≠ 已清除');
+  assert.notEqual(pending, forgotten);
+  assert.ok(/尚未|暂不/.test(candidate), `candidate 应说明尚未确认，实际：${candidate}`);
+  // 三种出局方式的空正文也各自可辨
+  const outs = ['rejected', 'superseded', 'expired'].map(s => memorySummaryText(memory({ status: s, summary: '' })));
+  assert.equal(new Set(outs).size, 3, `出局状态的空正文文案应各自不同：${outs.join(' / ')}`);
+  // active 却没有正文 = 异常，文案不得与任何已知状态混淆
+  const anomaly = memorySummaryText(memory({ status: 'active', summary: '' }));
+  assert.equal(anomaly, '内容缺失');
+  assert.ok(![...outs, candidate, pending, forgotten].includes(anomaly), '异常缺失不得与任何正常状态共用文案');
 });
