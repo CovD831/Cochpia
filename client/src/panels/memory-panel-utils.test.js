@@ -536,3 +536,44 @@ test('【回归 P4c】isSummaryPlaceholder 与实际占位判定一致', () => {
   assert.equal(isSummaryPlaceholder(empty), true);
   assert.notEqual(memorySummaryText(empty), '');
 });
+
+// --- 文案不得过度承诺（2026-10-07，用户裁决 a）---------------------------------
+// 背景：面板「遗忘」原写「遗忘后内容将不再返回，且不可恢复」——
+// **过度承诺**。记忆本体确实清除了（任何召回路径与 /api/export 都取不回），
+// **但它的原始对话仍在 `state.messages`**，从 /api/export 与
+// /api/sessions/:id/messages 仍可读到（实测确认）。
+//
+// 这是**设计如此**（记忆=派生数据，对话=原始输入，两套语义各有独立动作与审计），
+// 所以修的是文案：描述实际行为，不编造做不到的效果。
+//
+// 本项目已**三次**因"承诺了做不到的事"付出代价（假日历承诺"自动注入对话上下文"、
+// 写死的"SSE 已连接"、写死的"关系正在形成"）。这条护栏用来防第四次。
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const panelSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), 'MemorySovereigntyPanel.jsx'),
+  'utf8'
+);
+
+test('回归：遗忘文案不得承诺「原始对话也被删除」（做不到）', () => {
+  const m = panelSource.match(/forget:\s*\{\s*verb:\s*'遗忘',\s*note:\s*'([^']+)'/);
+  assert.ok(m, '找不到 forget 的确认文案');
+  const note = m[1];
+  // 必须说明实际行为：记忆不再被使用/召回
+  assert.ok(/不再出现|不再被使用|召回/.test(note), '应说明记忆不再被召回/使用');
+  // **必须**明确原始对话不受影响 —— 否则用户会以为对话也被删了
+  assert.ok(
+    /原始对话|对话记录/.test(note),
+    '文案必须说明「原始对话不受影响」，否则是对删除范围的过度承诺'
+  );
+});
+
+test('回归：不得出现「内容将不再返回」这类覆盖全部出口的措辞', () => {
+  // 「不再返回」会被读成"任何地方都拿不到了"，但对话记录里还有。
+  // 用「不再出现在任何回答与召回里」限定范围才是诚实的。
+  const m = panelSource.match(/forget:\s*\{\s*verb:\s*'遗忘',\s*note:\s*'([^']+)'/);
+  const note = m ? m[1] : '';
+  assert.ok(!/内容将不再返回/.test(note), '回到了会误导用户的旧措辞');
+});
